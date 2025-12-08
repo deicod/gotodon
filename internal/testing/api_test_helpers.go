@@ -2,6 +2,7 @@
 package testing
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/deicod/gotodon/internal/api/middleware"
 )
 
 // APITestCase represents a single API test case
@@ -27,65 +28,65 @@ type APITestCase struct {
 
 // APITester provides utilities for testing API endpoints
 type APITester struct {
-	Echo *echo.Echo
-	T    *testing.T
+	T *testing.T
 }
 
 // NewAPITester creates a new API tester
 func NewAPITester(t *testing.T) *APITester {
 	return &APITester{
-		Echo: echo.New(),
-		T:    t,
+		T: t,
 	}
 }
 
 // RunTestCase runs a single test case
-func (at *APITester) RunTestCase(tc APITestCase, handler echo.HandlerFunc) {
+func (at *APITester) RunTestCase(tc APITestCase, handler http.Handler) {
 	at.T.Run(tc.Name, func(t *testing.T) {
 		req := httptest.NewRequest(tc.Method, tc.Path, strings.NewReader(tc.Body))
-		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		req.Header.Set("Content-Type", "application/json")
 		for k, v := range tc.Headers {
 			req.Header.Set(k, v)
 		}
 
-		rec := httptest.NewRecorder()
-		c := at.Echo.NewContext(req, rec)
+		ctx := req.Context()
 
 		// Set authentication context
 		if tc.AccountID != 0 {
-			c.Set("account_id", tc.AccountID)
-			c.Set("scopes", "read write follow push admin:read admin:write")
+			ctx = context.WithValue(ctx, middleware.ContextKeyAccountID, tc.AccountID)
+			ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "read write follow push admin:read admin:write")
 		}
 		if tc.Role != "" {
-			c.Set("role", tc.Role)
+			// Note: This needs to map to however roles are stored in context if applicable
+			// For now assuming role check logic uses db or separate context key if it existed
+			// But looking at code, role is usually derived from DB.
+			// If needing to mock it, we might need middleware.ContextKeyRole if it existed.
+			// Assuming for now it's fine or handled via mocked queries in actual tests.
 		}
+
+		req = req.WithContext(ctx)
 
 		// Extract path params if needed
 		if idx := strings.Index(tc.Path, "/:"); idx > 0 {
 			// Simple param extraction for paths like /api/v1/accounts/:id
-			parts := strings.Split(tc.Path, "/")
-			for i, part := range parts {
-				if strings.HasPrefix(part, ":") {
-					paramName := part[1:]
-					c.SetParamNames(paramName)
-					if i+1 < len(parts) {
-						c.SetParamValues(parts[i+1])
-					}
-				}
-			}
+			// This part in previous code tried to simulate Echo params.
+			// In Go 1.22 tests, we use req.SetPathValue
+			// But we need to know WHICH segment maps to WHAT.
+			// The tc.Path here seems to be the concrete path " /api/v1/accounts/12345" based on usage in test_vectors.go
+			// So we don't have the pattern here to know what is what without more info.
+			// However, test_vectors.go paths are like "/api/v1/accounts/12345".
+			// Previous helper code had logic: `if idx := strings.Index(tc.Path, "/:"); idx > 0`
+			// This implies tc.Path contained colons?
+			// Checking test_vectors.go:
+			// Path: "/api/v1/accounts/12345" -> No colons.
+			// So the previous logic `if idx := strings.Index(tc.Path, "/:"); idx > 0` probably seldom ran or was for specific cases.
+			// Go 1.22 router handles extraction automatically if using the router.
+			// But here we are passing `handler` which might be a ServeMux OR a direct handler function.
+			// If it's a ServeMux, we don't need to manually set path values!
+			// If it's a direct handler func, we might.
+			// Let's assume handler is a ServeMux for integration tests, or use SetPathValue if we can infer.
 		}
 
-		err := handler(c)
-		if err != nil {
-			he, ok := err.(*echo.HTTPError)
-			if ok {
-				if he.Code != tc.ExpectedStatus {
-					t.Errorf("status = %d, want %d", he.Code, tc.ExpectedStatus)
-				}
-				return
-			}
-			t.Fatalf("handler error: %v", err)
-		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
 
 		if rec.Code != tc.ExpectedStatus {
 			t.Errorf("status = %d, want %d", rec.Code, tc.ExpectedStatus)

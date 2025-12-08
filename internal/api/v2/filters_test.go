@@ -1,37 +1,37 @@
 package v2
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/deicod/gotodon/internal/api/middleware"
 )
 
-// mockAccountContext creates an echo context with a mock account ID
-func mockAccountContext(e *echo.Echo, method, path string, body string) (echo.Context, *httptest.ResponseRecorder) {
+// mockAccountRequest creates a http request with a mock account ID in context
+func mockAccountRequest(method, path string, body string) (*http.Request, *httptest.ResponseRecorder) {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
-	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	req.Header.Set("Content-Type", "application/json")
+
+	ctx := req.Context()
+	ctx = context.WithValue(ctx, middleware.ContextKeyAccountID, int64(12345))
+	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "read write")
+	req = req.WithContext(ctx)
+
 	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-	c.Set("account_id", int64(12345))
-	c.Set("scopes", "read write")
-	return c, rec
+	return req, rec
 }
 
 func TestFiltersHandler_Create(t *testing.T) {
-	e := echo.New()
 	h := NewFiltersHandler(nil)
 
 	body := `{"title":"Test Filter","context":["home","public"],"filter_action":"warn","keywords_attributes":[{"keyword":"badword","whole_word":true}]}`
-	c, rec := mockAccountContext(e, http.MethodPost, "/api/v2/filters", body)
+	req, rec := mockAccountRequest(http.MethodPost, "/api/v2/filters", body)
 
-	err := h.Create(c)
-	if err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	h.Create(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -64,21 +64,17 @@ func TestFiltersHandler_Create(t *testing.T) {
 }
 
 func TestFiltersHandler_List(t *testing.T) {
-	e := echo.New()
 	h := NewFiltersHandler(nil)
 
 	// Create a filter first
 	body := `{"title":"Test","context":["home"]}`
-	c1, _ := mockAccountContext(e, http.MethodPost, "/api/v2/filters", body)
-	_ = h.Create(c1)
+	req1, rec1 := mockAccountRequest(http.MethodPost, "/api/v2/filters", body)
+	h.Create(rec1, req1)
 
 	// List filters
-	c, rec := mockAccountContext(e, http.MethodGet, "/api/v2/filters", "")
+	req, rec := mockAccountRequest(http.MethodGet, "/api/v2/filters", "")
 
-	err := h.List(c)
-	if err != nil {
-		t.Fatalf("List() error = %v", err)
-	}
+	h.List(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -95,7 +91,6 @@ func TestFiltersHandler_List(t *testing.T) {
 }
 
 func TestFiltersHandler_Validation(t *testing.T) {
-	e := echo.New()
 	h := NewFiltersHandler(nil)
 
 	tests := []struct {
@@ -112,16 +107,16 @@ func TestFiltersHandler_Validation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c, rec := mockAccountContext(e, http.MethodPost, "/api/v2/filters", tt.body)
-			err := h.Create(c)
+			req, rec := mockAccountRequest(http.MethodPost, "/api/v2/filters", tt.body)
+			h.Create(rec, req)
 
 			if tt.wantErr {
-				if err == nil && rec.Code < 400 {
+				if rec.Code < 400 {
 					t.Error("expected error")
 				}
 			} else {
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
+				if rec.Code >= 400 {
+					t.Errorf("unexpected error code: %d", rec.Code)
 				}
 			}
 		})
@@ -129,34 +124,29 @@ func TestFiltersHandler_Validation(t *testing.T) {
 }
 
 func TestFiltersHandler_Delete(t *testing.T) {
-	e := echo.New()
 	h := NewFiltersHandler(nil)
 
 	// Create a filter
 	body := `{"title":"ToDelete","context":["home"]}`
-	c1, rec1 := mockAccountContext(e, http.MethodPost, "/api/v2/filters", body)
-	_ = h.Create(c1)
+	req1, rec1 := mockAccountRequest(http.MethodPost, "/api/v2/filters", body)
+	h.Create(rec1, req1)
 
 	var created FilterV2
 	_ = json.Unmarshal(rec1.Body.Bytes(), &created)
 
 	// Delete it
-	c2, rec2 := mockAccountContext(e, http.MethodDelete, "/api/v2/filters/"+created.ID, "")
-	c2.SetParamNames("id")
-	c2.SetParamValues(created.ID)
+	req2, rec2 := mockAccountRequest(http.MethodDelete, "/api/v2/filters/"+created.ID, "")
+	req2.SetPathValue("id", created.ID)
 
-	err := h.Delete(c2)
-	if err != nil {
-		t.Fatalf("Delete() error = %v", err)
-	}
+	h.Delete(rec2, req2)
 
 	if rec2.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec2.Code, http.StatusOK)
 	}
 
 	// Verify it's gone
-	c3, _ := mockAccountContext(e, http.MethodGet, "/api/v2/filters", "")
-	_ = h.List(c3)
+	req3, rec3 := mockAccountRequest(http.MethodGet, "/api/v2/filters", "")
+	h.List(rec3, req3)
 }
 
 func TestFilterContexts(t *testing.T) {

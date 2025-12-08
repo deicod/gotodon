@@ -1,42 +1,44 @@
 package v1
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/deicod/gotodon/internal/api/middleware"
 )
 
-func mockMarkerContext(e *echo.Echo, method, path string, body string) (echo.Context, *httptest.ResponseRecorder) {
+func mockMarkerRequest(method, path string, body string) (*http.Request, *httptest.ResponseRecorder) {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
-	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	req.Header.Set("Content-Type", "application/json")
+
+	ctx := req.Context()
+	ctx = context.WithValue(ctx, middleware.ContextKeyAccountID, int64(12345))
+	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "read write")
+	req = req.WithContext(ctx)
+
 	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-	c.Set("account_id", int64(12345))
-	c.Set("scopes", "read write")
-	return c, rec
+	return req, rec
 }
 
 func TestMarkersHandler_GetEmpty(t *testing.T) {
-	e := echo.New()
 	h := NewMarkersHandler(nil)
 
-	c, rec := mockMarkerContext(e, http.MethodGet, "/api/v1/markers?timeline[]=home", "")
+	req, rec := mockMarkerRequest(http.MethodGet, "/api/v1/markers?timeline[]=home", "")
 
-	err := h.Get(c)
-	if err != nil {
-		t.Fatalf("Get() error = %v", err)
-	}
+	h.Get(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
 
 	var result MarkersResponse
-	_ = json.Unmarshal(rec.Body.Bytes(), &result)
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
 
 	// Should be empty since no markers set
 	if len(result) != 0 {
@@ -45,24 +47,22 @@ func TestMarkersHandler_GetEmpty(t *testing.T) {
 }
 
 func TestMarkersHandler_UpdateAndGet(t *testing.T) {
-	e := echo.New()
 	h := NewMarkersHandler(nil)
 
 	// Update marker
 	body := `{"home":{"last_read_id":"12345"}}`
-	c1, rec1 := mockMarkerContext(e, http.MethodPost, "/api/v1/markers", body)
+	req1, rec1 := mockMarkerRequest(http.MethodPost, "/api/v1/markers", body)
 
-	err := h.Update(c1)
-	if err != nil {
-		t.Fatalf("Update() error = %v", err)
-	}
+	h.Update(rec1, req1)
 
 	if rec1.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec1.Code, http.StatusOK)
 	}
 
 	var updateResult MarkersResponse
-	_ = json.Unmarshal(rec1.Body.Bytes(), &updateResult)
+	if err := json.Unmarshal(rec1.Body.Bytes(), &updateResult); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
 
 	if updateResult["home"] == nil {
 		t.Fatal("home marker should be set")
@@ -73,11 +73,13 @@ func TestMarkersHandler_UpdateAndGet(t *testing.T) {
 	}
 
 	// Get marker
-	c2, rec2 := mockMarkerContext(e, http.MethodGet, "/api/v1/markers?timeline[]=home", "")
-	_ = h.Get(c2)
+	req2, rec2 := mockMarkerRequest(http.MethodGet, "/api/v1/markers?timeline[]=home", "")
+	h.Get(rec2, req2)
 
 	var getResult MarkersResponse
-	_ = json.Unmarshal(rec2.Body.Bytes(), &getResult)
+	if err := json.Unmarshal(rec2.Body.Bytes(), &getResult); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
 
 	if getResult["home"] == nil {
 		t.Fatal("home marker should exist")
@@ -89,19 +91,20 @@ func TestMarkersHandler_UpdateAndGet(t *testing.T) {
 }
 
 func TestMarkersHandler_VersionIncrement(t *testing.T) {
-	e := echo.New()
 	h := NewMarkersHandler(nil)
 
 	// First update
-	c1, _ := mockMarkerContext(e, http.MethodPost, "/api/v1/markers", `{"home":{"last_read_id":"100"}}`)
-	_ = h.Update(c1)
+	req1, rec1 := mockMarkerRequest(http.MethodPost, "/api/v1/markers", `{"home":{"last_read_id":"100"}}`)
+	h.Update(rec1, req1)
 
 	// Second update
-	c2, rec2 := mockMarkerContext(e, http.MethodPost, "/api/v1/markers", `{"home":{"last_read_id":"200"}}`)
-	_ = h.Update(c2)
+	req2, rec2 := mockMarkerRequest(http.MethodPost, "/api/v1/markers", `{"home":{"last_read_id":"200"}}`)
+	h.Update(rec2, req2)
 
 	var result MarkersResponse
-	_ = json.Unmarshal(rec2.Body.Bytes(), &result)
+	if err := json.Unmarshal(rec2.Body.Bytes(), &result); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
 
 	if result["home"].Version != 1 {
 		t.Errorf("Version = %d, want 1", result["home"].Version)
@@ -109,20 +112,21 @@ func TestMarkersHandler_VersionIncrement(t *testing.T) {
 }
 
 func TestMarkersHandler_MultipleTimelines(t *testing.T) {
-	e := echo.New()
 	h := NewMarkersHandler(nil)
 
 	// Update both
 	body := `{"home":{"last_read_id":"100"},"notifications":{"last_read_id":"200"}}`
-	c1, _ := mockMarkerContext(e, http.MethodPost, "/api/v1/markers", body)
-	_ = h.Update(c1)
+	req1, rec1 := mockMarkerRequest(http.MethodPost, "/api/v1/markers", body)
+	h.Update(rec1, req1)
 
 	// Get both
-	c2, rec2 := mockMarkerContext(e, http.MethodGet, "/api/v1/markers", "")
-	_ = h.Get(c2)
+	req2, rec2 := mockMarkerRequest(http.MethodGet, "/api/v1/markers", "")
+	h.Get(rec2, req2)
 
 	var result MarkersResponse
-	_ = json.Unmarshal(rec2.Body.Bytes(), &result)
+	if err := json.Unmarshal(rec2.Body.Bytes(), &result); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
 
 	if result["home"] == nil || result["notifications"] == nil {
 		t.Error("Both markers should exist")

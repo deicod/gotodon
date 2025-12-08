@@ -1,35 +1,36 @@
 package v1
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/deicod/gotodon/internal/api/middleware"
 )
 
-func mockAnnouncementContext(e *echo.Echo, method, path string, body string) (echo.Context, *httptest.ResponseRecorder) {
+func mockAnnouncementRequest(method, path string, body string) (*http.Request, *httptest.ResponseRecorder) {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
-	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	req.Header.Set("Content-Type", "application/json")
+
+	// Set mock context
+	ctx := req.Context()
+	ctx = context.WithValue(ctx, middleware.ContextKeyAccountID, int64(12345))
+	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "read write")
+	req = req.WithContext(ctx)
+
 	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-	c.Set("account_id", int64(12345))
-	c.Set("scopes", "read write")
-	return c, rec
+	return req, rec
 }
 
 func TestAnnouncementsHandler_GetAll(t *testing.T) {
-	e := echo.New()
 	h := NewAnnouncementsHandler(nil)
 
-	c, rec := mockAnnouncementContext(e, http.MethodGet, "/api/v1/announcements", "")
+	req, rec := mockAnnouncementRequest(http.MethodGet, "/api/v1/announcements", "")
 
-	err := h.GetAll(c)
-	if err != nil {
-		t.Fatalf("GetAll() error = %v", err)
-	}
+	h.GetAll(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -39,20 +40,14 @@ func TestAnnouncementsHandler_GetAll(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &announcements); err != nil {
 		t.Fatalf("Failed to unmarshal: %v", err)
 	}
-
-	// Should have at least the sample announcement
-	// if len(announcements) == 0 {
-	// 	t.Error("Expected at least one announcement")
-	// }
 }
 
 func TestAnnouncementsHandler_Dismiss(t *testing.T) {
-	e := echo.New()
 	h := NewAnnouncementsHandler(nil)
 
 	// Get an announcement ID first
-	c1, rec1 := mockAnnouncementContext(e, http.MethodGet, "/api/v1/announcements", "")
-	_ = h.GetAll(c1)
+	req1, rec1 := mockAnnouncementRequest(http.MethodGet, "/api/v1/announcements", "")
+	h.GetAll(rec1, req1)
 
 	var announcements []Announcement
 	_ = json.Unmarshal(rec1.Body.Bytes(), &announcements)
@@ -62,22 +57,18 @@ func TestAnnouncementsHandler_Dismiss(t *testing.T) {
 	}
 
 	// Dismiss it
-	c2, rec2 := mockAnnouncementContext(e, http.MethodPost, "/api/v1/announcements/"+announcements[0].ID+"/dismiss", "")
-	c2.SetParamNames("id")
-	c2.SetParamValues(announcements[0].ID)
+	req2, rec2 := mockAnnouncementRequest(http.MethodPost, "/api/v1/announcements/"+announcements[0].ID+"/dismiss", "")
+	req2.SetPathValue("id", announcements[0].ID)
 
-	err := h.Dismiss(c2)
-	if err != nil {
-		t.Fatalf("Dismiss() error = %v", err)
-	}
+	h.Dismiss(rec2, req2)
 
 	if rec2.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec2.Code, http.StatusOK)
 	}
 
 	// Get announcements again - should be empty without with_dismissed
-	c3, rec3 := mockAnnouncementContext(e, http.MethodGet, "/api/v1/announcements", "")
-	_ = h.GetAll(c3)
+	req3, rec3 := mockAnnouncementRequest(http.MethodGet, "/api/v1/announcements", "")
+	h.GetAll(rec3, req3)
 
 	var afterDismiss []Announcement
 	_ = json.Unmarshal(rec3.Body.Bytes(), &afterDismiss)
@@ -88,12 +79,11 @@ func TestAnnouncementsHandler_Dismiss(t *testing.T) {
 }
 
 func TestAnnouncementsHandler_Reactions(t *testing.T) {
-	e := echo.New()
 	h := NewAnnouncementsHandler(nil)
 
 	// Get announcement
-	c1, rec1 := mockAnnouncementContext(e, http.MethodGet, "/api/v1/announcements", "")
-	_ = h.GetAll(c1)
+	req1, rec1 := mockAnnouncementRequest(http.MethodGet, "/api/v1/announcements", "")
+	h.GetAll(rec1, req1)
 
 	var announcements []Announcement
 	_ = json.Unmarshal(rec1.Body.Bytes(), &announcements)
@@ -105,22 +95,19 @@ func TestAnnouncementsHandler_Reactions(t *testing.T) {
 	id := announcements[0].ID
 
 	// Add reaction
-	c2, rec2 := mockAnnouncementContext(e, http.MethodPut, "/api/v1/announcements/"+id+"/reactions/👍", "")
-	c2.SetParamNames("id", "name")
-	c2.SetParamValues(id, "👍")
+	req2, rec2 := mockAnnouncementRequest(http.MethodPut, "/api/v1/announcements/"+id+"/reactions/👍", "")
+	req2.SetPathValue("id", id)
+	req2.SetPathValue("name", "👍")
 
-	err := h.AddReaction(c2)
-	if err != nil {
-		t.Fatalf("AddReaction() error = %v", err)
-	}
+	h.AddReaction(rec2, req2)
 
 	if rec2.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec2.Code, http.StatusOK)
 	}
 
 	// Get announcements and check reaction
-	c3, rec3 := mockAnnouncementContext(e, http.MethodGet, "/api/v1/announcements?with_dismissed=true", "")
-	_ = h.GetAll(c3)
+	req3, rec3 := mockAnnouncementRequest(http.MethodGet, "/api/v1/announcements?with_dismissed=true", "")
+	h.GetAll(rec3, req3)
 
 	var withReactions []Announcement
 	_ = json.Unmarshal(rec3.Body.Bytes(), &withReactions)
@@ -137,9 +124,9 @@ func TestAnnouncementsHandler_Reactions(t *testing.T) {
 	}
 
 	// Remove reaction
-	c4, _ := mockAnnouncementContext(e, http.MethodDelete, "/api/v1/announcements/"+id+"/reactions/👍", "")
-	c4.SetParamNames("id", "name")
-	c4.SetParamValues(id, "👍")
+	req4, rec4 := mockAnnouncementRequest(http.MethodDelete, "/api/v1/announcements/"+id+"/reactions/👍", "")
+	req4.SetPathValue("id", id)
+	req4.SetPathValue("name", "👍")
 
-	_ = h.RemoveReaction(c4)
+	h.RemoveReaction(rec4, req4)
 }

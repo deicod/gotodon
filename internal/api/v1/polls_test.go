@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,35 +10,33 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/deicod/gotodon/internal/api/middleware"
 )
 
-func mockPollContext(e *echo.Echo, method, path string, body string) (echo.Context, *httptest.ResponseRecorder) {
+func mockPollRequest(method, path string, body string) (*http.Request, *httptest.ResponseRecorder) {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
-	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	req.Header.Set("Content-Type", "application/json")
+
+	ctx := req.Context()
+	ctx = context.WithValue(ctx, middleware.ContextKeyAccountID, int64(12345))
+	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "read write")
+	req = req.WithContext(ctx)
+
 	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-	c.Set("account_id", int64(12345))
-	c.Set("scopes", "read write")
-	return c, rec
+	return req, rec
 }
 
 func TestPollsHandler_CreateAndGet(t *testing.T) {
-	e := echo.New()
 	h := NewPollsHandler(nil)
 
 	// Create a poll
 	poll := h.CreatePoll(12345, []string{"Option A", "Option B", "Option C"}, 86400, false, false)
 
 	// Get it
-	c, rec := mockPollContext(e, http.MethodGet, "/api/v1/polls/"+strconv.FormatInt(poll.ID, 10), "")
-	c.SetParamNames("id")
-	c.SetParamValues(strconv.FormatInt(poll.ID, 10))
+	req, rec := mockPollRequest(http.MethodGet, "/api/v1/polls/"+strconv.FormatInt(poll.ID, 10), "")
+	req.SetPathValue("id", strconv.FormatInt(poll.ID, 10))
 
-	err := h.Get(c)
-	if err != nil {
-		t.Fatalf("Get() error = %v", err)
-	}
+	h.Get(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -58,21 +57,16 @@ func TestPollsHandler_CreateAndGet(t *testing.T) {
 }
 
 func TestPollsHandler_Vote(t *testing.T) {
-	e := echo.New()
 	h := NewPollsHandler(nil)
 
 	// Create a poll
 	poll := h.CreatePoll(12345, []string{"Yes", "No"}, 86400, false, false)
 
 	// Vote
-	c, rec := mockPollContext(e, http.MethodPost, "/api/v1/polls/"+strconv.FormatInt(poll.ID, 10)+"/votes", `{"choices":[0]}`)
-	c.SetParamNames("id")
-	c.SetParamValues(strconv.FormatInt(poll.ID, 10))
+	req, rec := mockPollRequest(http.MethodPost, "/api/v1/polls/"+strconv.FormatInt(poll.ID, 10)+"/votes", `{"choices":[0]}`)
+	req.SetPathValue("id", strconv.FormatInt(poll.ID, 10))
 
-	err := h.Vote(c)
-	if err != nil {
-		t.Fatalf("Vote() error = %v", err)
-	}
+	h.Vote(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -91,7 +85,6 @@ func TestPollsHandler_Vote(t *testing.T) {
 }
 
 func TestPollsHandler_VoteValidation(t *testing.T) {
-	e := echo.New()
 	h := NewPollsHandler(nil)
 
 	// Single choice poll
@@ -99,18 +92,17 @@ func TestPollsHandler_VoteValidation(t *testing.T) {
 	pollID := strconv.FormatInt(poll.ID, 10)
 
 	// Try multiple choices on single-choice poll
-	c, rec := mockPollContext(e, http.MethodPost, "/api/v1/polls/"+pollID+"/votes", `{"choices":[0,1]}`)
-	c.SetParamNames("id")
-	c.SetParamValues(pollID)
+	req, rec := mockPollRequest(http.MethodPost, "/api/v1/polls/"+pollID+"/votes", `{"choices":[0,1]}`)
+	req.SetPathValue("id", pollID)
 
-	err := h.Vote(c)
-	if err == nil && rec.Code < 400 {
+	h.Vote(rec, req)
+
+	if rec.Code < 400 {
 		t.Error("Should reject multiple choices on single-choice poll")
 	}
 }
 
 func TestPollsHandler_ExpiredPoll(t *testing.T) {
-	e := echo.New()
 	h := NewPollsHandler(nil)
 
 	// Create an expired poll
@@ -125,18 +117,17 @@ func TestPollsHandler_ExpiredPoll(t *testing.T) {
 	h.memPolls[pollID] = poll
 
 	// Try to vote
-	c, rec := mockPollContext(e, http.MethodPost, "/api/v1/polls/"+strconv.FormatInt(pollID, 10)+"/votes", `{"choices":[0]}`)
-	c.SetParamNames("id")
-	c.SetParamValues(strconv.FormatInt(pollID, 10))
+	req, rec := mockPollRequest(http.MethodPost, "/api/v1/polls/"+strconv.FormatInt(pollID, 10)+"/votes", `{"choices":[0]}`)
+	req.SetPathValue("id", strconv.FormatInt(pollID, 10))
 
-	err := h.Vote(c)
-	if err == nil && rec.Code < 400 {
+	h.Vote(rec, req)
+
+	if rec.Code < 400 {
 		t.Error("Should reject vote on expired poll")
 	}
 }
 
 func TestPollsHandler_MultipleChoice(t *testing.T) {
-	e := echo.New()
 	h := NewPollsHandler(nil)
 
 	// Create multiple choice poll
@@ -144,14 +135,10 @@ func TestPollsHandler_MultipleChoice(t *testing.T) {
 	pollID := strconv.FormatInt(poll.ID, 10)
 
 	// Vote for multiple options
-	c, rec := mockPollContext(e, http.MethodPost, "/api/v1/polls/"+pollID+"/votes", `{"choices":[0,2]}`)
-	c.SetParamNames("id")
-	c.SetParamValues(pollID)
+	req, rec := mockPollRequest(http.MethodPost, "/api/v1/polls/"+pollID+"/votes", `{"choices":[0,2]}`)
+	req.SetPathValue("id", pollID)
 
-	err := h.Vote(c)
-	if err != nil {
-		t.Fatalf("Vote() error = %v", err)
-	}
+	h.Vote(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)

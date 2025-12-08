@@ -1,36 +1,36 @@
 package v1
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/deicod/gotodon/internal/api/middleware"
 )
 
-func mockListContext(e *echo.Echo, method, path string, body string) (echo.Context, *httptest.ResponseRecorder) {
+func mockListRequest(method, path string, body string) (*http.Request, *httptest.ResponseRecorder) {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
-	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	req.Header.Set("Content-Type", "application/json")
+
+	ctx := req.Context()
+	ctx = context.WithValue(ctx, middleware.ContextKeyAccountID, int64(12345))
+	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "read write")
+	req = req.WithContext(ctx)
+
 	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-	c.Set("account_id", int64(12345))
-	c.Set("scopes", "read write")
-	return c, rec
+	return req, rec
 }
 
 func TestListsHandler_Create(t *testing.T) {
-	e := echo.New()
 	h := NewListsHandler(nil)
 
 	body := `{"title":"My List","replies_policy":"followed"}`
-	c, rec := mockListContext(e, http.MethodPost, "/api/v1/lists", body)
+	req, rec := mockListRequest(http.MethodPost, "/api/v1/lists", body)
 
-	err := h.Create(c)
-	if err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	h.Create(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -51,21 +51,17 @@ func TestListsHandler_Create(t *testing.T) {
 }
 
 func TestListsHandler_GetAll(t *testing.T) {
-	e := echo.New()
 	h := NewListsHandler(nil)
 
 	// Create lists
-	c1, _ := mockListContext(e, http.MethodPost, "/api/v1/lists", `{"title":"List 1"}`)
-	_ = h.Create(c1)
-	c2, _ := mockListContext(e, http.MethodPost, "/api/v1/lists", `{"title":"List 2"}`)
-	_ = h.Create(c2)
+	req1, rec1 := mockListRequest(http.MethodPost, "/api/v1/lists", `{"title":"List 1"}`)
+	h.Create(rec1, req1)
+	req2, rec2 := mockListRequest(http.MethodPost, "/api/v1/lists", `{"title":"List 2"}`)
+	h.Create(rec2, req2)
 
 	// Get all
-	c, rec := mockListContext(e, http.MethodGet, "/api/v1/lists", "")
-	err := h.GetAll(c)
-	if err != nil {
-		t.Fatalf("GetAll() error = %v", err)
-	}
+	req, rec := mockListRequest(http.MethodGet, "/api/v1/lists", "")
+	h.GetAll(rec, req)
 
 	var lists []List
 	_ = json.Unmarshal(rec.Body.Bytes(), &lists)
@@ -76,33 +72,27 @@ func TestListsHandler_GetAll(t *testing.T) {
 }
 
 func TestListsHandler_Delete(t *testing.T) {
-	e := echo.New()
 	h := NewListsHandler(nil)
 
 	// Create
-	c1, rec1 := mockListContext(e, http.MethodPost, "/api/v1/lists", `{"title":"ToDelete"}`)
-	_ = h.Create(c1)
+	req1, rec1 := mockListRequest(http.MethodPost, "/api/v1/lists", `{"title":"ToDelete"}`)
+	h.Create(rec1, req1)
 
 	var created List
 	_ = json.Unmarshal(rec1.Body.Bytes(), &created)
 
 	// Delete
-	c2, _ := mockListContext(e, http.MethodDelete, "/api/v1/lists/"+created.ID, "")
-	c2.SetParamNames("id")
-	c2.SetParamValues(created.ID)
+	req2, rec2 := mockListRequest(http.MethodDelete, "/api/v1/lists/"+created.ID, "")
+	req2.SetPathValue("id", created.ID)
 
-	err := h.Delete(c2)
-	if err != nil {
-		t.Fatalf("Delete() error = %v", err)
-	}
+	h.Delete(rec2, req2)
 
 	// Verify gone
-	c3, _ := mockListContext(e, http.MethodGet, "/api/v1/lists", "")
-	_ = h.GetAll(c3)
+	req3, rec3 := mockListRequest(http.MethodGet, "/api/v1/lists", "")
+	h.GetAll(rec3, req3)
 }
 
 func TestListsHandler_Validation(t *testing.T) {
-	e := echo.New()
 	h := NewListsHandler(nil)
 
 	tests := []struct {
@@ -117,16 +107,16 @@ func TestListsHandler_Validation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c, rec := mockListContext(e, http.MethodPost, "/api/v1/lists", tt.body)
-			err := h.Create(c)
+			req, rec := mockListRequest(http.MethodPost, "/api/v1/lists", tt.body)
+			h.Create(rec, req)
 
 			if tt.wantErr {
-				if err == nil && rec.Code < 400 {
+				if rec.Code < 400 {
 					t.Error("expected error")
 				}
 			} else {
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
+				if rec.Code >= 400 {
+					t.Errorf("unexpected error code: %d", rec.Code)
 				}
 			}
 		})

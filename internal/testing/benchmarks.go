@@ -2,37 +2,39 @@
 package testing
 
 import (
+	"context"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/deicod/gotodon/internal/api/middleware"
 )
 
 // BenchmarkRequest creates a benchmark test request
-func BenchmarkRequest(b *testing.B, e *echo.Echo, method, path, body string, handler echo.HandlerFunc) {
-	for i := 0; i < b.N; i++ {
-		req := httptest.NewRequest(method, path, strings.NewReader(body))
-		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
-		rec := httptest.NewRecorder()
-		c := e.NewContext(req, rec)
-		c.Set("account_id", int64(12345))
-		c.Set("scopes", "read write")
+func BenchmarkRequest(b *testing.B, method, path, body string, handler http.Handler) {
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
 
-		_ = handler(c)
+	ctx := request.Context()
+	ctx = context.WithValue(ctx, middleware.ContextKeyAccountID, int64(12345))
+	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "read write")
+	request = request.WithContext(ctx)
+
+	for i := 0; i < b.N; i++ {
+		// Create new recorder for each iteration to avoid buffer growth issues
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, request)
 	}
 }
 
 // APIBenchmarks holds benchmark configurations
 type APIBenchmarks struct {
-	Echo *echo.Echo
 }
 
 // NewAPIBenchmarks creates a new benchmark runner
 func NewAPIBenchmarks() *APIBenchmarks {
-	return &APIBenchmarks{
-		Echo: echo.New(),
-	}
+	return &APIBenchmarks{}
 }
 
 // BenchmarkConfig holds config for a single benchmark
@@ -41,14 +43,14 @@ type BenchmarkConfig struct {
 	Method  string
 	Path    string
 	Body    string
-	Handler echo.HandlerFunc
+	Handler http.Handler
 }
 
 // RunBenchmarks runs all configured benchmarks
 func (ab *APIBenchmarks) RunBenchmarks(b *testing.B, configs []BenchmarkConfig) {
 	for _, config := range configs {
 		b.Run(config.Name, func(b *testing.B) {
-			BenchmarkRequest(b, ab.Echo, config.Method, config.Path, config.Body, config.Handler)
+			BenchmarkRequest(b, config.Method, config.Path, config.Body, config.Handler)
 		})
 	}
 }
