@@ -478,8 +478,405 @@ func (h *AccountsHandler) Search(c echo.Context) error {
 	return c.JSON(http.StatusOK, []Account{})
 }
 
+// Followers handles GET /api/v1/accounts/:id/followers
+func (h *AccountsHandler) Followers(c echo.Context) error {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+	}
+
+	limit := parseAccountLimit(c.QueryParam("limit"), 40, 80)
+
+	if h.useDB() {
+		followers, err := h.queries.GetFollowers(c.Request().Context(), db.GetFollowersParams{
+			TargetAccountID: id,
+			Limit:           int32(limit),
+			Offset:          0,
+		})
+		if err != nil {
+			return c.JSON(http.StatusOK, []Account{})
+		}
+
+		accounts := make([]Account, len(followers))
+		for i, acc := range followers {
+			accounts[i] = h.dbAccountToAPI(acc)
+		}
+		return c.JSON(http.StatusOK, accounts)
+	}
+
+	return c.JSON(http.StatusOK, []Account{})
+}
+
+// Following handles GET /api/v1/accounts/:id/following
+func (h *AccountsHandler) Following(c echo.Context) error {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+	}
+
+	limit := parseAccountLimit(c.QueryParam("limit"), 40, 80)
+
+	if h.useDB() {
+		following, err := h.queries.GetFollowing(c.Request().Context(), db.GetFollowingParams{
+			AccountID: id,
+			Limit:     int32(limit),
+			Offset:    0,
+		})
+		if err != nil {
+			return c.JSON(http.StatusOK, []Account{})
+		}
+
+		accounts := make([]Account, len(following))
+		for i, acc := range following {
+			accounts[i] = h.dbAccountToAPI(acc)
+		}
+		return c.JSON(http.StatusOK, accounts)
+	}
+
+	return c.JSON(http.StatusOK, []Account{})
+}
+
+// Relationship represents the relationship between accounts
+type Relationship struct {
+	ID                  string `json:"id"`
+	Following           bool   `json:"following"`
+	ShowingReblogs      bool   `json:"showing_reblogs"`
+	Notifying           bool   `json:"notifying"`
+	Languages           []any  `json:"languages"`
+	FollowedBy          bool   `json:"followed_by"`
+	Blocking            bool   `json:"blocking"`
+	BlockedBy           bool   `json:"blocked_by"`
+	Muting              bool   `json:"muting"`
+	MutingNotifications bool   `json:"muting_notifications"`
+	Requested           bool   `json:"requested"`
+	RequestedBy         bool   `json:"requested_by"`
+	DomainBlocking      bool   `json:"domain_blocking"`
+	Endorsed            bool   `json:"endorsed"`
+	Note                string `json:"note"`
+}
+
+// Follow handles POST /api/v1/accounts/:id/follow
+func (h *AccountsHandler) Follow(c echo.Context) error {
+	accountID, ok := middleware.GetAccountID(c)
+	if !ok {
+		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+	}
+
+	targetID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+	}
+
+	if accountID == targetID {
+		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{"error": "Cannot follow yourself"})
+	}
+
+	if h.useDB() {
+		ctx := c.Request().Context()
+
+		// Check if target account exists
+		targetAcc, err := h.queries.GetAccountByID(ctx, targetID)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		}
+
+		// Create follow (or follow request if locked)
+		if targetAcc.Locked {
+			_, _ = h.queries.CreateFollowRequest(ctx, db.CreateFollowRequestParams{
+				AccountID:       accountID,
+				TargetAccountID: targetID,
+			})
+		} else {
+			_, _ = h.queries.CreateFollow(ctx, db.CreateFollowParams{
+				AccountID:       accountID,
+				TargetAccountID: targetID,
+			})
+		}
+
+		// Return relationship
+		rel := h.getRelationship(ctx, accountID, targetID)
+		return c.JSON(http.StatusOK, rel)
+	}
+
+	return c.JSON(http.StatusOK, Relationship{
+		ID:        c.Param("id"),
+		Following: true,
+		Languages: []any{},
+	})
+}
+
+// Unfollow handles POST /api/v1/accounts/:id/unfollow
+func (h *AccountsHandler) Unfollow(c echo.Context) error {
+	accountID, ok := middleware.GetAccountID(c)
+	if !ok {
+		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+	}
+
+	targetID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+	}
+
+	if h.useDB() {
+		ctx := c.Request().Context()
+		_ = h.queries.DeleteFollow(ctx, db.DeleteFollowParams{
+			AccountID:       accountID,
+			TargetAccountID: targetID,
+		})
+
+		rel := h.getRelationship(ctx, accountID, targetID)
+		return c.JSON(http.StatusOK, rel)
+	}
+
+	return c.JSON(http.StatusOK, Relationship{
+		ID:        c.Param("id"),
+		Following: false,
+		Languages: []any{},
+	})
+}
+
+// Relationships handles GET /api/v1/accounts/relationships
+func (h *AccountsHandler) Relationships(c echo.Context) error {
+	accountID, ok := middleware.GetAccountID(c)
+	if !ok {
+		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+	}
+
+	ids := c.QueryParams()["id[]"]
+	if len(ids) == 0 {
+		return c.JSON(http.StatusOK, []Relationship{})
+	}
+
+	ctx := c.Request().Context()
+	relationships := make([]Relationship, 0, len(ids))
+
+	for _, idStr := range ids {
+		targetID, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			continue
+		}
+		if h.useDB() {
+			rel := h.getRelationship(ctx, accountID, targetID)
+			relationships = append(relationships, rel)
+		} else {
+			relationships = append(relationships, Relationship{
+				ID:        idStr,
+				Languages: []any{},
+			})
+		}
+	}
+
+	return c.JSON(http.StatusOK, relationships)
+}
+
+func (h *AccountsHandler) getRelationship(ctx context.Context, accountID, targetID int64) Relationship {
+	rel := Relationship{
+		ID:        strconv.FormatInt(targetID, 10),
+		Languages: []any{},
+	}
+
+	if !h.useDB() {
+		return rel
+	}
+
+	// Check following
+	_, err := h.queries.GetFollow(ctx, db.GetFollowParams{
+		AccountID:       accountID,
+		TargetAccountID: targetID,
+	})
+	rel.Following = err == nil
+	rel.ShowingReblogs = rel.Following
+	rel.Notifying = false
+
+	// Check followed by
+	_, err = h.queries.GetFollow(ctx, db.GetFollowParams{
+		AccountID:       targetID,
+		TargetAccountID: accountID,
+	})
+	rel.FollowedBy = err == nil
+
+	// Check blocking
+	_, err = h.queries.GetBlock(ctx, db.GetBlockParams{
+		AccountID:       accountID,
+		TargetAccountID: targetID,
+	})
+	rel.Blocking = err == nil
+
+	// Check blocked by
+	_, err = h.queries.GetBlock(ctx, db.GetBlockParams{
+		AccountID:       targetID,
+		TargetAccountID: accountID,
+	})
+	rel.BlockedBy = err == nil
+
+	// Check muting
+	_, err = h.queries.GetMute(ctx, db.GetMuteParams{
+		AccountID:       accountID,
+		TargetAccountID: targetID,
+	})
+	rel.Muting = err == nil
+
+	return rel
+}
+
+func parseAccountLimit(s string, defaultVal, maxVal int) int {
+	if s == "" {
+		return defaultVal
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil || v < 1 {
+		return defaultVal
+	}
+	if v > maxVal {
+		return maxVal
+	}
+	return v
+}
+
+// Statuses handles GET /api/v1/accounts/:id/statuses
+func (h *AccountsHandler) Statuses(c echo.Context) error {
+	targetID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+	}
+
+	limit := parseAccountLimit(c.QueryParam("limit"), 20, 40)
+
+	if h.useDB() {
+		statuses, err := h.queries.GetAccountStatuses(c.Request().Context(), db.GetAccountStatusesParams{
+			AccountID: targetID,
+			Limit:     int32(limit),
+			Offset:    0,
+		})
+		if err != nil {
+			return c.JSON(http.StatusOK, []any{})
+		}
+		return c.JSON(http.StatusOK, statuses)
+	}
+
+	return c.JSON(http.StatusOK, []any{})
+}
+
+// Block handles POST /api/v1/accounts/:id/block
+func (h *AccountsHandler) Block(c echo.Context) error {
+	accountID, ok := middleware.GetAccountID(c)
+	if !ok {
+		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+	}
+
+	targetID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+	}
+
+	if h.useDB() {
+		_, _ = h.queries.CreateBlock(c.Request().Context(), db.CreateBlockParams{
+			AccountID:       accountID,
+			TargetAccountID: targetID,
+		})
+	}
+
+	rel := h.getRelationship(c.Request().Context(), accountID, targetID)
+	return c.JSON(http.StatusOK, rel)
+}
+
+// Unblock handles POST /api/v1/accounts/:id/unblock
+func (h *AccountsHandler) Unblock(c echo.Context) error {
+	accountID, ok := middleware.GetAccountID(c)
+	if !ok {
+		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+	}
+
+	targetID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+	}
+
+	if h.useDB() {
+		_ = h.queries.DeleteBlock(c.Request().Context(), db.DeleteBlockParams{
+			AccountID:       accountID,
+			TargetAccountID: targetID,
+		})
+	}
+
+	rel := h.getRelationship(c.Request().Context(), accountID, targetID)
+	return c.JSON(http.StatusOK, rel)
+}
+
+// Mute handles POST /api/v1/accounts/:id/mute
+func (h *AccountsHandler) Mute(c echo.Context) error {
+	accountID, ok := middleware.GetAccountID(c)
+	if !ok {
+		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+	}
+
+	targetID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+	}
+
+	if h.useDB() {
+		_, _ = h.queries.CreateMute(c.Request().Context(), db.CreateMuteParams{
+			AccountID:       accountID,
+			TargetAccountID: targetID,
+		})
+	}
+
+	rel := h.getRelationship(c.Request().Context(), accountID, targetID)
+	return c.JSON(http.StatusOK, rel)
+}
+
+// Unmute handles POST /api/v1/accounts/:id/unmute
+func (h *AccountsHandler) Unmute(c echo.Context) error {
+	accountID, ok := middleware.GetAccountID(c)
+	if !ok {
+		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+	}
+
+	targetID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+	}
+
+	if h.useDB() {
+		_ = h.queries.DeleteMute(c.Request().Context(), db.DeleteMuteParams{
+			AccountID:       accountID,
+			TargetAccountID: targetID,
+		})
+	}
+
+	rel := h.getRelationship(c.Request().Context(), accountID, targetID)
+	return c.JSON(http.StatusOK, rel)
+}
+
+// FamiliarFollowers handles GET /api/v1/accounts/familiar_followers
+func (h *AccountsHandler) FamiliarFollowers(c echo.Context) error {
+	_, ok := middleware.GetAccountID(c)
+	if !ok {
+		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+	}
+
+	// Return empty familiar followers for now
+	return c.JSON(http.StatusOK, []map[string]any{})
+}
+
 // RegisterRoutes registers the accounts routes
 func (h *AccountsHandler) RegisterRoutes(g *echo.Group) {
-	g.GET("/accounts/:id", h.Get)
-	g.GET("/accounts/search", h.Search)
+	accounts := g.Group("/accounts")
+	accounts.GET("/verify_credentials", h.VerifyCredentials)
+	accounts.PATCH("/update_credentials", h.UpdateCredentials)
+	accounts.GET("/search", h.Search)
+	accounts.GET("/relationships", h.Relationships)
+	accounts.GET("/familiar_followers", h.FamiliarFollowers)
+	accounts.POST("", h.Register)
+	accounts.GET("/:id", h.Get)
+	accounts.GET("/:id/statuses", h.Statuses)
+	accounts.GET("/:id/followers", h.Followers)
+	accounts.GET("/:id/following", h.Following)
+	accounts.POST("/:id/follow", h.Follow)
+	accounts.POST("/:id/unfollow", h.Unfollow)
+	accounts.POST("/:id/block", h.Block)
+	accounts.POST("/:id/unblock", h.Unblock)
+	accounts.POST("/:id/mute", h.Mute)
+	accounts.POST("/:id/unmute", h.Unmute)
 }

@@ -827,8 +827,159 @@ func ptrStr(s string) *string {
 	return &s
 }
 
+// Edit handles PUT /api/v1/statuses/:id
+func (h *StatusesHandler) Edit(c echo.Context) error {
+	accountID, ok := middleware.GetAccountID(c)
+	if !ok {
+		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+	}
+
+	statusID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+	}
+
+	var req struct {
+		Status      string   `json:"status" form:"status"`
+		SpoilerText string   `json:"spoiler_text" form:"spoiler_text"`
+		Sensitive   bool     `json:"sensitive" form:"sensitive"`
+		MediaIDs    []string `json:"media_ids" form:"media_ids[]"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
+	}
+
+	if h.useDB() {
+		status, err := h.queries.GetStatusByID(c.Request().Context(), statusID)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		}
+		if status.AccountID != accountID {
+			return echo.NewHTTPError(http.StatusForbidden, map[string]string{"error": "This action is not allowed"})
+		}
+
+		// Update status with pgtype
+		_, _ = h.queries.UpdateStatus(c.Request().Context(), db.UpdateStatusParams{
+			ID:   statusID,
+			Text: pgtype.Text{String: req.Status, Valid: true},
+		})
+
+		// Return updated status from DB
+		s := h.dbStatusToAPI(c.Request().Context(), status)
+		return c.JSON(http.StatusOK, s)
+	}
+
+	return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+}
+
+// Pin handles POST /api/v1/statuses/:id/pin
+func (h *StatusesHandler) Pin(c echo.Context) error {
+	accountID, ok := middleware.GetAccountID(c)
+	if !ok {
+		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+	}
+
+	statusID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+	}
+
+	if h.useDB() {
+		status, err := h.queries.GetStatusByID(c.Request().Context(), statusID)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		}
+		if status.AccountID != accountID {
+			return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{"error": "Validation failed: Someone else's toot cannot be pinned"})
+		}
+		// TODO: Implement pin when query is available
+
+		s := h.dbStatusToAPI(c.Request().Context(), status)
+		s.Pinned = true
+		return c.JSON(http.StatusOK, s)
+	}
+
+	return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+}
+
+// Unpin handles POST /api/v1/statuses/:id/unpin
+func (h *StatusesHandler) Unpin(c echo.Context) error {
+	accountID, ok := middleware.GetAccountID(c)
+	if !ok {
+		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+	}
+
+	statusID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+	}
+
+	_ = accountID // Will be used when unpin query exists
+
+	if h.useDB() {
+		status, err := h.queries.GetStatusByID(c.Request().Context(), statusID)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		}
+		// TODO: Implement unpin when query is available
+
+		s := h.dbStatusToAPI(c.Request().Context(), status)
+		s.Pinned = false
+		return c.JSON(http.StatusOK, s)
+	}
+
+	return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+}
+
+// FavouritedBy handles GET /api/v1/statuses/:id/favourited_by
+func (h *StatusesHandler) FavouritedBy(c echo.Context) error {
+	statusID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+	}
+
+	if h.useDB() {
+		accounts, err := h.queries.GetFavouritedBy(c.Request().Context(), db.GetFavouritedByParams{
+			StatusID: statusID,
+			Limit:    40,
+			Offset:   0,
+		})
+		if err != nil {
+			return c.JSON(http.StatusOK, []any{})
+		}
+		return c.JSON(http.StatusOK, accounts)
+	}
+
+	return c.JSON(http.StatusOK, []any{})
+}
+
+// RebloggedBy handles GET /api/v1/statuses/:id/reblogged_by
+func (h *StatusesHandler) RebloggedBy(c echo.Context) error {
+	_, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+	}
+
+	// TODO: Implement with database query when available
+	return c.JSON(http.StatusOK, []any{})
+}
+
 // RegisterRoutes registers the statuses routes
 func (h *StatusesHandler) RegisterRoutes(g *echo.Group) {
-	g.GET("/statuses/:id", h.Get)
-	g.GET("/statuses/:id/context", h.Context)
+	statuses := g.Group("/statuses")
+	statuses.POST("", h.Create)
+	statuses.GET("/:id", h.Get)
+	statuses.PUT("/:id", h.Edit)
+	statuses.DELETE("/:id", h.Delete)
+	statuses.GET("/:id/context", h.Context)
+	statuses.POST("/:id/favourite", h.Favourite)
+	statuses.POST("/:id/unfavourite", h.Unfavourite)
+	statuses.POST("/:id/reblog", h.Reblog)
+	statuses.POST("/:id/unreblog", h.Unreblog)
+	statuses.POST("/:id/bookmark", h.Bookmark)
+	statuses.POST("/:id/unbookmark", h.Unbookmark)
+	statuses.POST("/:id/pin", h.Pin)
+	statuses.POST("/:id/unpin", h.Unpin)
+	statuses.GET("/:id/favourited_by", h.FavouritedBy)
+	statuses.GET("/:id/reblogged_by", h.RebloggedBy)
 }

@@ -1,7 +1,8 @@
--- Gotodon Initial Schema
+-- Gotodon Complete Initial Schema
 -- Based on Mastodon v4.5.2 database schema
--- Migration: 001_initial_schema
+-- Consolidated migration containing all tables
 
+-- +goose Up
 -- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
@@ -21,6 +22,10 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- ============================================================================
+-- Core Tables
+-- ============================================================================
+
 -- User Roles
 CREATE TABLE user_roles (
     id bigserial PRIMARY KEY,
@@ -33,7 +38,6 @@ CREATE TABLE user_roles (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- Insert default roles
 INSERT INTO user_roles (name, permissions, position) VALUES 
     ('Owner', -1, 1000),
     ('Admin', 983103, 100),
@@ -167,6 +171,10 @@ CREATE TABLE account_stats (
 
 CREATE UNIQUE INDEX index_account_stats_on_account_id ON account_stats (account_id);
 
+-- ============================================================================
+-- OAuth
+-- ============================================================================
+
 -- OAuth Applications (Doorkeeper compatible)
 CREATE TABLE oauth_applications (
     id bigserial PRIMARY KEY,
@@ -211,6 +219,10 @@ CREATE UNIQUE INDEX index_oauth_access_tokens_on_refresh_token ON oauth_access_t
     WHERE refresh_token IS NOT NULL;
 CREATE INDEX index_oauth_access_tokens_on_resource_owner_id ON oauth_access_tokens (resource_owner_id) 
     WHERE resource_owner_id IS NOT NULL;
+
+-- ============================================================================
+-- Statuses and Content
+-- ============================================================================
 
 -- Conversations
 CREATE TABLE conversations (
@@ -288,6 +300,44 @@ CREATE TABLE status_stats (
 
 CREATE UNIQUE INDEX index_status_stats_on_status_id ON status_stats (status_id);
 
+-- Scheduled Statuses
+CREATE SEQUENCE scheduled_statuses_id_seq;
+CREATE TABLE scheduled_statuses (
+    id bigint PRIMARY KEY DEFAULT timestamp_id('scheduled_statuses'),
+    account_id bigint NOT NULL,
+    scheduled_at timestamptz NOT NULL,
+    params jsonb NOT NULL DEFAULT '{}',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    
+    CONSTRAINT fk_scheduled_statuses_account FOREIGN KEY (account_id) 
+        REFERENCES accounts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX index_scheduled_statuses_on_account_id ON scheduled_statuses (account_id);
+CREATE INDEX index_scheduled_statuses_on_scheduled_at ON scheduled_statuses (scheduled_at);
+
+-- Status Pins
+CREATE TABLE status_pins (
+    id bigserial PRIMARY KEY,
+    account_id bigint NOT NULL,
+    status_id bigint NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    
+    CONSTRAINT fk_status_pins_account FOREIGN KEY (account_id) 
+        REFERENCES accounts(id) ON DELETE CASCADE,
+    CONSTRAINT fk_status_pins_status FOREIGN KEY (status_id) 
+        REFERENCES statuses(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX index_status_pins_on_account_status ON status_pins (account_id, status_id);
+CREATE INDEX index_status_pins_on_status_id ON status_pins (status_id);
+
+-- ============================================================================
+-- Media
+-- ============================================================================
+
 -- Media Attachments
 CREATE SEQUENCE media_attachments_id_seq;
 CREATE TABLE media_attachments (
@@ -325,6 +375,10 @@ CREATE UNIQUE INDEX index_media_attachments_on_shortcode ON media_attachments (s
     WHERE shortcode IS NOT NULL;
 CREATE INDEX index_media_attachments_on_status_id ON media_attachments (status_id);
 CREATE INDEX index_media_attachments_on_account_id_and_status_id ON media_attachments (account_id, status_id DESC);
+
+-- ============================================================================
+-- Relationships
+-- ============================================================================
 
 -- Follows
 CREATE TABLE follows (
@@ -388,6 +442,23 @@ CREATE UNIQUE INDEX index_favourites_on_account_id_and_status_id
     ON favourites (account_id, status_id);
 CREATE INDEX index_favourites_on_status_id ON favourites (status_id);
 
+-- Bookmarks
+CREATE TABLE bookmarks (
+    id bigserial PRIMARY KEY,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    account_id bigint NOT NULL,
+    status_id bigint NOT NULL,
+    
+    CONSTRAINT fk_bookmarks_account FOREIGN KEY (account_id) 
+        REFERENCES accounts(id) ON DELETE CASCADE,
+    CONSTRAINT fk_bookmarks_status FOREIGN KEY (status_id) 
+        REFERENCES statuses(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX index_bookmarks_on_account_id_and_status_id ON bookmarks (account_id, status_id);
+CREATE INDEX index_bookmarks_on_status_id ON bookmarks (status_id);
+
 -- Blocks
 CREATE TABLE blocks (
     id bigserial PRIMARY KEY,
@@ -426,6 +497,58 @@ CREATE TABLE mutes (
 CREATE UNIQUE INDEX index_mutes_on_account_id_and_target_account_id 
     ON mutes (account_id, target_account_id);
 CREATE INDEX index_mutes_on_target_account_id ON mutes (target_account_id);
+
+-- Domain Blocks (user-level)
+CREATE TABLE account_domain_blocks (
+    id bigserial PRIMARY KEY,
+    domain varchar(255) NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    account_id bigint NOT NULL,
+    
+    CONSTRAINT fk_account_domain_blocks_account FOREIGN KEY (account_id) 
+        REFERENCES accounts(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX index_account_domain_blocks_on_account_domain 
+    ON account_domain_blocks (account_id, domain);
+
+-- Domain Blocks (admin-level)
+CREATE TABLE domain_blocks (
+    id bigserial PRIMARY KEY,
+    domain varchar(255) NOT NULL DEFAULT '',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    severity integer NOT NULL DEFAULT 0,
+    reject_media boolean NOT NULL DEFAULT false,
+    reject_reports boolean NOT NULL DEFAULT false,
+    private_comment text,
+    public_comment text,
+    obfuscate boolean NOT NULL DEFAULT false
+);
+
+CREATE UNIQUE INDEX index_domain_blocks_on_domain ON domain_blocks (domain);
+
+-- Conversation Mutes
+CREATE TABLE conversation_mutes (
+    id bigserial PRIMARY KEY,
+    conversation_id bigint NOT NULL,
+    account_id bigint NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    
+    CONSTRAINT fk_conversation_mutes_conversation FOREIGN KEY (conversation_id) 
+        REFERENCES conversations(id) ON DELETE CASCADE,
+    CONSTRAINT fk_conversation_mutes_account FOREIGN KEY (account_id) 
+        REFERENCES accounts(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX index_conversation_mutes_on_account_conversation 
+    ON conversation_mutes (account_id, conversation_id);
+
+-- ============================================================================
+-- Mentions and Tags
+-- ============================================================================
 
 -- Mentions
 CREATE TABLE mentions (
@@ -479,6 +602,156 @@ CREATE TABLE statuses_tags (
 
 CREATE INDEX index_statuses_tags_on_status_id ON statuses_tags (status_id);
 
+-- ============================================================================
+-- Lists
+-- ============================================================================
+
+-- Lists
+CREATE TABLE lists (
+    id bigserial PRIMARY KEY,
+    account_id bigint NOT NULL,
+    title varchar(255) NOT NULL DEFAULT '',
+    replies_policy integer NOT NULL DEFAULT 0,
+    exclusive boolean NOT NULL DEFAULT false,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    
+    CONSTRAINT fk_lists_account FOREIGN KEY (account_id) 
+        REFERENCES accounts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX index_lists_on_account_id ON lists (account_id);
+
+-- List Accounts
+CREATE TABLE list_accounts (
+    id bigserial PRIMARY KEY,
+    list_id bigint NOT NULL,
+    account_id bigint NOT NULL,
+    follow_id bigint,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    
+    CONSTRAINT fk_list_accounts_list FOREIGN KEY (list_id) 
+        REFERENCES lists(id) ON DELETE CASCADE,
+    CONSTRAINT fk_list_accounts_account FOREIGN KEY (account_id) 
+        REFERENCES accounts(id) ON DELETE CASCADE,
+    CONSTRAINT fk_list_accounts_follow FOREIGN KEY (follow_id) 
+        REFERENCES follows(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX index_list_accounts_on_list_and_account ON list_accounts (list_id, account_id);
+CREATE INDEX index_list_accounts_on_account_id ON list_accounts (account_id);
+CREATE INDEX index_list_accounts_on_follow_id ON list_accounts (follow_id);
+
+-- ============================================================================
+-- Polls
+-- ============================================================================
+
+-- Polls
+CREATE TABLE polls (
+    id bigserial PRIMARY KEY,
+    account_id bigint,
+    status_id bigint,
+    expires_at timestamptz NOT NULL,
+    options varchar(255)[] NOT NULL DEFAULT '{}',
+    cached_tallies jsonb NOT NULL DEFAULT '{}',
+    multiple boolean NOT NULL DEFAULT false,
+    hide_totals boolean NOT NULL DEFAULT false,
+    votes_count bigint NOT NULL DEFAULT 0,
+    voters_count bigint,
+    last_fetched_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    lock_version integer NOT NULL DEFAULT 0,
+    
+    CONSTRAINT fk_polls_account FOREIGN KEY (account_id) 
+        REFERENCES accounts(id) ON DELETE SET NULL,
+    CONSTRAINT fk_polls_status FOREIGN KEY (status_id)
+        REFERENCES statuses(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX index_polls_on_status_id ON polls (status_id);
+
+-- Poll Votes
+CREATE TABLE poll_votes (
+    id bigserial PRIMARY KEY,
+    account_id bigint,
+    poll_id bigint NOT NULL,
+    choice integer NOT NULL DEFAULT 0,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    uri varchar(255),
+    
+    CONSTRAINT fk_poll_votes_account FOREIGN KEY (account_id) 
+        REFERENCES accounts(id) ON DELETE SET NULL,
+    CONSTRAINT fk_poll_votes_poll FOREIGN KEY (poll_id)
+        REFERENCES polls(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX index_poll_votes_on_poll_account_choice ON poll_votes (poll_id, account_id, choice);
+CREATE INDEX index_poll_votes_on_poll_id ON poll_votes (poll_id);
+
+-- Add poll_id FK to statuses
+ALTER TABLE statuses ADD CONSTRAINT fk_statuses_poll 
+    FOREIGN KEY (poll_id) REFERENCES polls(id) ON DELETE SET NULL;
+
+-- ============================================================================
+-- Filters
+-- ============================================================================
+
+-- Filters (v2 API)
+CREATE TABLE filters (
+    id bigserial PRIMARY KEY,
+    account_id bigint NOT NULL,
+    title varchar(255) NOT NULL DEFAULT '',
+    context varchar(255)[] NOT NULL DEFAULT '{}',
+    action integer NOT NULL DEFAULT 0,
+    expires_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    
+    CONSTRAINT fk_filters_account FOREIGN KEY (account_id) 
+        REFERENCES accounts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX index_filters_on_account_id ON filters (account_id);
+
+-- Filter Keywords
+CREATE TABLE filter_keywords (
+    id bigserial PRIMARY KEY,
+    filter_id bigint NOT NULL,
+    keyword varchar(255) NOT NULL DEFAULT '',
+    whole_word boolean NOT NULL DEFAULT true,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    
+    CONSTRAINT fk_filter_keywords_filter FOREIGN KEY (filter_id) 
+        REFERENCES filters(id) ON DELETE CASCADE
+);
+
+CREATE INDEX index_filter_keywords_on_filter_id ON filter_keywords (filter_id);
+
+-- Filter Statuses
+CREATE TABLE filter_statuses (
+    id bigserial PRIMARY KEY,
+    filter_id bigint NOT NULL,
+    status_id bigint NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    
+    CONSTRAINT fk_filter_statuses_filter FOREIGN KEY (filter_id) 
+        REFERENCES filters(id) ON DELETE CASCADE,
+    CONSTRAINT fk_filter_statuses_status FOREIGN KEY (status_id)
+        REFERENCES statuses(id) ON DELETE CASCADE
+);
+
+CREATE INDEX index_filter_statuses_on_filter_id ON filter_statuses (filter_id);
+CREATE UNIQUE INDEX index_filter_statuses_on_filter_status ON filter_statuses (filter_id, status_id);
+
+-- ============================================================================
+-- Notifications
+-- ============================================================================
+
 -- Notifications
 CREATE TABLE notifications (
     id bigserial PRIMARY KEY,
@@ -504,6 +777,154 @@ CREATE INDEX index_notifications_on_activity_id_and_activity_type
     ON notifications (activity_id, activity_type);
 CREATE INDEX index_notifications_on_from_account_id ON notifications (from_account_id);
 
+-- ============================================================================
+-- Announcements
+-- ============================================================================
+
+-- Announcements
+CREATE TABLE announcements (
+    id bigserial PRIMARY KEY,
+    text text NOT NULL DEFAULT '',
+    published boolean NOT NULL DEFAULT false,
+    all_day boolean NOT NULL DEFAULT false,
+    scheduled_at timestamptz,
+    starts_at timestamptz,
+    ends_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    published_at timestamptz,
+    status_ids bigint[]
+);
+
+-- Announcement Mutes
+CREATE TABLE announcement_mutes (
+    id bigserial PRIMARY KEY,
+    account_id bigint NOT NULL,
+    announcement_id bigint NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    
+    CONSTRAINT fk_announcement_mutes_account FOREIGN KEY (account_id) 
+        REFERENCES accounts(id) ON DELETE CASCADE,
+    CONSTRAINT fk_announcement_mutes_announcement FOREIGN KEY (announcement_id) 
+        REFERENCES announcements(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX index_announcement_mutes_on_account_announcement 
+    ON announcement_mutes (account_id, announcement_id);
+
+-- Announcement Reactions
+CREATE TABLE announcement_reactions (
+    id bigserial PRIMARY KEY,
+    account_id bigint,
+    announcement_id bigint NOT NULL,
+    name varchar(255) NOT NULL DEFAULT '',
+    custom_emoji_id bigint,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    
+    CONSTRAINT fk_announcement_reactions_account FOREIGN KEY (account_id) 
+        REFERENCES accounts(id) ON DELETE SET NULL,
+    CONSTRAINT fk_announcement_reactions_announcement FOREIGN KEY (announcement_id) 
+        REFERENCES announcements(id) ON DELETE CASCADE
+);
+
+CREATE INDEX index_announcement_reactions_on_announcement_id 
+    ON announcement_reactions (announcement_id);
+CREATE UNIQUE INDEX index_announcement_reactions_on_account_announcement_name 
+    ON announcement_reactions (account_id, announcement_id, name) WHERE account_id IS NOT NULL;
+
+-- ============================================================================
+-- Custom Emojis
+-- ============================================================================
+
+-- Custom Emojis
+CREATE TABLE custom_emojis (
+    id bigserial PRIMARY KEY,
+    shortcode varchar(255) NOT NULL DEFAULT '',
+    domain varchar(255),
+    image_file_name varchar(255),
+    image_content_type varchar(255),
+    image_file_size integer,
+    image_updated_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    disabled boolean NOT NULL DEFAULT false,
+    uri varchar(255),
+    image_remote_url varchar(2048),
+    visible_in_picker boolean NOT NULL DEFAULT true,
+    category_id bigint,
+    image_storage_schema_version integer
+);
+
+CREATE UNIQUE INDEX index_custom_emojis_on_shortcode_domain 
+    ON custom_emojis (shortcode, COALESCE(domain, ''));
+CREATE INDEX index_custom_emojis_on_domain_id ON custom_emojis (domain, id DESC);
+
+-- ============================================================================
+-- Push Notifications
+-- ============================================================================
+
+-- Web Push Subscriptions
+CREATE TABLE web_push_subscriptions (
+    id bigserial PRIMARY KEY,
+    endpoint varchar(2048) NOT NULL,
+    key_p256dh varchar(255),
+    key_auth varchar(255),
+    data jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    access_token_id bigint,
+    user_id bigint,
+    
+    CONSTRAINT fk_web_push_subscriptions_access_token FOREIGN KEY (access_token_id) 
+        REFERENCES oauth_access_tokens(id) ON DELETE CASCADE,
+    CONSTRAINT fk_web_push_subscriptions_user FOREIGN KEY (user_id) 
+        REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX index_web_push_subscriptions_on_access_token_id ON web_push_subscriptions (access_token_id);
+CREATE INDEX index_web_push_subscriptions_on_user_id ON web_push_subscriptions (user_id);
+
+-- ============================================================================
+-- Reports
+-- ============================================================================
+
+-- Reports
+CREATE TABLE reports (
+    id bigserial PRIMARY KEY,
+    status_ids bigint[] NOT NULL DEFAULT '{}',
+    comment text NOT NULL DEFAULT '',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    account_id bigint NOT NULL,
+    action_taken_by_account_id bigint,
+    target_account_id bigint NOT NULL,
+    action_taken_at timestamptz,
+    forwarded boolean,
+    category integer NOT NULL DEFAULT 0,
+    assigned_account_id bigint,
+    rule_ids integer[] NOT NULL DEFAULT '{}',
+    uri varchar(255),
+    
+    CONSTRAINT fk_reports_account FOREIGN KEY (account_id) 
+        REFERENCES accounts(id) ON DELETE CASCADE,
+    CONSTRAINT fk_reports_action_taken_by FOREIGN KEY (action_taken_by_account_id) 
+        REFERENCES accounts(id) ON DELETE SET NULL,
+    CONSTRAINT fk_reports_target_account FOREIGN KEY (target_account_id) 
+        REFERENCES accounts(id) ON DELETE CASCADE,
+    CONSTRAINT fk_reports_assigned FOREIGN KEY (assigned_account_id) 
+        REFERENCES accounts(id) ON DELETE SET NULL
+);
+
+CREATE INDEX index_reports_on_account_id ON reports (account_id);
+CREATE INDEX index_reports_on_target_account_id ON reports (target_account_id);
+CREATE INDEX index_reports_on_assigned_account_id ON reports (assigned_account_id);
+
+-- ============================================================================
+-- Settings and Preferences
+-- ============================================================================
+
 -- Settings
 CREATE TABLE settings (
     id bigserial PRIMARY KEY,
@@ -515,31 +936,82 @@ CREATE TABLE settings (
 
 CREATE UNIQUE INDEX index_settings_on_var ON settings (var);
 
+-- Preferences
+CREATE TABLE preferences (
+    id bigserial PRIMARY KEY,
+    account_id bigint NOT NULL UNIQUE,
+    posting_default_visibility varchar(255) DEFAULT 'public',
+    posting_default_sensitive boolean DEFAULT false,
+    posting_default_language varchar(255),
+    reading_expand_media varchar(255) DEFAULT 'default',
+    reading_expand_spoilers boolean DEFAULT false,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    
+    CONSTRAINT fk_preferences_account FOREIGN KEY (account_id) 
+        REFERENCES accounts(id) ON DELETE CASCADE
+);
 
--- ============================================================================
--- Down Migration (for rollback)
--- ============================================================================
--- DROP TABLE IF EXISTS settings CASCADE;
--- DROP TABLE IF EXISTS notifications CASCADE;
--- DROP TABLE IF EXISTS statuses_tags CASCADE;
--- DROP TABLE IF EXISTS tags CASCADE;
--- DROP TABLE IF EXISTS mentions CASCADE;
--- DROP TABLE IF EXISTS mutes CASCADE;
--- DROP TABLE IF EXISTS blocks CASCADE;
--- DROP TABLE IF EXISTS favourites CASCADE;
--- DROP TABLE IF EXISTS follow_requests CASCADE;
--- DROP TABLE IF EXISTS follows CASCADE;
--- DROP TABLE IF EXISTS media_attachments CASCADE;
--- DROP TABLE IF EXISTS status_stats CASCADE;
--- DROP TABLE IF EXISTS statuses CASCADE;
--- DROP TABLE IF EXISTS conversations CASCADE;
--- DROP TABLE IF EXISTS oauth_access_tokens CASCADE;
--- DROP TABLE IF EXISTS oauth_applications CASCADE;
--- DROP TABLE IF EXISTS account_stats CASCADE;
--- DROP TABLE IF EXISTS users CASCADE;
--- DROP TABLE IF EXISTS accounts CASCADE;
--- DROP TABLE IF EXISTS user_roles CASCADE;
--- DROP FUNCTION IF EXISTS timestamp_id(text);
--- DROP SEQUENCE IF EXISTS accounts_id_seq;
--- DROP SEQUENCE IF EXISTS statuses_id_seq;
--- DROP SEQUENCE IF EXISTS media_attachments_id_seq;
+-- Markers (reading positions)
+CREATE TABLE markers (
+    id bigserial PRIMARY KEY,
+    user_id bigint NOT NULL,
+    timeline varchar(255) NOT NULL DEFAULT '',
+    last_read_id bigint NOT NULL DEFAULT 0,
+    lock_version integer NOT NULL DEFAULT 0,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    
+    CONSTRAINT fk_markers_user FOREIGN KEY (user_id) 
+        REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX index_markers_on_user_timeline ON markers (user_id, timeline);
+
+-- +goose Down
+DROP TABLE IF EXISTS markers CASCADE;
+DROP TABLE IF EXISTS preferences CASCADE;
+DROP TABLE IF EXISTS settings CASCADE;
+DROP TABLE IF EXISTS reports CASCADE;
+DROP TABLE IF EXISTS web_push_subscriptions CASCADE;
+DROP TABLE IF EXISTS custom_emojis CASCADE;
+DROP TABLE IF EXISTS announcement_reactions CASCADE;
+DROP TABLE IF EXISTS announcement_mutes CASCADE;
+DROP TABLE IF EXISTS announcements CASCADE;
+DROP TABLE IF EXISTS notifications CASCADE;
+DROP TABLE IF EXISTS filter_statuses CASCADE;
+DROP TABLE IF EXISTS filter_keywords CASCADE;
+DROP TABLE IF EXISTS filters CASCADE;
+DROP TABLE IF EXISTS poll_votes CASCADE;
+DROP TABLE IF EXISTS polls CASCADE;
+DROP TABLE IF EXISTS list_accounts CASCADE;
+DROP TABLE IF EXISTS lists CASCADE;
+DROP TABLE IF EXISTS statuses_tags CASCADE;
+DROP TABLE IF EXISTS tags CASCADE;
+DROP TABLE IF EXISTS mentions CASCADE;
+DROP TABLE IF EXISTS conversation_mutes CASCADE;
+DROP TABLE IF EXISTS domain_blocks CASCADE;
+DROP TABLE IF EXISTS account_domain_blocks CASCADE;
+DROP TABLE IF EXISTS mutes CASCADE;
+DROP TABLE IF EXISTS blocks CASCADE;
+DROP TABLE IF EXISTS bookmarks CASCADE;
+DROP TABLE IF EXISTS favourites CASCADE;
+DROP TABLE IF EXISTS follow_requests CASCADE;
+DROP TABLE IF EXISTS follows CASCADE;
+DROP TABLE IF EXISTS media_attachments CASCADE;
+DROP TABLE IF EXISTS status_pins CASCADE;
+DROP TABLE IF EXISTS scheduled_statuses CASCADE;
+DROP TABLE IF EXISTS status_stats CASCADE;
+DROP TABLE IF EXISTS statuses CASCADE;
+DROP TABLE IF EXISTS conversations CASCADE;
+DROP TABLE IF EXISTS oauth_access_tokens CASCADE;
+DROP TABLE IF EXISTS oauth_applications CASCADE;
+DROP TABLE IF EXISTS account_stats CASCADE;
+DROP TABLE IF EXISTS users CASCADE;
+DROP TABLE IF EXISTS accounts CASCADE;
+DROP TABLE IF EXISTS user_roles CASCADE;
+DROP FUNCTION IF EXISTS timestamp_id(text);
+DROP SEQUENCE IF EXISTS scheduled_statuses_id_seq;
+DROP SEQUENCE IF EXISTS media_attachments_id_seq;
+DROP SEQUENCE IF EXISTS statuses_id_seq;
+DROP SEQUENCE IF EXISTS accounts_id_seq;

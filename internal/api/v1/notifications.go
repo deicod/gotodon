@@ -219,6 +219,10 @@ func (h *NotificationsHandler) Dismiss(c echo.Context) error {
 }
 
 // RegisterRoutes registers the notifications routes
-func (h *NotificationsHandler) RegisterRoutes(_ *echo.Group) {
-	// All notifications routes require auth, registered separately
+func (h *NotificationsHandler) RegisterRoutes(g *echo.Group) {
+	notifications := g.Group("/notifications")
+	notifications.GET("", h.List)
+	notifications.GET("/:id", h.Get)
+	notifications.POST("/clear", h.Clear)
+	notifications.POST("/:id/dismiss", h.Dismiss)
 }

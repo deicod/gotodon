@@ -18,10 +18,16 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/spf13/cobra"
 
+	activitypubapi "github.com/deicod/gotodon/internal/api/activitypub"
+	"github.com/deicod/gotodon/internal/api/admin"
+	oauthapi "github.com/deicod/gotodon/internal/api/oauth"
 	v1 "github.com/deicod/gotodon/internal/api/v1"
 	v2 "github.com/deicod/gotodon/internal/api/v2"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/media"
+	"github.com/deicod/gotodon/internal/streaming"
+	"github.com/deicod/gotodon/pkg/activitypub"
 )
 
 // serveCmd represents the serve command
@@ -128,9 +134,109 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	appsHandler := v1.NewAppsHandler(queries)
 	appsHandler.Register(v1Group)
 
+	notificationsHandler := v1.NewNotificationsHandler(queries)
+	notificationsHandler.RegisterRoutes(v1Group)
+
+	mediaStorage := media.NewLocalStorage("./uploads", fmt.Sprintf("https://%s/files", cfg.Instance.LocalDomain))
+	mediaUploader := media.NewUploader(mediaStorage)
+	mediaHandler := v1.NewMediaHandler(mediaUploader)
+	mediaHandler.RegisterRoutes(v1Group)
+
+	announcementsHandler := v1.NewAnnouncementsHandler()
+	announcementsHandler.RegisterRoutes(v1Group)
+
+	markersHandler := v1.NewMarkersHandler()
+	markersHandler.RegisterRoutes(v1Group)
+
+	preferencesHandler := v1.NewPreferencesHandler()
+	preferencesHandler.RegisterRoutes(v1Group)
+
+	suggestionsHandler := v1.NewSuggestionsHandler()
+	suggestionsHandler.RegisterRoutes(v1Group)
+
+	trendsHandler := v1.NewTrendsHandler()
+	trendsHandler.RegisterRoutes(v1Group)
+
+	directoryHandler := v1.NewDirectoryHandler(queries)
+	directoryHandler.RegisterRoutes(v1Group)
+
+	bookmarksHandler := v1.NewBookmarksHandler(queries)
+	bookmarksHandler.RegisterRoutes(v1Group)
+
+	favouritesHandler := v1.NewFavouritesHandler(queries)
+	favouritesHandler.RegisterRoutes(v1Group)
+
+	mutesHandler := v1.NewMutesHandler(queries)
+	mutesHandler.RegisterRoutes(v1Group)
+
+	blocksHandler := v1.NewBlocksHandler(queries)
+	blocksHandler.RegisterRoutes(v1Group)
+
+	customEmojisHandler := v1.NewCustomEmojisHandler()
+	customEmojisHandler.RegisterRoutes(v1Group)
+
+	conversationsHandler := v1.NewConversationsHandler(queries)
+	conversationsHandler.RegisterRoutes(v1Group)
+
+	followRequestsHandler := v1.NewFollowRequestsHandler(queries)
+	followRequestsHandler.RegisterRoutes(v1Group)
+
+	domainBlocksHandler := v1.NewDomainBlocksHandler(queries)
+	domainBlocksHandler.RegisterRoutes(v1Group)
+
+	scheduledStatusesHandler := v1.NewScheduledStatusesHandler(queries)
+	scheduledStatusesHandler.RegisterRoutes(v1Group)
+
+	pushHandler := v1.NewPushHandler(queries)
+	pushHandler.RegisterRoutes(v1Group)
+
 	// Register v2 handlers
 	filtersHandler := v2.NewFiltersHandler(queries)
 	filtersHandler.RegisterRoutes(v2Group)
+
+	searchHandler := v2.NewSearchHandler()
+	searchHandler.RegisterRoutes(v2Group)
+
+	// Register OAuth handlers
+	oauthHandler := oauthapi.NewHandler(queries)
+	oauthHandler.RegisterRoutes(e)
+
+	// Streaming API
+	streamingHub := streaming.NewHub()
+	go streamingHub.Run(context.Background())
+	sseHandler := streaming.NewSSEHandler(streamingHub)
+	v1Group.GET("/streaming", echo.WrapHandler(sseHandler))
+	v1Group.GET("/streaming/:channel", echo.WrapHandler(sseHandler))
+
+	// ActivityPub Federation
+	federationHandler := activitypubapi.NewFederationHandler(queries, cfg.Instance.LocalDomain)
+	federationHandler.RegisterRoutes(e)
+
+	// Admin API
+	adminGroup := e.Group("/api/v1/admin")
+	adminAccountsHandler := admin.NewAccountsHandler()
+	adminAccountsHandler.RegisterRoutes(adminGroup)
+
+	adminReportsHandler := admin.NewReportsHandler()
+	adminReportsHandler.RegisterRoutes(adminGroup)
+
+	adminDomainBlocksHandler := admin.NewDomainBlocksHandler()
+	adminDomainBlocksHandler.RegisterRoutes(adminGroup)
+
+	adminInstanceHandler := admin.NewInstanceHandler()
+	adminInstanceHandler.RegisterRoutes(adminGroup)
+
+	adminTrendsHandler := admin.NewTrendsHandler()
+	adminTrendsHandler.RegisterRoutes(adminGroup)
+
+	adminDimensionsHandler := admin.NewDimensionsHandler()
+	adminDimensionsHandler.RegisterRoutes(adminGroup)
+
+	adminMeasuresHandler := admin.NewMeasuresHandler()
+	adminMeasuresHandler.RegisterRoutes(adminGroup)
+
+	adminRetentionHandler := admin.NewRetentionHandler()
+	adminRetentionHandler.RegisterRoutes(adminGroup)
 
 	// Instance info (public endpoint)
 	v1Group.GET("/instance", func(c echo.Context) error {
@@ -193,10 +299,58 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	// Well-known endpoints
 	wellKnown := e.Group("/.well-known")
 	wellKnown.GET("/webfinger", func(c echo.Context) error {
-		// TODO: Implement WebFinger
-		return c.JSON(http.StatusNotImplemented, map[string]string{
-			"error": "Not implemented yet",
-		})
+		resource := c.QueryParam("resource")
+		if resource == "" {
+			return c.JSON(http.StatusBadRequest, map[string]string{
+				"error": "Missing required 'resource' parameter",
+			})
+		}
+
+		username, domain, err := activitypub.ParseAcct(resource)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{
+				"error": "Invalid resource format. Expected acct:username@domain",
+			})
+		}
+
+		// Only handle requests for local domain
+		if domain != cfg.Instance.LocalDomain {
+			return c.JSON(http.StatusNotFound, map[string]string{
+				"error": "User not found on this server",
+			})
+		}
+
+		// Look up account in database
+		if queries == nil {
+			return c.JSON(http.StatusServiceUnavailable, map[string]string{
+				"error": "Database not available",
+			})
+		}
+
+		account, err := queries.GetAccountByUsername(c.Request().Context(), username)
+		if err != nil {
+			return c.JSON(http.StatusNotFound, map[string]string{
+				"error": "Account not found",
+			})
+		}
+
+		// Build WebFinger response
+		accountURI := fmt.Sprintf("https://%s/users/%s", cfg.Instance.LocalDomain, account.Username)
+		profileURL := fmt.Sprintf("https://%s/@%s", cfg.Instance.LocalDomain, account.Username)
+
+		resp := activitypub.BuildWebFingerResponse(account.Username, cfg.Instance.LocalDomain, accountURI, profileURL)
+
+		c.Response().Header().Set("Content-Type", activitypub.WebFingerContentType)
+		return c.JSON(http.StatusOK, resp)
+	})
+	wellKnown.GET("/host-meta", func(c echo.Context) error {
+		// Return XRD host-meta as per RFC 6415
+		xml := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<XRD xmlns="http://docs.oasis-open.org/ns/xri/xrd-1.0">
+  <Link rel="lrdd" template="https://%s/.well-known/webfinger?resource={uri}"/>
+</XRD>`, cfg.Instance.LocalDomain)
+		c.Response().Header().Set("Content-Type", "application/xrd+xml; charset=utf-8")
+		return c.String(http.StatusOK, xml)
 	})
 	wellKnown.GET("/nodeinfo", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]interface{}{
