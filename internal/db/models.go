@@ -70,6 +70,14 @@ type AccountDomainBlock struct {
 	AccountID int64              `db:"account_id" json:"account_id"`
 }
 
+type AccountPin struct {
+	ID              int64              `db:"id" json:"id"`
+	AccountID       int64              `db:"account_id" json:"account_id"`
+	TargetAccountID int64              `db:"target_account_id" json:"target_account_id"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
 type AccountStat struct {
 	ID             int64              `db:"id" json:"id"`
 	AccountID      int64              `db:"account_id" json:"account_id"`
@@ -184,6 +192,17 @@ type Favourite struct {
 	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	AccountID int64              `db:"account_id" json:"account_id"`
 	StatusID  int64              `db:"status_id" json:"status_id"`
+}
+
+type FeaturedTag struct {
+	ID            int64              `db:"id" json:"id"`
+	AccountID     int64              `db:"account_id" json:"account_id"`
+	TagID         int64              `db:"tag_id" json:"tag_id"`
+	StatusesCount int64              `db:"statuses_count" json:"statuses_count"`
+	LastStatusAt  pgtype.Timestamptz `db:"last_status_at" json:"last_status_at"`
+	CreatedAt     pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	Name          pgtype.Text        `db:"name" json:"name"`
 }
 
 type Filter struct {

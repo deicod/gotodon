@@ -210,12 +210,23 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	scheduledStatusesHandler := v1.NewScheduledStatusesHandler(queries)
 	scheduledStatusesHandler.RegisterRoutes(mux)
 
-	pushHandler := v1.NewPushHandler(queries, cfg)
-	pushHandler.RegisterRoutes(mux)
+	v1PushHandler := v1.NewPushHandler(queries, cfg)
+	v1PushHandler.RegisterRoutes(mux)
+
+	v1EndorsementsHandler := v1.NewEndorsementsHandler(queries)
+	v1EndorsementsHandler.RegisterRoutes(mux)
+
+	v1FeaturedTagsHandler := v1.NewFeaturedTagsHandler(queries)
+	v1FeaturedTagsHandler.RegisterRoutes(mux)
 
 	// Register v2 handlers
-	filtersHandler := v2.NewFiltersHandler(queries)
-	filtersHandler.RegisterRoutes(mux)
+	// V2 Generic
+	v2InstanceHandler := v2.NewInstanceHandler(cfg)
+	v2InstanceHandler.RegisterRoutes(mux)
+
+	// Filters
+	v2FiltersHandler := v2.NewFiltersHandler(queries)
+	v2FiltersHandler.RegisterRoutes(mux)
 
 	searchHandler := v2.NewSearchHandler(queries)
 	searchHandler.RegisterRoutes(mux)

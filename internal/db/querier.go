@@ -48,10 +48,13 @@ type Querier interface {
 	ClearNotifications(ctx context.Context, accountID int64) error
 	ClearResetPasswordToken(ctx context.Context, id int64) error
 	ConfirmUser(ctx context.Context, id int64) error
+	CountAccountPins(ctx context.Context, accountID int64) (int64, error)
+	CountFeaturedTags(ctx context.Context, accountID int64) (int64, error)
 	CountFollowers(ctx context.Context, targetAccountID int64) (int64, error)
 	CountFollowing(ctx context.Context, accountID int64) (int64, error)
 	CountUnreadNotifications(ctx context.Context, accountID int64) (int64, error)
 	CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error)
+	CreateAccountPin(ctx context.Context, arg CreateAccountPinParams) (AccountPin, error)
 	CreateAccountStats(ctx context.Context, accountID int64) (AccountStat, error)
 	CreateBlock(ctx context.Context, arg CreateBlockParams) (Block, error)
 	CreateBookmark(ctx context.Context, arg CreateBookmarkParams) error
@@ -59,6 +62,7 @@ type Querier interface {
 	CreateCustomEmoji(ctx context.Context, arg CreateCustomEmojiParams) (CustomEmoji, error)
 	CreateDomainBlock(ctx context.Context, arg CreateDomainBlockParams) (AccountDomainBlock, error)
 	CreateFavourite(ctx context.Context, arg CreateFavouriteParams) (Favourite, error)
+	CreateFeaturedTag(ctx context.Context, arg CreateFeaturedTagParams) (FeaturedTag, error)
 	CreateFilter(ctx context.Context, arg CreateFilterParams) (Filter, error)
 	CreateFilterKeyword(ctx context.Context, arg CreateFilterKeywordParams) (FilterKeyword, error)
 	CreateFilterStatus(ctx context.Context, arg CreateFilterStatusParams) (FilterStatus, error)
@@ -77,16 +81,19 @@ type Querier interface {
 	CreateScheduledStatus(ctx context.Context, arg CreateScheduledStatusParams) (ScheduledStatus, error)
 	CreateStatus(ctx context.Context, arg CreateStatusParams) (Status, error)
 	CreateStatusStats(ctx context.Context, statusID int64) (StatusStat, error)
+	CreateTag(ctx context.Context, name string) (Tag, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	DecrementStatusFavourites(ctx context.Context, statusID int64) error
 	DecrementStatusReblogs(ctx context.Context, statusID int64) error
 	DecrementStatusReplies(ctx context.Context, statusID int64) error
+	DeleteAccountPin(ctx context.Context, arg DeleteAccountPinParams) error
 	DeleteBlock(ctx context.Context, arg DeleteBlockParams) error
 	DeleteBookmark(ctx context.Context, arg DeleteBookmarkParams) error
 	DeleteConversation(ctx context.Context, id int64) error
 	DeleteCustomEmoji(ctx context.Context, id int64) error
 	DeleteDomainBlock(ctx context.Context, arg DeleteDomainBlockParams) error
 	DeleteFavourite(ctx context.Context, arg DeleteFavouriteParams) error
+	DeleteFeaturedTag(ctx context.Context, arg DeleteFeaturedTagParams) error
 	DeleteFilter(ctx context.Context, arg DeleteFilterParams) error
 	DeleteFilterKeyword(ctx context.Context, id int64) error
 	DeleteFilterStatus(ctx context.Context, id int64) error
@@ -115,6 +122,7 @@ type Querier interface {
 	GetDomainBlock(ctx context.Context, arg GetDomainBlockParams) (AccountDomainBlock, error)
 	GetFavourite(ctx context.Context, arg GetFavouriteParams) (Favourite, error)
 	GetFavouritedBy(ctx context.Context, arg GetFavouritedByParams) ([]Account, error)
+	GetFeaturedTagByTagID(ctx context.Context, arg GetFeaturedTagByTagIDParams) (FeaturedTag, error)
 	GetFilter(ctx context.Context, arg GetFilterParams) (Filter, error)
 	GetFiltersForAccount(ctx context.Context, accountID int64) ([]GetFiltersForAccountRow, error)
 	GetFollow(ctx context.Context, arg GetFollowParams) (Follow, error)
@@ -154,6 +162,7 @@ type Querier interface {
 	GetStatusDescendants(ctx context.Context, statusID pgtype.Int8) ([]Status, error)
 	GetStatusStats(ctx context.Context, statusID int64) (StatusStat, error)
 	GetStatusesByIDs(ctx context.Context, ids []int64) ([]Status, error)
+	GetTagByName(ctx context.Context, lower string) (Tag, error)
 	// Placeholder: In future, use preview_cards table
 	GetTrendingLinks(ctx context.Context) ([]int32, error)
 	GetTrendingStatuses(ctx context.Context, limit int32) ([]GetTrendingStatusesRow, error)
@@ -171,6 +180,7 @@ type Querier interface {
 	IncrementVoteCount(ctx context.Context, arg IncrementVoteCountParams) error
 	IncrementVotersCount(ctx context.Context, id int64) error
 	IsBookmarked(ctx context.Context, arg IsBookmarkedParams) (bool, error)
+	ListAccountPins(ctx context.Context, accountID int64) ([]ListAccountPinsRow, error)
 	ListAccountsInList(ctx context.Context, arg ListAccountsInListParams) ([]Account, error)
 	ListAnnouncementReactions(ctx context.Context, announcementID int64) ([]AnnouncementReaction, error)
 	ListAnnouncements(ctx context.Context, arg ListAnnouncementsParams) ([]Announcement, error)
@@ -182,6 +192,7 @@ type Querier interface {
 	ListDomainBlocks(ctx context.Context, arg ListDomainBlocksParams) ([]AccountDomainBlock, error)
 	ListDueScheduledStatuses(ctx context.Context) ([]ScheduledStatus, error)
 	ListFavourites(ctx context.Context, arg ListFavouritesParams) ([]Status, error)
+	ListFeaturedTags(ctx context.Context, accountID int64) ([]FeaturedTag, error)
 	ListFilterKeywords(ctx context.Context, filterID int64) ([]FilterKeyword, error)
 	ListFilterStatuses(ctx context.Context, filterID int64) ([]FilterStatus, error)
 	ListFilters(ctx context.Context, accountID int64) ([]Filter, error)
