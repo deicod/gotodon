@@ -118,12 +118,6 @@ type Poll struct {
 	Emojis      []any        `json:"emojis"`
 }
 
-// PollOption represents a poll option
-type PollOption struct {
-	Title      string `json:"title"`
-	VotesCount *int   `json:"votes_count"`
-}
-
 // FilterResult represents a filter match
 type FilterResult struct {
 	Filter         Filter   `json:"filter"`
