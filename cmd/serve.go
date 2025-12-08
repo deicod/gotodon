@@ -125,6 +125,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	pollsHandler := v1.NewPollsHandler(queries)
 	pollsHandler.RegisterRoutes(v1Group)
 
+	appsHandler := v1.NewAppsHandler(queries)
+	appsHandler.Register(v1Group)
+
 	// Register v2 handlers
 	filtersHandler := v2.NewFiltersHandler(queries)
 	filtersHandler.RegisterRoutes(v2Group)
