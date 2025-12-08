@@ -37,17 +37,19 @@ func (h *DirectoryHandler) Get(c echo.Context) error {
 	local := c.QueryParam("local") == "true"
 	order := c.QueryParam("order") // "active" or "new"
 
-	_ = offset
-	_ = local
-	_ = order
-
 	if h.useDB() {
-		accounts, err := h.queries.ListLocalAccounts(c.Request().Context(), db.ListLocalAccountsParams{
-			Limit:  int32(limit),
-			Offset: 0,
+		orderActive := order == "active"
+		orderNew := order == "new" || order == "" // Default to new
+
+		accounts, err := h.queries.ListDeepDirectory(c.Request().Context(), db.ListDeepDirectoryParams{
+			Limit:       int32(limit),
+			Offset:      int32(offset),
+			Local:       local,
+			OrderActive: orderActive,
+			OrderNew:    orderNew,
 		})
 		if err != nil {
-			return c.JSON(http.StatusOK, []Account{})
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 
 		result := make([]Account, len(accounts))
@@ -67,6 +69,12 @@ func (h *DirectoryHandler) Get(c echo.Context) error {
 			}
 			if acc.CreatedAt.Valid {
 				result[i].CreatedAt = acc.CreatedAt.Time
+			}
+			if acc.AvatarRemoteUrl.Valid {
+				result[i].Avatar = acc.AvatarRemoteUrl.String
+			}
+			if acc.HeaderRemoteUrl != "" {
+				result[i].Header = acc.HeaderRemoteUrl
 			}
 		}
 		return c.JSON(http.StatusOK, result)
