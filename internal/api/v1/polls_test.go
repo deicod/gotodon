@@ -122,7 +122,7 @@ func TestPollsHandler_ExpiredPoll(t *testing.T) {
 		Options:   []string{"A", "B"},
 		Votes:     []int{0, 0},
 	}
-	h.polls[pollID] = poll
+	h.memPolls[pollID] = poll
 
 	// Try to vote
 	c, rec := mockPollContext(e, http.MethodPost, "/api/v1/polls/"+strconv.FormatInt(pollID, 10)+"/votes", `{"choices":[0]}`)
