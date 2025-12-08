@@ -351,6 +351,7 @@ func (h *ConversationsHandler) List(w http.ResponseWriter, r *http.Request) {
 		} else {
 			// If I am the author, try to find who I replied to or mentioned
 			// This is a simplification. Real implementation would query mentions.
+			_ = 0
 		}
 
 		conversations = append(conversations, Conversation{

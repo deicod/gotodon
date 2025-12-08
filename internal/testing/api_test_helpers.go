@@ -60,6 +60,7 @@ func (at *APITester) RunTestCase(tc APITestCase, handler http.Handler) {
 			// But looking at code, role is usually derived from DB.
 			// If needing to mock it, we might need middleware.ContextKeyRole if it existed.
 			// Assuming for now it's fine or handled via mocked queries in actual tests.
+			_ = tc.Role
 		}
 
 		req = req.WithContext(ctx)
@@ -83,6 +84,7 @@ func (at *APITester) RunTestCase(tc APITestCase, handler http.Handler) {
 			// If it's a ServeMux, we don't need to manually set path values!
 			// If it's a direct handler func, we might.
 			// Let's assume handler is a ServeMux for integration tests, or use SetPathValue if we can infer.
+			_ = idx
 		}
 
 		rec := httptest.NewRecorder()

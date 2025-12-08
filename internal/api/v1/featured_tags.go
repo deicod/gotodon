@@ -6,10 +6,11 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type FeaturedTagsHandler struct {
@@ -97,6 +98,7 @@ func (h *FeaturedTagsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		// Ignore duplicates
+		_ = err
 	}
 
 	res := FeaturedTag{

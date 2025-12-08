@@ -375,7 +375,7 @@ func (h *Handler) Authorize(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(html))
+	_, _ = w.Write([]byte(html))
 }
 
 // AuthorizePost handles POST /oauth/authorize
@@ -402,14 +402,14 @@ func (h *Handler) AuthorizePost(w http.ResponseWriter, r *http.Request) {
 	user, err := h.queries.GetUserByEmail(ctx, email)
 	if err != nil {
 		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte("Invalid credentials"))
+		_, _ = w.Write([]byte("Invalid credentials"))
 		return
 	}
 
 	// Verify password (simplified)
 	if user.EncryptedPassword != password {
 		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte("Invalid credentials"))
+		_, _ = w.Write([]byte("Invalid credentials"))
 		return
 	}
 
@@ -417,7 +417,7 @@ func (h *Handler) AuthorizePost(w http.ResponseWriter, r *http.Request) {
 	code, err := oauth.GenerateToken(32)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("Server error"))
+		_, _ = w.Write([]byte("Server error"))
 		return
 	}
 
@@ -426,7 +426,7 @@ func (h *Handler) AuthorizePost(w http.ResponseWriter, r *http.Request) {
 	accessToken, err := oauth.GenerateToken(32)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("Server error"))
+		_, _ = w.Write([]byte("Server error"))
 		return
 	}
 
@@ -439,7 +439,7 @@ func (h *Handler) AuthorizePost(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("Server error"))
+		_, _ = w.Write([]byte("Server error"))
 		return
 	}
 

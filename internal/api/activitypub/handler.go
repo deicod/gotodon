@@ -4,7 +4,6 @@ package activitypub
 import (
 	"fmt"
 	"net/http"
-	"strconv"
 
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
@@ -96,7 +95,7 @@ func (h *FederationHandler) renderActor(w http.ResponseWriter, account db.Accoun
 	}
 
 	if account.CreatedAt.Valid {
-		actor.Object.Published = account.CreatedAt.Time.Format("2006-01-02T15:04:05Z")
+		actor.Published = account.CreatedAt.Time.Format("2006-01-02T15:04:05Z")
 	}
 
 	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
@@ -237,6 +236,3 @@ func (h *FederationHandler) RegisterRoutes(mux *http.ServeMux) {
 }
 
 // Helper to format account ID
-func formatAccountID(id int64) string {
-	return strconv.FormatInt(id, 10)
-}

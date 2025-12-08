@@ -6,11 +6,12 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/deicod/gotodon/internal/api/middleware"
 	v1 "github.com/deicod/gotodon/internal/api/v1"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // SearchHandler handles search endpoints

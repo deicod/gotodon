@@ -329,7 +329,6 @@ func (h *StatusesHandler) dbStatusToAPI(ctx context.Context, dbStatus db.Status)
 		dbAcc, err := h.queries.GetAccountByID(ctx, dbStatus.AccountID)
 		if err == nil {
 			account = h.dbAccountToAPI(dbAcc)
-			account = h.dbAccountToAPI(dbAcc)
 		}
 	}
 
@@ -861,6 +860,7 @@ func (h *StatusesHandler) Bookmark(w http.ResponseWriter, r *http.Request) {
 		})
 		if err != nil {
 			// Ignore unique violation
+			_ = err
 		}
 
 		s := h.dbStatusToAPI(ctx, status)
@@ -897,7 +897,7 @@ func (h *StatusesHandler) Unbookmark(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		err = h.queries.DeleteBookmark(ctx, db.DeleteBookmarkParams{
+		_ = h.queries.DeleteBookmark(ctx, db.DeleteBookmarkParams{
 			AccountID: accountID,
 			StatusID:  id,
 		})
@@ -1085,7 +1085,7 @@ func (h *StatusesHandler) Pin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		_, err = h.queries.PinStatus(r.Context(), db.PinStatusParams{
+		_, _ = h.queries.PinStatus(r.Context(), db.PinStatusParams{
 			AccountID: accountID,
 			StatusID:  statusID,
 		})
@@ -1123,7 +1123,7 @@ func (h *StatusesHandler) Unpin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		err = h.queries.UnpinStatus(r.Context(), db.UnpinStatusParams{
+		_ = h.queries.UnpinStatus(r.Context(), db.UnpinStatusParams{
 			AccountID: accountID,
 			StatusID:  statusID,
 		})

@@ -70,7 +70,7 @@ func (h *MediaHandler) Create(w http.ResponseWriter, r *http.Request) {
 		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: File is required")
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Get optional description
 	description := r.FormValue("description")
@@ -205,7 +205,6 @@ func (h *MediaHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if req.Description != "" {
 		desc = pgtype.Text{String: req.Description, Valid: true}
 	} else {
-		desc = mediaRecord.Description // Keep existing if not changing? Or allow clearing?
 		// Mastodon allows clearing. But here simple update.
 		// Set valid=true to update to req.Description (even if empty)
 		desc = pgtype.Text{String: req.Description, Valid: true}

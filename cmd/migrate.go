@@ -72,7 +72,7 @@ func runMigrate(cmd *cobra.Command, args []string) {
 
 func runMigrateUp(cmd *cobra.Command, args []string) {
 	db := getDB()
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	goose.SetBaseFS(migrations.Migrations)
 
@@ -89,7 +89,7 @@ func runMigrateUp(cmd *cobra.Command, args []string) {
 
 func runMigrateDown(cmd *cobra.Command, args []string) {
 	db := getDB()
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	goose.SetBaseFS(migrations.Migrations)
 
@@ -106,7 +106,7 @@ func runMigrateDown(cmd *cobra.Command, args []string) {
 
 func runMigrateStatus(cmd *cobra.Command, args []string) {
 	db := getDB()
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	goose.SetBaseFS(migrations.Migrations)
 
@@ -121,7 +121,7 @@ func runMigrateStatus(cmd *cobra.Command, args []string) {
 
 func runMigrateReset(cmd *cobra.Command, args []string) {
 	db := getDB()
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	goose.SetBaseFS(migrations.Migrations)
 
@@ -142,7 +142,7 @@ func RunMigrationsOnStartup(ctx context.Context, databaseURL string) error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	goose.SetBaseFS(migrations.Migrations)
 

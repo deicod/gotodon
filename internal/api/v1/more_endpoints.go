@@ -84,6 +84,7 @@ func (h *FollowRequestsHandler) Authorize(w http.ResponseWriter, r *http.Request
 		})
 		if err != nil {
 			// Ignore if already exists
+			_ = err
 		}
 
 		// Delete request
@@ -225,8 +226,9 @@ func (h *DomainBlocksHandler) Create(w http.ResponseWriter, r *http.Request) {
 			AccountID: accountID,
 			Domain:    req.Domain,
 		})
+		// Ignore duplicates
 		if err != nil {
-			// Ignore error
+			_ = err
 		}
 		web.JSON(w, http.StatusOK, map[string]any{})
 		return

@@ -97,6 +97,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	})
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		logger.Warn("Failed to connect to Redis, streaming will be disabled", "error", err)
+		rdb = nil
 	} else {
 		logger.Info("Connected to Redis", "addr", cfg.Redis.Addr())
 	}
@@ -113,7 +114,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		} else {
 			go func() {
 				<-ctx.Done()
-				streamingHub.Stop()
+				_ = streamingHub.Stop()
 			}()
 		}
 	} else {
@@ -386,7 +387,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 </XRD>`, cfg.Instance.LocalDomain)
 		w.Header().Set("Content-Type", "application/xrd+xml; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(xml))
+		_, _ = w.Write([]byte(xml))
 	})
 
 	mux.HandleFunc("GET /.well-known/nodeinfo", func(w http.ResponseWriter, r *http.Request) {

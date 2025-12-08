@@ -4,7 +4,6 @@ package v1
 import (
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
@@ -90,33 +89,6 @@ func (h *SuggestionsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 	// In production: remove this suggestion for the user
 	web.JSON(w, http.StatusOK, map[string]any{})
-}
-
-func (h *SuggestionsHandler) generateSuggestions(limit int) []Suggestion {
-	suggestions := make([]Suggestion, 0)
-	now := time.Now()
-	discoverable := true
-
-	sources := []string{"staff", "past_interactions", "global"}
-
-	for i := 0; i < limit && i < 5; i++ {
-		suggestions = append(suggestions, Suggestion{
-			Source: sources[i%len(sources)],
-			Account: Account{
-				ID:           strconv.Itoa(100 + i),
-				Username:     "suggested_user_" + strconv.Itoa(i),
-				Acct:         "suggested_user_" + strconv.Itoa(i),
-				DisplayName:  "Suggested User " + strconv.Itoa(i),
-				Note:         "<p>A user you might want to follow</p>",
-				Discoverable: &discoverable,
-				CreatedAt:    now.Add(-time.Duration(i*30) * 24 * time.Hour),
-				Emojis:       []CustomEmoji{},
-				Fields:       []Field{},
-			},
-		})
-	}
-
-	return suggestions
 }
 
 // RegisterRoutes registers suggestion routes

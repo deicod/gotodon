@@ -17,6 +17,7 @@ func JSON(w http.ResponseWriter, status int, v interface{}) {
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		// Fallback logging or ignore if write failed
+		_ = err
 	}
 }
 

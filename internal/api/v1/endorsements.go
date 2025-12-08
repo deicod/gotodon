@@ -95,6 +95,7 @@ func (h *EndorsementsHandler) Pin(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		// Ignore duplicates
+		_ = err
 	}
 
 	targetAcc, err := h.queries.GetAccountByID(r.Context(), targetID)

@@ -87,7 +87,7 @@ func (h *CustomEmojisHandler) Create(w http.ResponseWriter, r *http.Request) {
 		web.JSONError(w, http.StatusUnprocessableEntity, "Image is required")
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Read file to bytes
 	fileData := make([]byte, header.Size)

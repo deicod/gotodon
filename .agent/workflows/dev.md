@@ -58,9 +58,9 @@ golangci-lint run ./...
 ```
 
 ## Database Migrations
-Migrations are in `db/migrations/`. Apply them manually:
+Migrate the DB using the CLI (uses goose):
 ```bash
-psql -d gotodon_development -f db/migrations/001_initial_schema.sql
+go run . migrate up
 ```
 
 ## Project Structure

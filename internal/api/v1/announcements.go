@@ -185,6 +185,7 @@ func (h *AnnouncementsHandler) AddReaction(w http.ResponseWriter, r *http.Reques
 		})
 		if err != nil {
 			// Ignore dup error? or just return OK
+			_ = err
 		}
 	}
 
