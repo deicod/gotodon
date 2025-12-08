@@ -2,22 +2,130 @@
 package v1
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 
 	"github.com/labstack/echo/v4"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/db"
 )
 
 // TimelinesHandler handles timeline endpoints
 type TimelinesHandler struct {
-	// TODO: Add database queries dependency
+	queries *db.Queries
 }
 
 // NewTimelinesHandler creates a new timelines handler
-func NewTimelinesHandler() *TimelinesHandler {
-	return &TimelinesHandler{}
+func NewTimelinesHandler(queries *db.Queries) *TimelinesHandler {
+	return &TimelinesHandler{queries: queries}
+}
+
+func (h *TimelinesHandler) useDB() bool {
+	return h.queries != nil
+}
+
+func (h *TimelinesHandler) dbStatusesToAPI(ctx context.Context, dbStatuses []db.Status) []Status {
+	statuses := make([]Status, len(dbStatuses))
+	for i, s := range dbStatuses {
+		statuses[i] = h.dbStatusToAPI(ctx, s)
+	}
+	return statuses
+}
+
+func (h *TimelinesHandler) dbStatusToAPI(ctx context.Context, dbStatus db.Status) Status {
+	visibility := visibilityToString[dbStatus.Visibility]
+	if visibility == "" {
+		visibility = "public"
+	}
+
+	var url *string
+	if dbStatus.Url.Valid {
+		url = &dbStatus.Url.String
+	}
+
+	var inReplyToID, inReplyToAccountID *string
+	if dbStatus.InReplyToID.Valid {
+		s := strconv.FormatInt(dbStatus.InReplyToID.Int64, 10)
+		inReplyToID = &s
+	}
+	if dbStatus.InReplyToAccountID.Valid {
+		s := strconv.FormatInt(dbStatus.InReplyToAccountID.Int64, 10)
+		inReplyToAccountID = &s
+	}
+
+	var language *string
+	if dbStatus.Language.Valid {
+		language = &dbStatus.Language.String
+	}
+
+	// Load stats
+	var repliesCount, reblogsCount, favouritesCount int64
+	if h.useDB() {
+		stats, err := h.queries.GetStatusStats(ctx, dbStatus.ID)
+		if err == nil {
+			repliesCount = stats.RepliesCount
+			reblogsCount = stats.ReblogsCount
+			favouritesCount = stats.FavouritesCount
+		}
+	}
+
+	// Load account
+	var account Account
+	if h.useDB() {
+		dbAcc, err := h.queries.GetAccountByID(ctx, dbStatus.AccountID)
+		if err == nil {
+			discoverable := dbAcc.Discoverable.Valid && dbAcc.Discoverable.Bool
+			account = Account{
+				ID:           strconv.FormatInt(dbAcc.ID, 10),
+				Username:     dbAcc.Username,
+				Acct:         dbAcc.Username,
+				DisplayName:  dbAcc.DisplayName,
+				Discoverable: &discoverable,
+				Emojis:       []any{},
+				Fields:       []Field{},
+			}
+			if dbAcc.CreatedAt.Valid {
+				account.CreatedAt = dbAcc.CreatedAt.Time
+			}
+		}
+	}
+
+	uri := ""
+	if dbStatus.Uri.Valid {
+		uri = dbStatus.Uri.String
+	}
+
+	status := Status{
+		ID:                 strconv.FormatInt(dbStatus.ID, 10),
+		InReplyToID:        inReplyToID,
+		InReplyToAccountID: inReplyToAccountID,
+		Sensitive:          dbStatus.Sensitive,
+		SpoilerText:        dbStatus.SpoilerText,
+		Visibility:         visibility,
+		Language:           language,
+		URI:                uri,
+		URL:                url,
+		RepliesCount:       repliesCount,
+		ReblogsCount:       reblogsCount,
+		FavouritesCount:    favouritesCount,
+		Content:            "<p>" + dbStatus.Text + "</p>",
+		Account:            account,
+		MediaAttachments:   []MediaAttach{},
+		Mentions:           []Mention{},
+		Tags:               []Tag{},
+		Emojis:             []any{},
+	}
+
+	if dbStatus.CreatedAt.Valid {
+		status.CreatedAt = dbStatus.CreatedAt.Time
+	}
+	if dbStatus.EditedAt.Valid {
+		status.EditedAt = &dbStatus.EditedAt.Time
+	}
+
+	return status
 }
 
 // Home handles GET /api/v1/timelines/home
@@ -29,46 +137,44 @@ func (h *TimelinesHandler) Home(c echo.Context) error {
 		})
 	}
 
-	// Parse pagination params
 	limit := parseLimit(c.QueryParam("limit"), 20, 40)
-	maxID := c.QueryParam("max_id")
-	sinceID := c.QueryParam("since_id")
-	minID := c.QueryParam("min_id")
+	ctx := context.Background()
 
-	// TODO: Fetch home timeline from database
-	_ = accountID
-	_ = maxID
-	_ = sinceID
-	_ = minID
+	if h.useDB() {
+		dbStatuses, err := h.queries.GetHomeTimeline(ctx, db.GetHomeTimelineParams{
+			AccountID: accountID,
+			Limit:     int32(limit),
+			Offset:    0,
+		})
+		if err != nil {
+			return c.JSON(http.StatusOK, []Status{})
+		}
+		return c.JSON(http.StatusOK, h.dbStatusesToAPI(ctx, dbStatuses))
+	}
 
-	// Mock empty timeline
-	statuses := make([]Status, 0, limit)
-
-	return c.JSON(http.StatusOK, statuses)
+	return c.JSON(http.StatusOK, []Status{})
 }
 
 // Public handles GET /api/v1/timelines/public
 func (h *TimelinesHandler) Public(c echo.Context) error {
-	// Parse params
 	limit := parseLimit(c.QueryParam("limit"), 20, 40)
 	local := c.QueryParam("local") == "true"
-	remote := c.QueryParam("remote") == "true"
-	onlyMedia := c.QueryParam("only_media") == "true"
-	maxID := c.QueryParam("max_id")
-	sinceID := c.QueryParam("since_id")
-	minID := c.QueryParam("min_id")
 
-	// TODO: Fetch public timeline from database
-	_ = local
-	_ = remote
-	_ = onlyMedia
-	_ = maxID
-	_ = sinceID
-	_ = minID
+	ctx := context.Background()
 
-	statuses := make([]Status, 0, limit)
+	if h.useDB() {
+		dbStatuses, err := h.queries.GetPublicTimeline(ctx, db.GetPublicTimelineParams{
+			Limit:  int32(limit),
+			Offset: 0,
+			Local:  local,
+		})
+		if err != nil {
+			return c.JSON(http.StatusOK, []Status{})
+		}
+		return c.JSON(http.StatusOK, h.dbStatusesToAPI(ctx, dbStatuses))
+	}
 
-	return c.JSON(http.StatusOK, statuses)
+	return c.JSON(http.StatusOK, []Status{})
 }
 
 // Hashtag handles GET /api/v1/timelines/tag/:hashtag
@@ -81,29 +187,17 @@ func (h *TimelinesHandler) Hashtag(c echo.Context) error {
 	}
 
 	limit := parseLimit(c.QueryParam("limit"), 20, 40)
-	local := c.QueryParam("local") == "true"
-	onlyMedia := c.QueryParam("only_media") == "true"
-	maxID := c.QueryParam("max_id")
-	sinceID := c.QueryParam("since_id")
-	minID := c.QueryParam("min_id")
 
-	// TODO: Fetch hashtag timeline from database
-	_ = hashtag
-	_ = local
-	_ = onlyMedia
-	_ = maxID
-	_ = sinceID
-	_ = minID
+	// Hashtag timeline requires a dedicated query not yet implemented
+	_ = limit
 
-	statuses := make([]Status, 0, limit)
-
-	return c.JSON(http.StatusOK, statuses)
+	return c.JSON(http.StatusOK, []Status{})
 }
 
 // List handles GET /api/v1/timelines/list/:list_id
 func (h *TimelinesHandler) List(c echo.Context) error {
-	listID := c.Param("list_id")
-	if listID == "" {
+	listIDStr := c.Param("list_id")
+	if listIDStr == "" {
 		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
 			"error": "Record not found",
 		})
@@ -116,14 +210,31 @@ func (h *TimelinesHandler) List(c echo.Context) error {
 		})
 	}
 
-	// TODO: Verify list ownership and fetch from database
-	_ = accountID
-	_ = listID
+	listID, err := strconv.ParseInt(listIDStr, 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+			"error": "Record not found",
+		})
+	}
 
-	limit := parseLimit(c.QueryParam("limit"), 20, 40)
-	statuses := make([]Status, 0, limit)
+	ctx := context.Background()
 
-	return c.JSON(http.StatusOK, statuses)
+	if h.useDB() {
+		// Verify list ownership
+		_, err := h.queries.GetList(ctx, db.GetListParams{
+			ID:        listID,
+			AccountID: accountID,
+		})
+		if err != nil {
+			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+				"error": "Record not found",
+			})
+		}
+
+		// List timeline requires a dedicated query not yet implemented
+	}
+
+	return c.JSON(http.StatusOK, []Status{})
 }
 
 // parseLimit parses a limit query param with defaults and max
@@ -146,5 +257,4 @@ func (h *TimelinesHandler) RegisterRoutes(g *echo.Group) {
 	timelines := g.Group("/timelines")
 	timelines.GET("/public", h.Public)
 	timelines.GET("/tag/:hashtag", h.Hashtag)
-	// Home and list require auth, registered separately
 }

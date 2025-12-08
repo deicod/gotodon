@@ -110,6 +110,15 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	v2Group := api.Group("/v2")
 
 	// Register v1 handlers
+	accountsHandler := v1.NewAccountsHandler(queries)
+	accountsHandler.RegisterRoutes(v1Group)
+
+	statusesHandler := v1.NewStatusesHandler(queries)
+	statusesHandler.RegisterRoutes(v1Group)
+
+	timelinesHandler := v1.NewTimelinesHandler(queries)
+	timelinesHandler.RegisterRoutes(v1Group)
+
 	listsHandler := v1.NewListsHandler(queries)
 	listsHandler.RegisterRoutes(v1Group)
 

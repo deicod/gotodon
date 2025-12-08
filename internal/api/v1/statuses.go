@@ -2,24 +2,53 @@
 package v1
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/labstack/echo/v4"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/pkg/oauth"
 )
 
+// Visibility constants
+const (
+	VisibilityPublic   = 0
+	VisibilityUnlisted = 1
+	VisibilityPrivate  = 2
+	VisibilityDirect   = 3
+)
+
+var visibilityToString = map[int32]string{
+	VisibilityPublic:   "public",
+	VisibilityUnlisted: "unlisted",
+	VisibilityPrivate:  "private",
+	VisibilityDirect:   "direct",
+}
+
+var stringToVisibility = map[string]int32{
+	"public":   VisibilityPublic,
+	"unlisted": VisibilityUnlisted,
+	"private":  VisibilityPrivate,
+	"direct":   VisibilityDirect,
+}
+
 // StatusesHandler handles status-related endpoints
 type StatusesHandler struct {
-	// TODO: Add database queries dependency
+	queries *db.Queries
 }
 
 // NewStatusesHandler creates a new statuses handler
-func NewStatusesHandler() *StatusesHandler {
-	return &StatusesHandler{}
+func NewStatusesHandler(queries *db.Queries) *StatusesHandler {
+	return &StatusesHandler{queries: queries}
+}
+
+func (h *StatusesHandler) useDB() bool {
+	return h.queries != nil
 }
 
 // Status represents a Mastodon status in API responses
@@ -65,7 +94,7 @@ type StatusApp struct {
 // MediaAttach represents a media attachment
 type MediaAttach struct {
 	ID          string  `json:"id"`
-	Type        string  `json:"type"` // image, gifv, video, audio, unknown
+	Type        string  `json:"type"`
 	URL         string  `json:"url"`
 	PreviewURL  string  `json:"preview_url"`
 	RemoteURL   *string `json:"remote_url"`
@@ -92,7 +121,7 @@ type PreviewCard struct {
 	URL          string  `json:"url"`
 	Title        string  `json:"title"`
 	Description  string  `json:"description"`
-	Type         string  `json:"type"` // link, photo, video, rich
+	Type         string  `json:"type"`
 	AuthorName   string  `json:"author_name"`
 	AuthorURL    string  `json:"author_url"`
 	ProviderName string  `json:"provider_name"`
@@ -141,7 +170,7 @@ type CreateStatusRequest struct {
 	MediaIDs    []string `json:"media_ids" form:"media_ids[]"`
 	Sensitive   bool     `json:"sensitive" form:"sensitive"`
 	SpoilerText string   `json:"spoiler_text" form:"spoiler_text"`
-	Visibility  string   `json:"visibility" form:"visibility"` // public, unlisted, private, direct
+	Visibility  string   `json:"visibility" form:"visibility"`
 	Language    *string  `json:"language" form:"language"`
 	Poll        *PollReq `json:"poll" form:"poll"`
 }
@@ -154,6 +183,105 @@ type PollReq struct {
 	HideTotals bool     `json:"hide_totals" form:"hide_totals"`
 }
 
+func (h *StatusesHandler) dbStatusToAPI(ctx context.Context, dbStatus db.Status) Status {
+	createdAt := time.Now()
+	if dbStatus.CreatedAt.Valid {
+		createdAt = dbStatus.CreatedAt.Time
+	}
+
+	visibility := visibilityToString[dbStatus.Visibility]
+	if visibility == "" {
+		visibility = "public"
+	}
+
+	var url *string
+	if dbStatus.Url.Valid {
+		url = &dbStatus.Url.String
+	}
+
+	var inReplyToID, inReplyToAccountID *string
+	if dbStatus.InReplyToID.Valid {
+		s := strconv.FormatInt(dbStatus.InReplyToID.Int64, 10)
+		inReplyToID = &s
+	}
+	if dbStatus.InReplyToAccountID.Valid {
+		s := strconv.FormatInt(dbStatus.InReplyToAccountID.Int64, 10)
+		inReplyToAccountID = &s
+	}
+
+	var language *string
+	if dbStatus.Language.Valid {
+		language = &dbStatus.Language.String
+	}
+
+	var editedAt *time.Time
+	if dbStatus.EditedAt.Valid {
+		editedAt = &dbStatus.EditedAt.Time
+	}
+
+	// Load stats
+	var repliesCount, reblogsCount, favouritesCount int64
+	if h.useDB() {
+		stats, err := h.queries.GetStatusStats(ctx, dbStatus.ID)
+		if err == nil {
+			repliesCount = stats.RepliesCount
+			reblogsCount = stats.ReblogsCount
+			favouritesCount = stats.FavouritesCount
+		}
+	}
+
+	// Load account
+	var account Account
+	if h.useDB() {
+		dbAcc, err := h.queries.GetAccountByID(ctx, dbStatus.AccountID)
+		if err == nil {
+			discoverable := dbAcc.Discoverable.Valid && dbAcc.Discoverable.Bool
+			accCreatedAt := time.Now().Add(-24 * time.Hour)
+			if dbAcc.CreatedAt.Valid {
+				accCreatedAt = dbAcc.CreatedAt.Time
+			}
+			account = Account{
+				ID:           strconv.FormatInt(dbAcc.ID, 10),
+				Username:     dbAcc.Username,
+				Acct:         dbAcc.Username,
+				DisplayName:  dbAcc.DisplayName,
+				Discoverable: &discoverable,
+				CreatedAt:    accCreatedAt,
+				Emojis:       []any{},
+				Fields:       []Field{},
+			}
+		}
+	}
+
+	uri := ""
+	if dbStatus.Uri.Valid {
+		uri = dbStatus.Uri.String
+	}
+
+	return Status{
+		ID:                 strconv.FormatInt(dbStatus.ID, 10),
+		CreatedAt:          createdAt,
+		InReplyToID:        inReplyToID,
+		InReplyToAccountID: inReplyToAccountID,
+		Sensitive:          dbStatus.Sensitive,
+		SpoilerText:        dbStatus.SpoilerText,
+		Visibility:         visibility,
+		Language:           language,
+		URI:                uri,
+		URL:                url,
+		RepliesCount:       repliesCount,
+		ReblogsCount:       reblogsCount,
+		FavouritesCount:    favouritesCount,
+		EditedAt:           editedAt,
+		Content:            "<p>" + dbStatus.Text + "</p>",
+		Account:            account,
+		MediaAttachments:   []MediaAttach{},
+		Mentions:           []Mention{},
+		Tags:               []Tag{},
+		Emojis:             []any{},
+	}
+}
+
 // Create handles POST /api/v1/statuses
 func (h *StatusesHandler) Create(c echo.Context) error {
 	accountID, ok := middleware.GetAccountID(c)
@@ -163,7 +291,6 @@ func (h *StatusesHandler) Create(c echo.Context) error {
 		})
 	}
 
-	// Check scope
 	scopes := middleware.GetScopes(c)
 	if !oauth.HasScope(scopes, "write:statuses") {
 		return echo.NewHTTPError(http.StatusForbidden, map[string]string{
@@ -178,49 +305,90 @@ func (h *StatusesHandler) Create(c echo.Context) error {
 		})
 	}
 
-	// Validate
 	if req.Status == "" && len(req.MediaIDs) == 0 && req.Poll == nil {
 		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
 			"error": "Validation failed: Text can't be blank without media or poll",
 		})
 	}
 
-	// Default visibility
 	if req.Visibility == "" {
 		req.Visibility = "public"
 	}
 
-	// Validate visibility
-	validVisibilities := map[string]bool{"public": true, "unlisted": true, "private": true, "direct": true}
-	if !validVisibilities[req.Visibility] {
+	visibility, validVis := stringToVisibility[req.Visibility]
+	if !validVis {
 		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
 			"error": "Validation failed: Visibility is not included in the list",
 		})
 	}
 
-	// TODO: Create status in database
-	_ = accountID
+	ctx := context.Background()
 
-	// Mock response
+	if h.useDB() {
+		var inReplyToID, inReplyToAccountID pgtype.Int8
+		if req.InReplyToID != nil {
+			id, err := strconv.ParseInt(*req.InReplyToID, 10, 64)
+			if err == nil {
+				inReplyToID = pgtype.Int8{Int64: id, Valid: true}
+				// Get parent status to set reply account
+				parent, err := h.queries.GetStatusByID(ctx, id)
+				if err == nil {
+					inReplyToAccountID = pgtype.Int8{Int64: parent.AccountID, Valid: true}
+				}
+			}
+		}
+
+		var lang pgtype.Text
+		if req.Language != nil {
+			lang = pgtype.Text{String: *req.Language, Valid: true}
+		}
+
+		dbStatus, err := h.queries.CreateStatus(ctx, db.CreateStatusParams{
+			Text:               req.Status,
+			AccountID:          accountID,
+			InReplyToID:        inReplyToID,
+			InReplyToAccountID: inReplyToAccountID,
+			Sensitive:          req.Sensitive,
+			SpoilerText:        req.SpoilerText,
+			Visibility:         visibility,
+			Language:           lang,
+			Local:              pgtype.Bool{Bool: true, Valid: true},
+			Reply:              inReplyToID.Valid,
+		})
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, map[string]string{
+				"error": "Failed to create status",
+			})
+		}
+
+		// Create stats
+		_, _ = h.queries.CreateStatusStats(ctx, dbStatus.ID)
+
+		// Increment reply count on parent
+		if inReplyToID.Valid {
+			_ = h.queries.IncrementStatusReplies(ctx, inReplyToID.Int64)
+		}
+
+		return c.JSON(http.StatusOK, h.dbStatusToAPI(ctx, dbStatus))
+	}
+
+	// Mock fallback
 	now := time.Now()
 	statusID := strconv.FormatInt(now.UnixNano(), 10)
 	discoverable := true
 
 	return c.JSON(http.StatusOK, Status{
-		ID:              statusID,
-		CreatedAt:       now,
-		Sensitive:       req.Sensitive,
-		SpoilerText:     req.SpoilerText,
-		Visibility:      req.Visibility,
-		Language:        req.Language,
-		URI:             "https://example.com/users/user/statuses/" + statusID,
-		URL:             ptrStr("https://example.com/@user/" + statusID),
-		RepliesCount:    0,
-		ReblogsCount:    0,
-		FavouritesCount: 0,
-		Content:         "<p>" + req.Status + "</p>",
+		ID:          statusID,
+		CreatedAt:   now,
+		Sensitive:   req.Sensitive,
+		SpoilerText: req.SpoilerText,
+		Visibility:  req.Visibility,
+		Language:    req.Language,
+		URI:         "https://example.com/users/user/statuses/" + statusID,
+		URL:         ptrStr("https://example.com/@user/" + statusID),
+		Content:     "<p>" + req.Status + "</p>",
 		Account: Account{
-			ID:           "1",
+			ID:           strconv.FormatInt(accountID, 10),
 			Username:     "user",
 			Acct:         "user",
 			DisplayName:  "Test User",
@@ -238,27 +406,42 @@ func (h *StatusesHandler) Create(c echo.Context) error {
 
 // Get handles GET /api/v1/statuses/:id
 func (h *StatusesHandler) Get(c echo.Context) error {
-	id := c.Param("id")
-	if id == "" {
+	idStr := c.Param("id")
+	if idStr == "" {
 		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
 			"error": "Record not found",
 		})
 	}
 
-	// TODO: Fetch from database
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+			"error": "Record not found",
+		})
+	}
+
+	ctx := context.Background()
+
+	if h.useDB() {
+		dbStatus, err := h.queries.GetStatusByID(ctx, id)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+				"error": "Record not found",
+			})
+		}
+		return c.JSON(http.StatusOK, h.dbStatusToAPI(ctx, dbStatus))
+	}
+
+	// Mock fallback
 	now := time.Now()
 	discoverable := true
-
 	return c.JSON(http.StatusOK, Status{
-		ID:              id,
-		CreatedAt:       now.Add(-time.Hour),
-		Visibility:      "public",
-		URI:             "https://example.com/users/user/statuses/" + id,
-		URL:             ptrStr("https://example.com/@user/" + id),
-		RepliesCount:    0,
-		ReblogsCount:    0,
-		FavouritesCount: 0,
-		Content:         "<p>Hello, world!</p>",
+		ID:         idStr,
+		CreatedAt:  now.Add(-time.Hour),
+		Visibility: "public",
+		URI:        "https://example.com/users/user/statuses/" + idStr,
+		URL:        ptrStr("https://example.com/@user/" + idStr),
+		Content:    "<p>Hello, world!</p>",
 		Account: Account{
 			ID:           "1",
 			Username:     "user",
@@ -278,7 +461,7 @@ func (h *StatusesHandler) Get(c echo.Context) error {
 
 // Delete handles DELETE /api/v1/statuses/:id
 func (h *StatusesHandler) Delete(c echo.Context) error {
-	id := c.Param("id")
+	idStr := c.Param("id")
 	accountID, ok := middleware.GetAccountID(c)
 	if !ok {
 		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
@@ -286,13 +469,42 @@ func (h *StatusesHandler) Delete(c echo.Context) error {
 		})
 	}
 
-	// TODO: Verify ownership and delete
-	_ = accountID
-	_ = id
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+			"error": "Record not found",
+		})
+	}
 
-	// Return deleted status with text/media for undo
+	ctx := context.Background()
+
+	if h.useDB() {
+		dbStatus, err := h.queries.GetStatusByID(ctx, id)
+		if err != nil || dbStatus.AccountID != accountID {
+			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+				"error": "Record not found",
+			})
+		}
+
+		_ = h.queries.DeleteStatus(ctx, id)
+
+		// Decrement parent reply count
+		if dbStatus.InReplyToID.Valid {
+			_ = h.queries.DecrementStatusReplies(ctx, dbStatus.InReplyToID.Int64)
+		}
+
+		return c.JSON(http.StatusOK, map[string]any{
+			"id":                idStr,
+			"text":              dbStatus.Text,
+			"spoiler_text":      dbStatus.SpoilerText,
+			"visibility":        visibilityToString[dbStatus.Visibility],
+			"media_attachments": []any{},
+			"poll":              nil,
+		})
+	}
+
 	return c.JSON(http.StatusOK, map[string]any{
-		"id":                id,
+		"id":                idStr,
 		"text":              "Hello, world!",
 		"spoiler_text":      "",
 		"visibility":        "public",
@@ -303,46 +515,87 @@ func (h *StatusesHandler) Delete(c echo.Context) error {
 
 // Favourite handles POST /api/v1/statuses/:id/favourite
 func (h *StatusesHandler) Favourite(c echo.Context) error {
-	id := c.Param("id")
-	accountID, ok := middleware.GetAccountID(c)
+	idStr := c.Param("id")
+	_, ok := middleware.GetAccountID(c)
 	if !ok {
 		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
 			"error": "The access token is invalid",
 		})
 	}
 
-	// TODO: Add favourite in database
-	_ = accountID
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+			"error": "Record not found",
+		})
+	}
 
-	// Return status with favourited=true
-	status, _ := h.getStatusByID(id)
+	ctx := context.Background()
+
+	if h.useDB() {
+		dbStatus, err := h.queries.GetStatusByID(ctx, id)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+				"error": "Record not found",
+			})
+		}
+
+		_ = h.queries.IncrementStatusFavourites(ctx, id)
+
+		status := h.dbStatusToAPI(ctx, dbStatus)
+		status.Favourited = true
+		status.FavouritesCount++
+		return c.JSON(http.StatusOK, status)
+	}
+
+	status, _ := h.getStatusByID(idStr)
 	status.Favourited = true
 	status.FavouritesCount++
-
 	return c.JSON(http.StatusOK, status)
 }
 
 // Unfavourite handles POST /api/v1/statuses/:id/unfavourite
 func (h *StatusesHandler) Unfavourite(c echo.Context) error {
-	id := c.Param("id")
-	accountID, ok := middleware.GetAccountID(c)
+	idStr := c.Param("id")
+	_, ok := middleware.GetAccountID(c)
 	if !ok {
 		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
 			"error": "The access token is invalid",
 		})
 	}
 
-	_ = accountID
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+			"error": "Record not found",
+		})
+	}
 
-	status, _ := h.getStatusByID(id)
+	ctx := context.Background()
+
+	if h.useDB() {
+		dbStatus, err := h.queries.GetStatusByID(ctx, id)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+				"error": "Record not found",
+			})
+		}
+
+		_ = h.queries.DecrementStatusFavourites(ctx, id)
+
+		status := h.dbStatusToAPI(ctx, dbStatus)
+		status.Favourited = false
+		return c.JSON(http.StatusOK, status)
+	}
+
+	status, _ := h.getStatusByID(idStr)
 	status.Favourited = false
-
 	return c.JSON(http.StatusOK, status)
 }
 
 // Reblog handles POST /api/v1/statuses/:id/reblog
 func (h *StatusesHandler) Reblog(c echo.Context) error {
-	id := c.Param("id")
+	idStr := c.Param("id")
 	accountID, ok := middleware.GetAccountID(c)
 	if !ok {
 		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
@@ -350,11 +603,50 @@ func (h *StatusesHandler) Reblog(c echo.Context) error {
 		})
 	}
 
-	// TODO: Create reblog in database
-	_ = accountID
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+			"error": "Record not found",
+		})
+	}
 
-	// Return the reblog status (wrapper)
-	originalStatus, _ := h.getStatusByID(id)
+	ctx := context.Background()
+
+	if h.useDB() {
+		originalStatus, err := h.queries.GetStatusByID(ctx, id)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+				"error": "Record not found",
+			})
+		}
+
+		// Create reblog status
+		reblogStatus, err := h.queries.CreateStatus(ctx, db.CreateStatusParams{
+			AccountID:  accountID,
+			ReblogOfID: pgtype.Int8{Int64: id, Valid: true},
+			Visibility: originalStatus.Visibility,
+			Local:      pgtype.Bool{Bool: true, Valid: true},
+		})
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, map[string]string{
+				"error": "Failed to create reblog",
+			})
+		}
+
+		_ = h.queries.IncrementStatusReblogs(ctx, id)
+
+		original := h.dbStatusToAPI(ctx, originalStatus)
+		original.ReblogsCount++
+
+		reblog := h.dbStatusToAPI(ctx, reblogStatus)
+		reblog.Reblog = &original
+		reblog.Reblogged = true
+
+		return c.JSON(http.StatusOK, reblog)
+	}
+
+	// Mock fallback
+	originalStatus, _ := h.getStatusByID(idStr)
 	originalStatus.ReblogsCount++
 
 	now := time.Now()
@@ -362,17 +654,14 @@ func (h *StatusesHandler) Reblog(c echo.Context) error {
 	discoverable := true
 
 	return c.JSON(http.StatusOK, Status{
-		ID:         reblogID,
-		CreatedAt:  now,
-		Visibility: "public",
-		URI:        "https://example.com/users/user/statuses/" + reblogID,
-		Reblog:     &originalStatus,
-		Reblogged:  true,
+		ID:        reblogID,
+		CreatedAt: now,
+		Reblog:    &originalStatus,
+		Reblogged: true,
 		Account: Account{
-			ID:           "1",
+			ID:           strconv.FormatInt(accountID, 10),
 			Username:     "user",
 			Acct:         "user",
-			DisplayName:  "Test User",
 			Discoverable: &discoverable,
 			CreatedAt:    now.Add(-24 * time.Hour),
 			Emojis:       []any{},
@@ -387,90 +676,136 @@ func (h *StatusesHandler) Reblog(c echo.Context) error {
 
 // Unreblog handles POST /api/v1/statuses/:id/unreblog
 func (h *StatusesHandler) Unreblog(c echo.Context) error {
-	id := c.Param("id")
-	accountID, ok := middleware.GetAccountID(c)
+	idStr := c.Param("id")
+	_, ok := middleware.GetAccountID(c)
 	if !ok {
 		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
 			"error": "The access token is invalid",
 		})
 	}
 
-	_ = accountID
-
-	// Return original status with reblogged=false
-	status, _ := h.getStatusByID(id)
-	status.Reblogged = false
-
-	return c.JSON(http.StatusOK, status)
-}
-
-// Bookmark handles POST /api/v1/statuses/:id/bookmark
-func (h *StatusesHandler) Bookmark(c echo.Context) error {
-	id := c.Param("id")
-	accountID, ok := middleware.GetAccountID(c)
-	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
-	}
-
-	_ = accountID
-
-	status, _ := h.getStatusByID(id)
-	status.Bookmarked = true
-
-	return c.JSON(http.StatusOK, status)
-}
-
-// Unbookmark handles POST /api/v1/statuses/:id/unbookmark
-func (h *StatusesHandler) Unbookmark(c echo.Context) error {
-	id := c.Param("id")
-	accountID, ok := middleware.GetAccountID(c)
-	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
-	}
-
-	_ = accountID
-
-	status, _ := h.getStatusByID(id)
-	status.Bookmarked = false
-
-	return c.JSON(http.StatusOK, status)
-}
-
-// Context handles GET /api/v1/statuses/:id/context
-func (h *StatusesHandler) Context(c echo.Context) error {
-	id := c.Param("id")
-	if id == "" {
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
 		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
 			"error": "Record not found",
 		})
 	}
 
-	// TODO: Fetch ancestors and descendants from database
+	ctx := context.Background()
+
+	if h.useDB() {
+		dbStatus, err := h.queries.GetStatusByID(ctx, id)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+				"error": "Record not found",
+			})
+		}
+
+		_ = h.queries.DecrementStatusReblogs(ctx, id)
+
+		status := h.dbStatusToAPI(ctx, dbStatus)
+		status.Reblogged = false
+		return c.JSON(http.StatusOK, status)
+	}
+
+	status, _ := h.getStatusByID(idStr)
+	status.Reblogged = false
+	return c.JSON(http.StatusOK, status)
+}
+
+// Bookmark handles POST /api/v1/statuses/:id/bookmark
+func (h *StatusesHandler) Bookmark(c echo.Context) error {
+	idStr := c.Param("id")
+	_, ok := middleware.GetAccountID(c)
+	if !ok {
+		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
+			"error": "The access token is invalid",
+		})
+	}
+
+	status, _ := h.getStatusByID(idStr)
+	status.Bookmarked = true
+	return c.JSON(http.StatusOK, status)
+}
+
+// Unbookmark handles POST /api/v1/statuses/:id/unbookmark
+func (h *StatusesHandler) Unbookmark(c echo.Context) error {
+	idStr := c.Param("id")
+	_, ok := middleware.GetAccountID(c)
+	if !ok {
+		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
+			"error": "The access token is invalid",
+		})
+	}
+
+	status, _ := h.getStatusByID(idStr)
+	status.Bookmarked = false
+	return c.JSON(http.StatusOK, status)
+}
+
+// Context handles GET /api/v1/statuses/:id/context
+func (h *StatusesHandler) Context(c echo.Context) error {
+	idStr := c.Param("id")
+	if idStr == "" {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+			"error": "Record not found",
+		})
+	}
+
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+			"error": "Record not found",
+		})
+	}
+
+	ctx := context.Background()
+
+	if h.useDB() {
+		// Get ancestors
+		ancestors, err := h.queries.GetStatusAncestors(ctx, id)
+		if err != nil {
+			ancestors = []db.Status{}
+		}
+		ancestorStatuses := make([]Status, len(ancestors))
+		for i, s := range ancestors {
+			ancestorStatuses[i] = h.dbStatusToAPI(ctx, s)
+		}
+
+		// Get descendants
+		descendants, err := h.queries.GetStatusDescendants(ctx, pgtype.Int8{Int64: id, Valid: true})
+		if err != nil {
+			descendants = []db.Status{}
+		}
+		descendantStatuses := make([]Status, len(descendants))
+		for i, s := range descendants {
+			descendantStatuses[i] = h.dbStatusToAPI(ctx, s)
+		}
+
+		return c.JSON(http.StatusOK, map[string][]Status{
+			"ancestors":   ancestorStatuses,
+			"descendants": descendantStatuses,
+		})
+	}
+
 	return c.JSON(http.StatusOK, map[string][]Status{
 		"ancestors":   {},
 		"descendants": {},
 	})
 }
 
-// getStatusByID is a helper to get a status (mock for now)
+// getStatusByID is a helper for mock fallback
 func (h *StatusesHandler) getStatusByID(id string) (Status, error) {
 	now := time.Now()
 	discoverable := true
 
 	return Status{
-		ID:              id,
-		CreatedAt:       now.Add(-time.Hour),
-		Visibility:      "public",
-		URI:             "https://example.com/users/user/statuses/" + id,
-		URL:             ptrStr("https://example.com/@user/" + id),
-		RepliesCount:    0,
-		ReblogsCount:    0,
-		FavouritesCount: 0,
-		Content:         "<p>Hello, world!</p>",
+		ID:         id,
+		CreatedAt:  now.Add(-time.Hour),
+		Visibility: "public",
+		URI:        "https://example.com/users/user/statuses/" + id,
+		URL:        ptrStr("https://example.com/@user/" + id),
+		Content:    "<p>Hello, world!</p>",
 		Account: Account{
 			ID:           "1",
 			Username:     "user",
@@ -496,5 +831,4 @@ func ptrStr(s string) *string {
 func (h *StatusesHandler) RegisterRoutes(g *echo.Group) {
 	g.GET("/statuses/:id", h.Get)
 	g.GET("/statuses/:id/context", h.Context)
-	// Authenticated routes are registered separately with middleware
 }
