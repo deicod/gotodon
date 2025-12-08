@@ -25,6 +25,12 @@ go build ./...
 go test ./... -v
 ```
 
+### Vet
+// turbo
+```bash
+go vet ./...
+```
+
 ### Lint
 // turbo
 ```bash
@@ -46,6 +52,7 @@ Run all checks:
 // turbo-all
 ```bash
 go build ./...
+go vet ./...
 go test ./... -v
 golangci-lint run ./...
 ```
