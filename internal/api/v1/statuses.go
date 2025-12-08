@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -153,6 +154,92 @@ type Poll struct {
 	Emojis      []any        `json:"emojis"`
 }
 
+// processMentions parses mentions from status text and creates notifications
+func (h *StatusesHandler) processMentions(ctx context.Context, statusID int64, accountID int64, text string) ([]Mention, error) {
+	// Simple mention regex: @username or @username@domain
+	// Note: This is a simplified regex.
+	re := regexp.MustCompile(`@([a-zA-Z0-9_]+)(?:@([a-zA-Z0-9_.-]+))?`)
+	matches := re.FindAllStringSubmatch(text, -1)
+
+	mentionsMap := make(map[string]bool)
+	var mentions []Mention
+
+	for _, match := range matches {
+		username := match[1]
+		// domain := match[2] // Ignored for now, assuming local or handled by GetAccountByUsername if uniquely identifiable
+
+		if mentionsMap[username] {
+			continue
+		}
+		mentionsMap[username] = true
+
+		// Find account
+		// TODO: handle domain resolution if present
+		mentionedAcc, err := h.queries.GetAccountByUsername(ctx, username)
+		if err != nil {
+			continue // Account not found, skip
+		}
+
+		// Don't mention yourself (unless we want to support self-mention, usually avoided in notifications)
+		if mentionedAcc.ID == accountID {
+			continue
+		}
+
+		// Create Mention record
+		_, err = h.queries.CreateMention(ctx, db.CreateMentionParams{
+			StatusID:  statusID,
+			AccountID: mentionedAcc.ID,
+			Silent:    false, // TODO: check if user is muted/blocks
+		})
+		if err != nil {
+			// Log error but continue
+			continue
+		}
+
+		// Create Notification
+		notif, err := h.queries.CreateNotification(ctx, db.CreateNotificationParams{
+			AccountID:     mentionedAcc.ID,
+			FromAccountID: accountID,
+			ActivityType:  "Status",
+			ActivityID:    statusID,
+			Type:          pgtype.Text{String: "mention", Valid: true},
+		})
+
+		if err == nil && h.publisher != nil {
+			// Publish notification event
+			// We need to construct the API Notification object to publish
+			apiNotif := Notification{
+				ID:        strconv.FormatInt(notif.ID, 10),
+				Type:      "mention",
+				CreatedAt: notif.CreatedAt.Time,
+				Account:   h.dbAccountToAPI(mentionedAcc), // The SENDER (from_account_id) ? No, the API notification 'account' field is the SENDER.
+				// Wait, dbAccountToAPI takes db.Account.
+				// For a mention notification, the 'account' field in the payload is the one who mentioned you (FromAccountID).
+			}
+
+			// Get sender account (current user)
+			sender, err := h.queries.GetAccountByID(ctx, accountID)
+			if err == nil {
+				apiNotif.Account = h.dbAccountToAPI(sender)
+				// Status should also be included in mention notification
+				status, err := h.queries.GetStatusByID(ctx, statusID)
+				if err == nil {
+					apiStatus := h.dbStatusToAPI(ctx, status)
+					apiNotif.Status = &apiStatus
+				}
+
+				_ = h.publisher.PublishNotificationToRedis(ctx, mentionedAcc.ID, apiNotif)
+			}
+		}
+
+		// Add to return list (for API response implementation if we wanted to return mentions in the same call,
+		// though dbStatusToAPI usually fetches them separately)
+		// Assuming we just want to create them here.
+	}
+
+	return mentions, nil
+}
+
 // FilterResult represents a filter match
 type FilterResult struct {
 	Filter         Filter   `json:"filter"`
@@ -242,7 +329,30 @@ func (h *StatusesHandler) dbStatusToAPI(ctx context.Context, dbStatus db.Status)
 		dbAcc, err := h.queries.GetAccountByID(ctx, dbStatus.AccountID)
 		if err == nil {
 			account = h.dbAccountToAPI(dbAcc)
+			account = h.dbAccountToAPI(dbAcc)
 		}
+	}
+
+	// Load mentions
+	var mentions []Mention
+	if h.useDB() {
+		dbMentions, err := h.queries.GetMentionsByStatusID(ctx, dbStatus.ID)
+		if err == nil {
+			for _, m := range dbMentions {
+				acc, err := h.queries.GetAccountByID(ctx, m.AccountID)
+				if err == nil {
+					mentions = append(mentions, Mention{
+						ID:       strconv.FormatInt(acc.ID, 10),
+						Username: acc.Username,
+						Acct:     acc.Username, // simplified
+						URL:      fmt.Sprintf("/@%s", acc.Username),
+					})
+				}
+			}
+		}
+	}
+	if mentions == nil {
+		mentions = []Mention{}
 	}
 
 	uri := ""
@@ -268,7 +378,7 @@ func (h *StatusesHandler) dbStatusToAPI(ctx context.Context, dbStatus db.Status)
 		Content:            "<p>" + dbStatus.Text + "</p>",
 		Account:            account,
 		MediaAttachments:   []MediaAttach{},
-		Mentions:           []Mention{},
+		Mentions:           mentions,
 		Tags:               []Tag{},
 		Emojis:             []any{},
 	}
@@ -354,6 +464,9 @@ func (h *StatusesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		if inReplyToID.Valid {
 			_ = h.queries.IncrementStatusReplies(ctx, inReplyToID.Int64)
 		}
+
+		// Process Mentions
+		_, _ = h.processMentions(ctx, dbStatus.ID, accountID, req.Status)
 
 		apiStatus := h.dbStatusToAPI(ctx, dbStatus)
 
