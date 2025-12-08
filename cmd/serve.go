@@ -13,11 +13,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/spf13/cobra"
 
+	v1 "github.com/deicod/gotodon/internal/api/v1"
+	v2 "github.com/deicod/gotodon/internal/api/v2"
 	"github.com/deicod/gotodon/internal/config"
+	"github.com/deicod/gotodon/internal/db"
 )
 
 // serveCmd represents the serve command
@@ -38,7 +42,7 @@ func init() {
 	serveCmd.Flags().IntP("port", "p", 0, "HTTP port (overrides config)")
 }
 
-func runServer(cmd *cobra.Command, args []string) error {
+func runServer(cmd *cobra.Command, _ []string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -58,6 +62,21 @@ func runServer(cmd *cobra.Command, args []string) error {
 		Level: slog.LevelInfo,
 	}))
 	slog.SetDefault(logger)
+
+	// Connect to PostgreSQL
+	var queries *db.Queries
+	if cfg.Database.Host != "" {
+		pool, err := pgxpool.New(ctx, cfg.Database.DSN())
+		if err != nil {
+			logger.Warn("Failed to connect to database, running in memory-only mode", "error", err)
+		} else {
+			defer pool.Close()
+			queries = db.New(pool)
+			logger.Info("Connected to PostgreSQL database")
+		}
+	} else {
+		logger.Warn("No database configured, running in memory-only mode")
+	}
 
 	// Create Echo instance
 	e := echo.New()
@@ -81,12 +100,24 @@ func runServer(cmd *cobra.Command, args []string) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	// API v1 placeholder routes
+	// API groups
 	api := e.Group("/api")
-	v1 := api.Group("/v1")
+	v1Group := api.Group("/v1")
+	v2Group := api.Group("/v2")
+
+	// Register v1 handlers
+	listsHandler := v1.NewListsHandler(queries)
+	listsHandler.RegisterRoutes(v1Group)
+
+	pollsHandler := v1.NewPollsHandler(queries)
+	pollsHandler.RegisterRoutes(v1Group)
+
+	// Register v2 handlers
+	filtersHandler := v2.NewFiltersHandler(queries)
+	filtersHandler.RegisterRoutes(v2Group)
 
 	// Instance info (public endpoint)
-	v1.GET("/instance", func(c echo.Context) error {
+	v1Group.GET("/instance", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]interface{}{
 			"uri":               cfg.Instance.LocalDomain,
 			"title":             "Gotodon",
@@ -136,7 +167,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	})
 
 	// Apps endpoint (for OAuth app registration)
-	v1.POST("/apps", func(c echo.Context) error {
+	v1Group.POST("/apps", func(c echo.Context) error {
 		// TODO: Implement app registration
 		return c.JSON(http.StatusNotImplemented, map[string]string{
 			"error": "Not implemented yet",
