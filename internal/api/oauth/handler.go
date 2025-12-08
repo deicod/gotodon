@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/labstack/echo/v4"
 
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/oauth"
 )
 
@@ -59,60 +59,64 @@ type AuthorizeRequest struct {
 }
 
 // Token handles POST /oauth/token
-func (h *Handler) Token(c echo.Context) error {
+func (h *Handler) Token(w http.ResponseWriter, r *http.Request) {
 	var req TokenRequest
-	if err := c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{
+	if err := web.Bind(r, &req); err != nil {
+		web.JSON(w, http.StatusBadRequest, map[string]string{
 			"error":             "invalid_request",
 			"error_description": "Invalid request body",
 		})
+		return
 	}
 
 	ctx := context.Background()
 
 	switch req.GrantType {
 	case "authorization_code":
-		return h.handleAuthorizationCode(c, ctx, req)
+		h.handleAuthorizationCode(w, r, ctx, req)
 	case "client_credentials":
-		return h.handleClientCredentials(c, ctx, req)
+		h.handleClientCredentials(w, r, ctx, req)
 	case "password":
-		return h.handlePassword(c, ctx, req)
+		h.handlePassword(w, r, ctx, req)
 	case "refresh_token":
-		return h.handleRefreshToken(c, ctx, req)
+		h.handleRefreshToken(w, r, ctx, req)
 	default:
-		return c.JSON(http.StatusBadRequest, map[string]string{
+		web.JSON(w, http.StatusBadRequest, map[string]string{
 			"error":             "unsupported_grant_type",
 			"error_description": "The grant type is not supported",
 		})
 	}
 }
 
-func (h *Handler) handleClientCredentials(c echo.Context, ctx context.Context, req TokenRequest) error {
+func (h *Handler) handleClientCredentials(w http.ResponseWriter, r *http.Request, ctx context.Context, req TokenRequest) {
 	// Validate client
 	app, err := h.queries.GetOAuthApplicationByUID(ctx, req.ClientID)
 	if err != nil || app.Secret != req.ClientSecret {
-		return c.JSON(http.StatusUnauthorized, map[string]string{
+		web.JSON(w, http.StatusUnauthorized, map[string]string{
 			"error":             "invalid_client",
 			"error_description": "Invalid client credentials",
 		})
+		return
 	}
 
 	// Validate scopes
 	scopes := oauth.ParseScopes(req.Scope)
 	if err := oauth.ValidateScopes(scopes); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{
+		web.JSON(w, http.StatusBadRequest, map[string]string{
 			"error":             "invalid_scope",
 			"error_description": "The requested scope is invalid",
 		})
+		return
 	}
 
 	// Generate token
 	token, err := oauth.GenerateToken(32)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
+		web.JSON(w, http.StatusInternalServerError, map[string]string{
 			"error":             "server_error",
 			"error_description": "Failed to generate token",
 		})
+		return
 	}
 
 	// Save token
@@ -122,13 +126,14 @@ func (h *Handler) handleClientCredentials(c echo.Context, ctx context.Context, r
 		ApplicationID: pgtype.Int8{Int64: app.ID, Valid: true},
 	})
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
+		web.JSON(w, http.StatusInternalServerError, map[string]string{
 			"error":             "server_error",
 			"error_description": "Failed to save token",
 		})
+		return
 	}
 
-	return c.JSON(http.StatusOK, TokenResponse{
+	web.JSON(w, http.StatusOK, TokenResponse{
 		AccessToken: token,
 		TokenType:   "Bearer",
 		Scope:       oauth.NormalizeScopes(scopes),
@@ -136,61 +141,67 @@ func (h *Handler) handleClientCredentials(c echo.Context, ctx context.Context, r
 	})
 }
 
-func (h *Handler) handleAuthorizationCode(c echo.Context, ctx context.Context, req TokenRequest) error {
+func (h *Handler) handleAuthorizationCode(w http.ResponseWriter, r *http.Request, ctx context.Context, req TokenRequest) {
 	// For now, return not implemented - requires session/login flow
-	return c.JSON(http.StatusBadRequest, map[string]string{
+	web.JSON(w, http.StatusBadRequest, map[string]string{
 		"error":             "invalid_grant",
 		"error_description": "Authorization code flow requires user session",
 	})
 }
 
-func (h *Handler) handlePassword(c echo.Context, ctx context.Context, req TokenRequest) error {
+func (h *Handler) handlePassword(w http.ResponseWriter, r *http.Request, ctx context.Context, req TokenRequest) {
 	// Validate client
 	app, err := h.queries.GetOAuthApplicationByUID(ctx, req.ClientID)
 	if err != nil || app.Secret != req.ClientSecret {
-		return c.JSON(http.StatusUnauthorized, map[string]string{
+		web.JSON(w, http.StatusUnauthorized, map[string]string{
 			"error":             "invalid_client",
 			"error_description": "Invalid client credentials",
 		})
+		return
 	}
 
 	// Lookup user
 	user, err := h.queries.GetUserByEmail(ctx, req.Username)
 	if err != nil {
-		return c.JSON(http.StatusUnauthorized, map[string]string{
+		web.JSON(w, http.StatusUnauthorized, map[string]string{
 			"error":             "invalid_grant",
 			"error_description": "Invalid credentials",
 		})
+		return
 	}
 
 	// Verify password (simplified - real implementation needs bcrypt)
 	if user.EncryptedPassword != req.Password {
-		return c.JSON(http.StatusUnauthorized, map[string]string{
+		web.JSON(w, http.StatusUnauthorized, map[string]string{
 			"error":             "invalid_grant",
 			"error_description": "Invalid credentials",
 		})
+		return
 	}
 
 	// Generate tokens
 	accessToken, err := oauth.GenerateToken(32)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
+		web.JSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "server_error",
 		})
+		return
 	}
 
 	refreshToken, err := oauth.GenerateToken(32)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
+		web.JSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "server_error",
 		})
+		return
 	}
 
 	scopes := oauth.ParseScopes(req.Scope)
 	if err := oauth.ValidateScopes(scopes); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{
+		web.JSON(w, http.StatusBadRequest, map[string]string{
 			"error": "invalid_scope",
 		})
+		return
 	}
 
 	// Save token
@@ -204,13 +215,14 @@ func (h *Handler) handlePassword(c echo.Context, ctx context.Context, req TokenR
 		ResourceOwnerID: pgtype.Int8{Int64: user.ID, Valid: true},
 	})
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
+		web.JSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "server_error",
 		})
+		return
 	}
 
 	expiresInInt := int(expiresIn)
-	return c.JSON(http.StatusOK, TokenResponse{
+	web.JSON(w, http.StatusOK, TokenResponse{
 		AccessToken:  accessToken,
 		TokenType:    "Bearer",
 		Scope:        oauth.NormalizeScopes(scopes),
@@ -220,14 +232,15 @@ func (h *Handler) handlePassword(c echo.Context, ctx context.Context, req TokenR
 	})
 }
 
-func (h *Handler) handleRefreshToken(c echo.Context, ctx context.Context, req TokenRequest) error {
+func (h *Handler) handleRefreshToken(w http.ResponseWriter, r *http.Request, ctx context.Context, req TokenRequest) {
 	// Lookup token
 	oldToken, err := h.queries.GetOAuthAccessTokenByRefresh(ctx, pgtype.Text{String: req.RefreshToken, Valid: true})
 	if err != nil {
-		return c.JSON(http.StatusUnauthorized, map[string]string{
+		web.JSON(w, http.StatusUnauthorized, map[string]string{
 			"error":             "invalid_grant",
 			"error_description": "Invalid refresh token",
 		})
+		return
 	}
 
 	// Revoke old token
@@ -236,16 +249,18 @@ func (h *Handler) handleRefreshToken(c echo.Context, ctx context.Context, req To
 	// Generate new tokens
 	accessToken, err := oauth.GenerateToken(32)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
+		web.JSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "server_error",
 		})
+		return
 	}
 
 	refreshToken, err := oauth.GenerateToken(32)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
+		web.JSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "server_error",
 		})
+		return
 	}
 
 	expiresIn := int32(7200)
@@ -258,9 +273,10 @@ func (h *Handler) handleRefreshToken(c echo.Context, ctx context.Context, req To
 		ResourceOwnerID: oldToken.ResourceOwnerID,
 	})
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
+		web.JSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "server_error",
 		})
+		return
 	}
 
 	scopes := ""
@@ -269,7 +285,7 @@ func (h *Handler) handleRefreshToken(c echo.Context, ctx context.Context, req To
 	}
 
 	expiresInInt := int(expiresIn)
-	return c.JSON(http.StatusOK, TokenResponse{
+	web.JSON(w, http.StatusOK, TokenResponse{
 		AccessToken:  accessToken,
 		TokenType:    "Bearer",
 		Scope:        scopes,
@@ -280,16 +296,17 @@ func (h *Handler) handleRefreshToken(c echo.Context, ctx context.Context, req To
 }
 
 // Revoke handles POST /oauth/revoke
-func (h *Handler) Revoke(c echo.Context) error {
+func (h *Handler) Revoke(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Token        string `json:"token" form:"token"`
 		ClientID     string `json:"client_id" form:"client_id"`
 		ClientSecret string `json:"client_secret" form:"client_secret"`
 	}
-	if err := c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{
+	if err := web.Bind(r, &req); err != nil {
+		web.JSON(w, http.StatusBadRequest, map[string]string{
 			"error": "invalid_request",
 		})
+		return
 	}
 
 	ctx := context.Background()
@@ -298,36 +315,42 @@ func (h *Handler) Revoke(c echo.Context) error {
 	if req.ClientID != "" {
 		app, err := h.queries.GetOAuthApplicationByUID(ctx, req.ClientID)
 		if err != nil || app.Secret != req.ClientSecret {
-			return c.JSON(http.StatusUnauthorized, map[string]string{
+			web.JSON(w, http.StatusUnauthorized, map[string]string{
 				"error": "invalid_client",
 			})
+			return
 		}
 	}
 
 	// Revoke the token
 	_ = h.queries.RevokeOAuthAccessToken(ctx, req.Token)
 
-	return c.JSON(http.StatusOK, map[string]any{})
+	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
 // Authorize handles GET /oauth/authorize
-func (h *Handler) Authorize(c echo.Context) error {
+func (h *Handler) Authorize(w http.ResponseWriter, r *http.Request) {
 	var req AuthorizeRequest
-	if err := c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "invalid_request",
-		})
-	}
+	req.ResponseType = web.QueryParam(r, "response_type")
+	req.ClientID = web.QueryParam(r, "client_id")
+	req.RedirectURI = web.QueryParam(r, "redirect_uri")
+	req.Scope = web.QueryParam(r, "scope")
+	req.State = web.QueryParam(r, "state")
+
+	// c.Bind mostly works for JSON/Form. For query params in struct, web.Bind might not support it directly if designed for Body.
+	// `web.Bind` implemented before uses JSON/Form.
+	// For GET, we parse query params manually as above.
 
 	ctx := context.Background()
 
 	// Validate client
 	_, err := h.queries.GetOAuthApplicationByUID(ctx, req.ClientID)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{
+		web.JSON(w, http.StatusBadRequest, map[string]string{
 			"error":             "invalid_client",
 			"error_description": "Unknown application",
 		})
+		return
 	}
 
 	// For now, return a simple HTML form (real implementation needs session handling)
@@ -350,50 +373,61 @@ func (h *Handler) Authorize(c echo.Context) error {
 </body>
 </html>`
 
-	return c.HTML(http.StatusOK, html)
+	w.Header().Set("Content-Type", "text/html")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(html))
 }
 
 // AuthorizePost handles POST /oauth/authorize
-func (h *Handler) AuthorizePost(c echo.Context) error {
-	clientID := c.FormValue("client_id")
-	redirectURI := c.FormValue("redirect_uri")
-	scope := c.FormValue("scope")
-	state := c.FormValue("state")
-	email := c.FormValue("email")
-	password := c.FormValue("password")
+func (h *Handler) AuthorizePost(w http.ResponseWriter, r *http.Request) {
+	clientID := r.FormValue("client_id")
+	redirectURI := r.FormValue("redirect_uri")
+	scope := r.FormValue("scope")
+	state := r.FormValue("state")
+	email := r.FormValue("email")
+	password := r.FormValue("password")
 
 	ctx := context.Background()
 
 	// Validate client
 	app, err := h.queries.GetOAuthApplicationByUID(ctx, clientID)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{
+		web.JSON(w, http.StatusBadRequest, map[string]string{
 			"error": "invalid_client",
 		})
+		return
 	}
 
 	// Authenticate user
 	user, err := h.queries.GetUserByEmail(ctx, email)
 	if err != nil {
-		return c.HTML(http.StatusUnauthorized, "Invalid credentials")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte("Invalid credentials"))
+		return
 	}
 
 	// Verify password (simplified)
 	if user.EncryptedPassword != password {
-		return c.HTML(http.StatusUnauthorized, "Invalid credentials")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte("Invalid credentials"))
+		return
 	}
 
 	// Generate authorization code
 	code, err := oauth.GenerateToken(32)
 	if err != nil {
-		return c.HTML(http.StatusInternalServerError, "Server error")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("Server error"))
+		return
 	}
 
 	// Store the code temporarily (in production, use a proper store)
 	// For now, generate a token directly
 	accessToken, err := oauth.GenerateToken(32)
 	if err != nil {
-		return c.HTML(http.StatusInternalServerError, "Server error")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("Server error"))
+		return
 	}
 
 	scopes := oauth.ParseScopes(scope)
@@ -404,7 +438,9 @@ func (h *Handler) AuthorizePost(c echo.Context) error {
 		ResourceOwnerID: pgtype.Int8{Int64: user.ID, Valid: true},
 	})
 	if err != nil {
-		return c.HTML(http.StatusInternalServerError, "Server error")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("Server error"))
+		return
 	}
 
 	// Redirect with code (in production, this would be a proper code exchange)
@@ -414,16 +450,15 @@ func (h *Handler) AuthorizePost(c echo.Context) error {
 		redirect += "&state=" + state
 	}
 
-	return c.Redirect(http.StatusFound, redirect)
+	http.Redirect(w, r, redirect, http.StatusFound)
 }
 
 // VerifyCredentials validates the current token and returns app info
-func (h *Handler) VerifyCredentials(c echo.Context) error {
-	token := c.Request().Header.Get("Authorization")
+func (h *Handler) VerifyCredentials(w http.ResponseWriter, r *http.Request) {
+	token := r.Header.Get("Authorization")
 	if token == "" {
-		return c.JSON(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	// Strip "Bearer " prefix
@@ -435,24 +470,25 @@ func (h *Handler) VerifyCredentials(c echo.Context) error {
 
 	dbToken, err := h.queries.GetOAuthAccessToken(ctx, token)
 	if err != nil {
-		return c.JSON(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	if !dbToken.ApplicationID.Valid {
-		return c.JSON(http.StatusOK, map[string]any{
+		web.JSON(w, http.StatusOK, map[string]any{
 			"name":    "Unknown",
 			"website": nil,
 		})
+		return
 	}
 
 	app, err := h.queries.GetOAuthApplication(ctx, dbToken.ApplicationID.Int64)
 	if err != nil {
-		return c.JSON(http.StatusOK, map[string]any{
+		web.JSON(w, http.StatusOK, map[string]any{
 			"name":    "Unknown",
 			"website": nil,
 		})
+		return
 	}
 
 	var website *string
@@ -460,7 +496,7 @@ func (h *Handler) VerifyCredentials(c echo.Context) error {
 		website = &app.Website.String
 	}
 
-	return c.JSON(http.StatusOK, map[string]any{
+	web.JSON(w, http.StatusOK, map[string]any{
 		"id":      strconv.FormatInt(app.ID, 10),
 		"name":    app.Name,
 		"website": website,
@@ -468,10 +504,10 @@ func (h *Handler) VerifyCredentials(c echo.Context) error {
 }
 
 // RegisterRoutes registers OAuth routes
-func (h *Handler) RegisterRoutes(e *echo.Echo) {
-	oauth := e.Group("/oauth")
-	oauth.POST("/token", h.Token)
-	oauth.POST("/revoke", h.Revoke)
-	oauth.GET("/authorize", h.Authorize)
-	oauth.POST("/authorize", h.AuthorizePost)
+func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /oauth/token", h.Token)
+	mux.HandleFunc("POST /oauth/revoke", h.Revoke)
+	mux.HandleFunc("GET /oauth/authorize", h.Authorize)
+	mux.HandleFunc("POST /oauth/authorize", h.AuthorizePost)
+	// VerifyCredentials is usually unused in standard OAuth flow but kept for API
 }

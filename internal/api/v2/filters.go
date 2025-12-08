@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/labstack/echo/v4"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/snowflake"
 )
 
@@ -181,12 +181,11 @@ func (h *FiltersHandler) loadFilterStatuses(ctx context.Context, filterID int64)
 }
 
 // List handles GET /api/v2/filters
-func (h *FiltersHandler) List(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *FiltersHandler) List(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	ctx := context.Background()
@@ -194,9 +193,8 @@ func (h *FiltersHandler) List(c echo.Context) error {
 	if h.useDB() {
 		dbFilters, err := h.queries.ListFilters(ctx, accountID)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, map[string]string{
-				"error": "Database error",
-			})
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
 		}
 		result := make([]FilterV2, 0, len(dbFilters))
 		for _, dbFilter := range dbFilters {
@@ -209,13 +207,15 @@ func (h *FiltersHandler) List(c echo.Context) error {
 			filter.Statuses = h.loadFilterStatuses(ctx, dbFilter.ID)
 			result = append(result, filter)
 		}
-		return c.JSON(http.StatusOK, result)
+		web.JSON(w, http.StatusOK, result)
+		return
 	}
 
 	// In-memory fallback
 	accountFilters := h.memFilters[accountID]
 	if accountFilters == nil {
-		return c.JSON(http.StatusOK, []FilterV2{})
+		web.JSON(w, http.StatusOK, []FilterV2{})
+		return
 	}
 	result := make([]FilterV2, 0, len(accountFilters))
 	for _, filter := range accountFilters {
@@ -224,23 +224,21 @@ func (h *FiltersHandler) List(c echo.Context) error {
 		}
 		result = append(result, *filter)
 	}
-	return c.JSON(http.StatusOK, result)
+	web.JSON(w, http.StatusOK, result)
 }
 
 // Get handles GET /api/v2/filters/:id
-func (h *FiltersHandler) Get(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *FiltersHandler) Get(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	filterID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	filterID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	ctx := context.Background()
@@ -251,60 +249,54 @@ func (h *FiltersHandler) Get(c echo.Context) error {
 			AccountID: accountID,
 		})
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-				"error": "Record not found",
-			})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
 		filter := h.dbFilterToAPI(dbFilter)
 		filter.Keywords = h.loadFilterKeywords(ctx, filterID)
 		filter.Statuses = h.loadFilterStatuses(ctx, filterID)
-		return c.JSON(http.StatusOK, filter)
+		web.JSON(w, http.StatusOK, filter)
+		return
 	}
 
 	// In-memory fallback
 	accountFilters := h.memFilters[accountID]
 	if accountFilters == nil || accountFilters[filterID] == nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
-	return c.JSON(http.StatusOK, accountFilters[filterID])
+	web.JSON(w, http.StatusOK, accountFilters[filterID])
 }
 
 // Create handles POST /api/v2/filters
-func (h *FiltersHandler) Create(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *FiltersHandler) Create(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	var req CreateFilterRequest
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, map[string]string{
-			"error": "Invalid request body",
-		})
+	if err := web.Bind(r, &req); err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
 	}
 
 	// Validate
 	if req.Title == "" {
-		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-			"error": "Validation failed: Title can't be blank",
-		})
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Title can't be blank")
+		return
 	}
 
 	if len(req.Context) == 0 {
-		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-			"error": "Validation failed: Context can't be blank",
-		})
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Context can't be blank")
+		return
 	}
 
 	for _, ctx := range req.Context {
 		if !validContexts[ctx] {
-			return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-				"error": "Validation failed: Context is invalid",
-			})
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Context is invalid")
+			return
 		}
 	}
 
@@ -312,9 +304,8 @@ func (h *FiltersHandler) Create(c echo.Context) error {
 	actionInt := int32(FilterActionWarn)
 	if req.FilterAction != "" {
 		if !validActions[req.FilterAction] {
-			return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-				"error": "Validation failed: Filter action is invalid",
-			})
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Filter action is invalid")
+			return
 		}
 		actionStr = req.FilterAction
 		actionInt = stringToFilterAction[req.FilterAction]
@@ -340,9 +331,8 @@ func (h *FiltersHandler) Create(c echo.Context) error {
 			ExpiresAt: expiresAtPG,
 		})
 		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, map[string]string{
-				"error": "Failed to create filter",
-			})
+			web.JSONError(w, http.StatusInternalServerError, "Failed to create filter")
+			return
 		}
 
 		// Create keywords
@@ -369,7 +359,8 @@ func (h *FiltersHandler) Create(c echo.Context) error {
 		filter := h.dbFilterToAPI(dbFilter)
 		filter.Keywords = keywords
 		filter.Statuses = []FilterStatus{}
-		return c.JSON(http.StatusOK, filter)
+		web.JSON(w, http.StatusOK, filter)
+		return
 	}
 
 	// In-memory fallback
@@ -402,30 +393,27 @@ func (h *FiltersHandler) Create(c echo.Context) error {
 	}
 	h.memFilters[accountID][filterID] = filter
 
-	return c.JSON(http.StatusOK, filter)
+	web.JSON(w, http.StatusOK, filter)
 }
 
 // Update handles PUT /api/v2/filters/:id
-func (h *FiltersHandler) Update(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *FiltersHandler) Update(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	filterID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	filterID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	var req UpdateFilterRequest
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, map[string]string{
-			"error": "Invalid request body",
-		})
+	if err := web.Bind(r, &req); err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
 	}
 
 	ctx := context.Background()
@@ -437,9 +425,8 @@ func (h *FiltersHandler) Update(c echo.Context) error {
 			AccountID: accountID,
 		})
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-				"error": "Record not found",
-			})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
 
 		// Build update params
@@ -457,9 +444,8 @@ func (h *FiltersHandler) Update(c echo.Context) error {
 		if len(req.Context) > 0 {
 			for _, ctx := range req.Context {
 				if !validContexts[ctx] {
-					return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-						"error": "Validation failed: Context is invalid",
-					})
+					web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Context is invalid")
+					return
 				}
 			}
 			params.Context = req.Context
@@ -467,9 +453,8 @@ func (h *FiltersHandler) Update(c echo.Context) error {
 
 		if req.FilterAction != nil {
 			if !validActions[*req.FilterAction] {
-				return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-					"error": "Validation failed: Filter action is invalid",
-				})
+				web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Filter action is invalid")
+				return
 			}
 			params.Action = pgtype.Int4{Int32: stringToFilterAction[*req.FilterAction], Valid: true}
 		}
@@ -485,9 +470,8 @@ func (h *FiltersHandler) Update(c echo.Context) error {
 
 		dbFilter, err := h.queries.UpdateFilter(ctx, params)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, map[string]string{
-				"error": "Failed to update filter",
-			})
+			web.JSONError(w, http.StatusInternalServerError, "Failed to update filter")
+			return
 		}
 
 		// Handle keyword updates
@@ -522,15 +506,15 @@ func (h *FiltersHandler) Update(c echo.Context) error {
 		filter := h.dbFilterToAPI(dbFilter)
 		filter.Keywords = h.loadFilterKeywords(ctx, filterID)
 		filter.Statuses = h.loadFilterStatuses(ctx, filterID)
-		return c.JSON(http.StatusOK, filter)
+		web.JSON(w, http.StatusOK, filter)
+		return
 	}
 
 	// In-memory fallback
 	accountFilters := h.memFilters[accountID]
 	if accountFilters == nil || accountFilters[filterID] == nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	filter := accountFilters[filterID]
@@ -540,18 +524,16 @@ func (h *FiltersHandler) Update(c echo.Context) error {
 	if len(req.Context) > 0 {
 		for _, ctx := range req.Context {
 			if !validContexts[ctx] {
-				return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-					"error": "Validation failed: Context is invalid",
-				})
+				web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Context is invalid")
+				return
 			}
 		}
 		filter.Context = req.Context
 	}
 	if req.FilterAction != nil {
 		if !validActions[*req.FilterAction] {
-			return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-				"error": "Validation failed: Filter action is invalid",
-			})
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Filter action is invalid")
+			return
 		}
 		filter.FilterAction = *req.FilterAction
 	}
@@ -603,23 +585,21 @@ func (h *FiltersHandler) Update(c echo.Context) error {
 		}
 	}
 
-	return c.JSON(http.StatusOK, filter)
+	web.JSON(w, http.StatusOK, filter)
 }
 
 // Delete handles DELETE /api/v2/filters/:id
-func (h *FiltersHandler) Delete(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *FiltersHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	filterID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	filterID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	ctx := context.Background()
@@ -629,35 +609,33 @@ func (h *FiltersHandler) Delete(c echo.Context) error {
 			ID:        filterID,
 			AccountID: accountID,
 		}); err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-				"error": "Record not found",
-			})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
-		return c.JSON(http.StatusOK, map[string]any{})
+		web.JSON(w, http.StatusOK, map[string]any{})
+		return
 	}
 
 	// In-memory fallback
 	accountFilters := h.memFilters[accountID]
 	if accountFilters == nil || accountFilters[filterID] == nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 	delete(accountFilters, filterID)
-	return c.JSON(http.StatusOK, map[string]any{})
+	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
 // GetKeyword handles GET /api/v2/filters/:filter_id/keywords/:id
-func (h *FiltersHandler) GetKeyword(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *FiltersHandler) GetKeyword(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	filterID, _ := strconv.ParseInt(c.Param("filter_id"), 10, 64)
-	keywordIDStr := c.Param("id")
+	filterID, _ := strconv.ParseInt(web.Param(r, "filter_id"), 10, 64)
+	keywordIDStr := web.Param(r, "id")
 
 	ctx := context.Background()
 
@@ -668,58 +646,63 @@ func (h *FiltersHandler) GetKeyword(c echo.Context) error {
 			AccountID: accountID,
 		})
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
 
 		keywords := h.loadFilterKeywords(ctx, filterID)
 		for _, kw := range keywords {
 			if kw.ID == keywordIDStr {
-				return c.JSON(http.StatusOK, kw)
+				web.JSON(w, http.StatusOK, kw)
+				return
 			}
 		}
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	// In-memory fallback
 	accountFilters := h.memFilters[accountID]
 	if accountFilters == nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 	filter := accountFilters[filterID]
 	if filter == nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 	for _, kw := range filter.Keywords {
 		if kw.ID == keywordIDStr {
-			return c.JSON(http.StatusOK, kw)
+			web.JSON(w, http.StatusOK, kw)
+			return
 		}
 	}
-	return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+	web.JSONError(w, http.StatusNotFound, "Record not found")
 }
 
 // CreateKeyword handles POST /api/v2/filters/:filter_id/keywords
-func (h *FiltersHandler) CreateKeyword(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *FiltersHandler) CreateKeyword(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	filterID, _ := strconv.ParseInt(c.Param("filter_id"), 10, 64)
+	filterID, _ := strconv.ParseInt(web.Param(r, "filter_id"), 10, 64)
 
 	var req struct {
 		Keyword   string `json:"keyword" form:"keyword"`
 		WholeWord *bool  `json:"whole_word" form:"whole_word"`
 	}
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
+	if err := web.Bind(r, &req); err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request")
+		return
 	}
 
 	if req.Keyword == "" {
-		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-			"error": "Validation failed: Keyword can't be blank",
-		})
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Keyword can't be blank")
+		return
 	}
 
 	wholeWord := true
@@ -736,7 +719,8 @@ func (h *FiltersHandler) CreateKeyword(c echo.Context) error {
 			AccountID: accountID,
 		})
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
 
 		dbKw, err := h.queries.CreateFilterKeyword(ctx, db.CreateFilterKeywordParams{
@@ -745,23 +729,27 @@ func (h *FiltersHandler) CreateKeyword(c echo.Context) error {
 			WholeWord: wholeWord,
 		})
 		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, map[string]string{"error": "Failed to create keyword"})
+			web.JSONError(w, http.StatusInternalServerError, "Failed to create keyword")
+			return
 		}
-		return c.JSON(http.StatusOK, FilterKeyword{
+		web.JSON(w, http.StatusOK, FilterKeyword{
 			ID:        strconv.FormatInt(dbKw.ID, 10),
 			Keyword:   dbKw.Keyword,
 			WholeWord: dbKw.WholeWord,
 		})
+		return
 	}
 
 	// In-memory fallback
 	accountFilters := h.memFilters[accountID]
 	if accountFilters == nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 	filter := accountFilters[filterID]
 	if filter == nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 	kw := FilterKeyword{
 		ID:        strconv.FormatInt(h.idGen.Generate(), 10),
@@ -769,20 +757,19 @@ func (h *FiltersHandler) CreateKeyword(c echo.Context) error {
 		WholeWord: wholeWord,
 	}
 	filter.Keywords = append(filter.Keywords, kw)
-	return c.JSON(http.StatusOK, kw)
+	web.JSON(w, http.StatusOK, kw)
 }
 
 // DeleteKeyword handles DELETE /api/v2/filters/:filter_id/keywords/:id
-func (h *FiltersHandler) DeleteKeyword(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *FiltersHandler) DeleteKeyword(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	filterID, _ := strconv.ParseInt(c.Param("filter_id"), 10, 64)
-	keywordIDStr := c.Param("id")
+	filterID, _ := strconv.ParseInt(web.Param(r, "filter_id"), 10, 64)
+	keywordIDStr := web.Param(r, "id")
 
 	ctx := context.Background()
 
@@ -793,43 +780,50 @@ func (h *FiltersHandler) DeleteKeyword(c echo.Context) error {
 			AccountID: accountID,
 		})
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
 
 		keywordID, _ := strconv.ParseInt(keywordIDStr, 10, 64)
 		if err := h.queries.DeleteFilterKeyword(ctx, keywordID); err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
-		return c.JSON(http.StatusOK, map[string]any{})
+		web.JSON(w, http.StatusOK, map[string]any{})
+		return
 	}
 
 	// In-memory fallback
 	accountFilters := h.memFilters[accountID]
 	if accountFilters == nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 	filter := accountFilters[filterID]
 	if filter == nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
+
+	// Find and remove
 	for i, kw := range filter.Keywords {
 		if kw.ID == keywordIDStr {
 			filter.Keywords = append(filter.Keywords[:i], filter.Keywords[i+1:]...)
-			return c.JSON(http.StatusOK, map[string]any{})
+			web.JSON(w, http.StatusOK, map[string]any{})
+			return
 		}
 	}
-	return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+	web.JSONError(w, http.StatusNotFound, "Record not found")
 }
 
-// RegisterRoutes registers the filter routes
-func (h *FiltersHandler) RegisterRoutes(g *echo.Group) {
-	filters := g.Group("/filters")
-	filters.GET("", h.List)
-	filters.POST("", h.Create)
-	filters.GET("/:id", h.Get)
-	filters.PUT("/:id", h.Update)
-	filters.DELETE("/:id", h.Delete)
-	filters.GET("/:filter_id/keywords/:id", h.GetKeyword)
-	filters.POST("/:filter_id/keywords", h.CreateKeyword)
-	filters.DELETE("/:filter_id/keywords/:id", h.DeleteKeyword)
+// RegisterRoutes registers filter routes
+func (h *FiltersHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v2/filters", h.List)
+	mux.HandleFunc("POST /api/v2/filters", h.Create)
+	mux.HandleFunc("GET /api/v2/filters/{id}", h.Get)
+	mux.HandleFunc("PUT /api/v2/filters/{id}", h.Update)
+	mux.HandleFunc("DELETE /api/v2/filters/{id}", h.Delete)
+	mux.HandleFunc("GET /api/v2/filters/{filter_id}/keywords/{id}", h.GetKeyword)
+	mux.HandleFunc("POST /api/v2/filters/{filter_id}/keywords", h.CreateKeyword)
+	mux.HandleFunc("DELETE /api/v2/filters/{filter_id}/keywords/{id}", h.DeleteKeyword)
 }

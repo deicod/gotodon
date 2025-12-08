@@ -6,9 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/labstack/echo/v4"
-
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/web"
 )
 
 // AccountsHandler handles admin account endpoints
@@ -68,20 +67,20 @@ type AccountAction struct {
 }
 
 // GetAll handles GET /api/v1/admin/accounts
-func (h *AccountsHandler) GetAll(c echo.Context) error {
-	if err := requireAdmin(c); err != nil {
-		return err
+func (h *AccountsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
 	}
 
 	// Parse query parameters
 	limit := 100
-	if l := c.QueryParam("limit"); l != "" {
+	if l := web.QueryParam(r, "limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 200 {
 			limit = parsed
 		}
 	}
 	offset := 0
-	if o := c.QueryParam("offset"); o != "" {
+	if o := web.QueryParam(r, "offset"); o != "" {
 		if parsed, err := strconv.Atoi(o); err == nil && parsed >= 0 {
 			offset = parsed
 		}
@@ -90,20 +89,21 @@ func (h *AccountsHandler) GetAll(c echo.Context) error {
 	params := db.AdminListAccountsParams{
 		Limit:           int32(limit),
 		Offset:          int32(offset),
-		LocalOnly:       c.QueryParam("local") == "true",
-		StatusActive:    c.QueryParam("status") == "active",
-		StatusPending:   c.QueryParam("status") == "pending",
-		StatusDisabled:  c.QueryParam("status") == "disabled",
-		StatusSilenced:  c.QueryParam("status") == "silenced",
-		StatusSuspended: c.QueryParam("status") == "suspended",
-		UsernameCurr:    c.QueryParam("username"),
-		Email:           c.QueryParam("email"),
-		Ip:              c.QueryParam("ip"),
+		LocalOnly:       web.QueryParam(r, "local") == "true",
+		StatusActive:    web.QueryParam(r, "status") == "active",
+		StatusPending:   web.QueryParam(r, "status") == "pending",
+		StatusDisabled:  web.QueryParam(r, "status") == "disabled",
+		StatusSilenced:  web.QueryParam(r, "status") == "silenced",
+		StatusSuspended: web.QueryParam(r, "status") == "suspended",
+		UsernameCurr:    web.QueryParam(r, "username"),
+		Email:           web.QueryParam(r, "email"),
+		Ip:              web.QueryParam(r, "ip"),
 	}
 
-	rows, err := h.queries.AdminListAccounts(c.Request().Context(), params)
+	rows, err := h.queries.AdminListAccounts(r.Context(), params)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Database error").SetInternal(err)
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
 	accounts := make([]AdminAccount, 0, len(rows))
@@ -124,19 +124,6 @@ func (h *AccountsHandler) GetAll(c echo.Context) error {
 			d := row.Domain.String
 			acc.Domain = &d
 		}
-		if row.Ip.Valid {
-			// Using timestamp as placeholder for IP in generated code?
-			// Wait, SQL was `u.current_sign_in_at as ip`. That's a timestamp.
-			// The param was called `Ip` but type is Timestamptz in generated code?
-			// Let's check generated code again. Yes `Ip pgtype.Timestamptz`.
-			// The API expects IP string.
-			// I should fix the SQL to select actual IP or NULL.
-			// users table has `sign_up_ip inet` or `last_used_ip` in tokens.
-			// user table has `sign_up_ip inet`. `current_sign_in_ip` is NOT in the schema provided in `001_initial_schema.sql` (lines 109-149).
-			// `sign_up_ip` exists.
-			// Let's assume sign_up_ip for now or empty.
-			// For now, I won't map IP to avoid type confusion until SQL is fixed.
-		}
 
 		// Map Role (Stub)
 		// acc.Role = ...
@@ -144,27 +131,25 @@ func (h *AccountsHandler) GetAll(c echo.Context) error {
 		accounts = append(accounts, acc)
 	}
 
-	return c.JSON(http.StatusOK, accounts)
+	web.JSON(w, http.StatusOK, accounts)
 }
 
 // Get handles GET /api/v1/admin/accounts/:id
-func (h *AccountsHandler) Get(c echo.Context) error {
-	if err := requireAdmin(c); err != nil {
-		return err
+func (h *AccountsHandler) Get(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
 	}
 
-	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
-	row, err := h.queries.AdminGetAccount(c.Request().Context(), accountID)
+	row, err := h.queries.AdminGetAccount(r.Context(), accountID)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	acc := AdminAccount{
@@ -193,20 +178,19 @@ func (h *AccountsHandler) Get(c echo.Context) error {
 		ID: 3, Name: "User", Position: 0, Permissions: 0,
 	}
 
-	return c.JSON(http.StatusOK, acc)
+	web.JSON(w, http.StatusOK, acc)
 }
 
 // TakeAction handles POST /api/v1/admin/accounts/:id/action
-func (h *AccountsHandler) TakeAction(c echo.Context) error {
-	if err := requireAdmin(c); err != nil {
-		return err
+func (h *AccountsHandler) TakeAction(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
 	}
 
-	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	var req struct {
@@ -216,13 +200,12 @@ func (h *AccountsHandler) TakeAction(c echo.Context) error {
 		WarningPresetID       string `json:"warning_preset_id" form:"warning_preset_id"`
 		SendEmailNotification bool   `json:"send_email_notification" form:"send_email_notification"`
 	}
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, map[string]string{
-			"error": "Invalid request body",
-		})
+	if err := web.Bind(r, &req); err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
 	}
 
-	ctx := c.Request().Context()
+	ctx := r.Context()
 
 	switch req.Type {
 	case "disable":
@@ -236,142 +219,150 @@ func (h *AccountsHandler) TakeAction(c echo.Context) error {
 	case "none":
 		// Do nothing, just log action?
 	default:
-		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-			"error": "Invalid action type",
-		})
+		web.JSONError(w, http.StatusUnprocessableEntity, "Invalid action type")
+		return
 	}
 
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Database error").SetInternal(err)
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
 	// TODO: Record action in audit log (missing table/query currently)
 
-	return c.JSON(http.StatusOK, map[string]any{})
+	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
 // Approve handles POST /api/v1/admin/accounts/:id/approve
-func (h *AccountsHandler) Approve(c echo.Context) error {
-	if err := requireAdmin(c); err != nil {
-		return err
+func (h *AccountsHandler) Approve(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
 	}
 
-	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Invalid ID")
+		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
+		return
 	}
 
-	if err := h.queries.AdminApproveAccount(c.Request().Context(), accountID); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Database error").SetInternal(err)
+	if err := h.queries.AdminApproveAccount(r.Context(), accountID); err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
 	// Fetch updated
-	return h.Get(c) // Re-use Get to return object
+	h.Get(w, r)
 }
 
 // Reject handles POST /api/v1/admin/accounts/:id/reject
-func (h *AccountsHandler) Reject(c echo.Context) error {
-	if err := requireAdmin(c); err != nil {
-		return err
+func (h *AccountsHandler) Reject(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
 	}
 
-	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Invalid ID")
+		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
+		return
 	}
 
-	if err := h.queries.AdminRejectAccount(c.Request().Context(), accountID); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Database error").SetInternal(err)
+	if err := h.queries.AdminRejectAccount(r.Context(), accountID); err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
-	return c.JSON(http.StatusOK, map[string]any{})
+	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
 // Enable handles POST /api/v1/admin/accounts/:id/enable
-func (h *AccountsHandler) Enable(c echo.Context) error {
-	if err := requireAdmin(c); err != nil {
-		return err
+func (h *AccountsHandler) Enable(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
 	}
 
-	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Invalid ID")
+		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
+		return
 	}
 
-	if err := h.queries.AdminEnableAccount(c.Request().Context(), accountID); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Database error").SetInternal(err)
+	if err := h.queries.AdminEnableAccount(r.Context(), accountID); err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
-	return h.Get(c)
+	h.Get(w, r)
 }
 
 // Unsilence handles POST /api/v1/admin/accounts/:id/unsilence
-func (h *AccountsHandler) Unsilence(c echo.Context) error {
-	if err := requireAdmin(c); err != nil {
-		return err
+func (h *AccountsHandler) Unsilence(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
 	}
 
-	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Invalid ID")
+		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
+		return
 	}
 
-	if err := h.queries.AdminUnsilenceAccount(c.Request().Context(), accountID); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Database error").SetInternal(err)
+	if err := h.queries.AdminUnsilenceAccount(r.Context(), accountID); err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
-	return h.Get(c)
+	h.Get(w, r)
 }
 
 // Unsuspend handles POST /api/v1/admin/accounts/:id/unsuspend
-func (h *AccountsHandler) Unsuspend(c echo.Context) error {
-	if err := requireAdmin(c); err != nil {
-		return err
+func (h *AccountsHandler) Unsuspend(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
 	}
 
-	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Invalid ID")
+		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
+		return
 	}
 
-	if err := h.queries.AdminUnsuspendAccount(c.Request().Context(), accountID); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Database error").SetInternal(err)
+	if err := h.queries.AdminUnsuspendAccount(r.Context(), accountID); err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
-	return h.Get(c)
+	h.Get(w, r)
 }
 
 // Unsensitize handles POST /api/v1/admin/accounts/:id/unsensitize
-func (h *AccountsHandler) Unsensitize(c echo.Context) error {
-	if err := requireAdmin(c); err != nil {
-		return err
+func (h *AccountsHandler) Unsensitize(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
 	}
 
-	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Invalid ID")
+		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
+		return
 	}
 
-	if err := h.queries.AdminUnsensitizeAccount(c.Request().Context(), accountID); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Database error").SetInternal(err)
+	if err := h.queries.AdminUnsensitizeAccount(r.Context(), accountID); err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
-	return h.Get(c)
+	h.Get(w, r)
 }
 
-// requireAdmin checks for admin role (helper)
-// Use shared helper
-
 // RegisterRoutes registers admin account routes
-func (h *AccountsHandler) RegisterRoutes(g *echo.Group) {
-	accounts := g.Group("/accounts")
-	accounts.GET("", h.GetAll)
-	accounts.GET("/:id", h.Get)
-	accounts.POST("/:id/action", h.TakeAction)
-	accounts.POST("/:id/approve", h.Approve)
-	accounts.POST("/:id/reject", h.Reject)
-	accounts.POST("/:id/enable", h.Enable)
-	accounts.POST("/:id/unsilence", h.Unsilence)
-	accounts.POST("/:id/unsuspend", h.Unsuspend)
-	accounts.POST("/:id/unsensitize", h.Unsensitize)
+func (h *AccountsHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v1/admin/accounts", h.GetAll)
+	mux.HandleFunc("GET /api/v1/admin/accounts/{id}", h.Get)
+	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/action", h.TakeAction)
+	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/approve", h.Approve)
+	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/reject", h.Reject)
+	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/enable", h.Enable)
+	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unsilence", h.Unsilence)
+	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unsuspend", h.Unsuspend)
+	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unsensitize", h.Unsensitize)
 }

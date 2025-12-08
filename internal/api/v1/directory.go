@@ -6,9 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/labstack/echo/v4"
-
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/web"
 )
 
 // DirectoryHandler handles the profile directory endpoint
@@ -26,22 +25,22 @@ func (h *DirectoryHandler) useDB() bool {
 }
 
 // Get handles GET /api/v1/directory
-func (h *DirectoryHandler) Get(c echo.Context) error {
-	limit := parseDirectoryLimit(c.QueryParam("limit"), 40, 80)
+func (h *DirectoryHandler) Get(w http.ResponseWriter, r *http.Request) {
+	limit := parseDirectoryLimit(web.QueryParam(r, "limit"), 40, 80)
 	offset := 0
-	if o := c.QueryParam("offset"); o != "" {
+	if o := web.QueryParam(r, "offset"); o != "" {
 		if parsed, err := strconv.Atoi(o); err == nil && parsed >= 0 {
 			offset = parsed
 		}
 	}
-	local := c.QueryParam("local") == "true"
-	order := c.QueryParam("order") // "active" or "new"
+	local := web.QueryParam(r, "local") == "true"
+	order := web.QueryParam(r, "order") // "active" or "new"
 
 	if h.useDB() {
 		orderActive := order == "active"
 		orderNew := order == "new" || order == "" // Default to new
 
-		accounts, err := h.queries.ListDeepDirectory(c.Request().Context(), db.ListDeepDirectoryParams{
+		accounts, err := h.queries.ListDeepDirectory(r.Context(), db.ListDeepDirectoryParams{
 			Limit:       int32(limit),
 			Offset:      int32(offset),
 			Local:       local,
@@ -49,7 +48,8 @@ func (h *DirectoryHandler) Get(c echo.Context) error {
 			OrderNew:    orderNew,
 		})
 		if err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			web.JSONError(w, http.StatusInternalServerError, err.Error())
+			return
 		}
 
 		result := make([]Account, len(accounts))
@@ -77,13 +77,14 @@ func (h *DirectoryHandler) Get(c echo.Context) error {
 				result[i].Header = acc.HeaderRemoteUrl
 			}
 		}
-		return c.JSON(http.StatusOK, result)
+		web.JSON(w, http.StatusOK, result)
+		return
 	}
 
 	// Mock response
 	now := time.Now()
 	discoverable := true
-	return c.JSON(http.StatusOK, []Account{
+	web.JSON(w, http.StatusOK, []Account{
 		{
 			ID:           "1",
 			Username:     "admin",
@@ -115,6 +116,6 @@ func parseDirectoryLimit(s string, defaultVal, maxVal int) int {
 }
 
 // RegisterRoutes registers directory routes
-func (h *DirectoryHandler) RegisterRoutes(g *echo.Group) {
-	g.GET("/directory", h.Get)
+func (h *DirectoryHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v1/directory", h.Get)
 }

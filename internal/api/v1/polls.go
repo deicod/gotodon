@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/labstack/echo/v4"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/snowflake"
 )
 
@@ -138,33 +138,31 @@ func (h *PollsHandler) dbPollToAPI(ctx context.Context, dbPoll db.Poll, accountI
 }
 
 // Get handles GET /api/v1/polls/:id
-func (h *PollsHandler) Get(c echo.Context) error {
-	pollID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+func (h *PollsHandler) Get(w http.ResponseWriter, r *http.Request) {
+	pollID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
-	accountID, _ := middleware.GetAccountID(c)
-	ctx := context.Background()
+	accountID, _ := middleware.GetAccountID(r.Context())
+	ctx := r.Context()
 
 	if h.useDB() {
 		dbPoll, err := h.queries.GetPoll(ctx, pollID)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-				"error": "Record not found",
-			})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
-		return c.JSON(http.StatusOK, h.dbPollToAPI(ctx, dbPoll, accountID))
+		web.JSON(w, http.StatusOK, h.dbPollToAPI(ctx, dbPoll, accountID))
+		return
 	}
 
 	// In-memory fallback
 	poll, exists := h.memPolls[pollID]
 	if !exists {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	var ownVotes []int
@@ -176,55 +174,49 @@ func (h *PollsHandler) Get(c echo.Context) error {
 		}
 	}
 
-	return c.JSON(http.StatusOK, h.buildMemPollResponse(poll, voted, ownVotes))
+	web.JSON(w, http.StatusOK, h.buildMemPollResponse(poll, voted, ownVotes))
 }
 
 // Vote handles POST /api/v1/polls/:id/votes
-func (h *PollsHandler) Vote(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *PollsHandler) Vote(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	pollID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	pollID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	var req struct {
 		Choices []int `json:"choices" form:"choices[]"`
 	}
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, map[string]string{
-			"error": "Invalid request body",
-		})
+	if err := web.Bind(r, &req); err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
 	}
 
 	if len(req.Choices) == 0 {
-		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-			"error": "Validation failed: Choices can't be blank",
-		})
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Choices can't be blank")
+		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	if h.useDB() {
 		dbPoll, err := h.queries.GetPoll(ctx, pollID)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-				"error": "Record not found",
-			})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
 
 		// Check expiration
 		if dbPoll.ExpiresAt.Valid && time.Now().After(dbPoll.ExpiresAt.Time) {
-			return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-				"error": "Validation failed: Poll has ended",
-			})
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Poll has ended")
+			return
 		}
 
 		// Check if already voted
@@ -233,22 +225,19 @@ func (h *PollsHandler) Vote(c echo.Context) error {
 			AccountID: pgtype.Int8{Int64: accountID, Valid: true},
 		})
 		if err == nil && len(existingVotes) > 0 {
-			return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-				"error": "Validation failed: You have already voted on this poll",
-			})
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: You have already voted on this poll")
+			return
 		}
 
 		// Validate choices
 		if !dbPoll.Multiple && len(req.Choices) > 1 {
-			return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-				"error": "Validation failed: You can only select one option",
-			})
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: You can only select one option")
+			return
 		}
 		for _, choice := range req.Choices {
 			if choice < 0 || choice >= len(dbPoll.Options) {
-				return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-					"error": "Validation failed: Invalid choice",
-				})
+				web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Invalid choice")
+				return
 			}
 		}
 
@@ -268,22 +257,21 @@ func (h *PollsHandler) Vote(c echo.Context) error {
 
 		// Refresh and return
 		dbPoll, _ = h.queries.GetPoll(ctx, pollID)
-		return c.JSON(http.StatusOK, h.dbPollToAPI(ctx, dbPoll, accountID))
+		web.JSON(w, http.StatusOK, h.dbPollToAPI(ctx, dbPoll, accountID))
+		return
 	}
 
 	// In-memory fallback
 	poll, exists := h.memPolls[pollID]
 	if !exists {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	// Check if expired
 	if time.Now().After(poll.ExpiresAt) {
-		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-			"error": "Validation failed: Poll has ended",
-		})
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Poll has ended")
+		return
 	}
 
 	// Check if already voted
@@ -291,22 +279,19 @@ func (h *PollsHandler) Vote(c echo.Context) error {
 		h.memPollVotes[pollID] = make(map[int64][]int)
 	}
 	if _, voted := h.memPollVotes[pollID][accountID]; voted {
-		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-			"error": "Validation failed: You have already voted on this poll",
-		})
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: You have already voted on this poll")
+		return
 	}
 
 	// Validate choices
 	if !poll.Multiple && len(req.Choices) > 1 {
-		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-			"error": "Validation failed: You can only select one option",
-		})
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: You can only select one option")
+		return
 	}
 	for _, choice := range req.Choices {
 		if choice < 0 || choice >= len(poll.Options) {
-			return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-				"error": "Validation failed: Invalid choice",
-			})
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Invalid choice")
+			return
 		}
 	}
 
@@ -318,7 +303,7 @@ func (h *PollsHandler) Vote(c echo.Context) error {
 		poll.VotesCount++
 	}
 
-	return c.JSON(http.StatusOK, h.buildMemPollResponse(poll, true, req.Choices))
+	web.JSON(w, http.StatusOK, h.buildMemPollResponse(poll, true, req.Choices))
 }
 
 // CreatePoll creates a poll for a status (internal use)
@@ -404,7 +389,7 @@ func (h *PollsHandler) buildMemPollResponse(poll *PollData, voted bool, ownVotes
 }
 
 // RegisterRoutes registers poll routes
-func (h *PollsHandler) RegisterRoutes(g *echo.Group) {
-	g.GET("/polls/:id", h.Get)
-	g.POST("/polls/:id/votes", h.Vote)
+func (h *PollsHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v1/polls/{id}", h.Get)
+	mux.HandleFunc("POST /api/v1/polls/{id}/votes", h.Vote)
 }

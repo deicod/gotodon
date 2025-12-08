@@ -6,10 +6,10 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/labstack/echo/v4"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/web"
 )
 
 // ReportsHandler handles report endpoints
@@ -39,10 +39,11 @@ type Report struct {
 }
 
 // Create handles POST /api/v1/reports
-func (h *ReportsHandler) Create(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *ReportsHandler) Create(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
+		web.JSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
 	}
 
 	var req struct {
@@ -53,13 +54,15 @@ func (h *ReportsHandler) Create(c echo.Context) error {
 		Category  string   `json:"category" form:"category"`
 		RuleIDs   []string `json:"rule_ids" form:"rule_ids"`
 	}
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request")
+	if err := web.Bind(r, &req); err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request")
+		return
 	}
 
 	targetID, err := strconv.ParseInt(req.AccountID, 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid account_id")
+		web.JSONError(w, http.StatusBadRequest, "Invalid account_id")
+		return
 	}
 
 	// Verify target account exists (optional but good practice)
@@ -86,7 +89,7 @@ func (h *ReportsHandler) Create(c echo.Context) error {
 		categoryInt = 2
 	}
 
-	report, err := h.queries.CreateReport(c.Request().Context(), db.CreateReportParams{
+	report, err := h.queries.CreateReport(r.Context(), db.CreateReportParams{
 		AccountID:       accountID,
 		TargetAccountID: targetID,
 		StatusIds:       statusIDs,
@@ -95,7 +98,8 @@ func (h *ReportsHandler) Create(c echo.Context) error {
 		Forwarded:       pgtype.Bool{Bool: req.Forward, Valid: true},
 	})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Database error").SetInternal(err)
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
 	// Return response
@@ -112,5 +116,10 @@ func (h *ReportsHandler) Create(c echo.Context) error {
 		resp.StatusIDs = append(resp.StatusIDs, strconv.FormatInt(sid, 10))
 	}
 
-	return c.JSON(http.StatusOK, resp)
+	web.JSON(w, http.StatusOK, resp)
+}
+
+// RegisterRoutes registers report routes
+func (h *ReportsHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/v1/reports", h.Create)
 }

@@ -6,11 +6,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/labstack/echo/v4"
-
 	"github.com/deicod/gotodon/internal/api/middleware"
 	v1 "github.com/deicod/gotodon/internal/api/v1"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/web"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -51,31 +50,30 @@ type HashtagUsage struct {
 }
 
 // Search handles GET /api/v2/search
-func (h *SearchHandler) Search(c echo.Context) error {
-	q := strings.TrimSpace(c.QueryParam("q"))
+func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(web.QueryParam(r, "q"))
 	if q == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, map[string]string{
-			"error": "Search query is required",
-		})
+		web.JSONError(w, http.StatusBadRequest, "Search query is required")
+		return
 	}
 
 	// Parse parameters
-	searchType := c.QueryParam("type") // accounts, hashtags, statuses
+	searchType := web.QueryParam(r, "type") // accounts, hashtags, statuses
 	limit := 20
-	if l := c.QueryParam("limit"); l != "" {
+	if l := web.QueryParam(r, "limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 40 {
 			limit = parsed
 		}
 	}
 	offset := 0
-	if o := c.QueryParam("offset"); o != "" {
+	if o := web.QueryParam(r, "offset"); o != "" {
 		if parsed, err := strconv.Atoi(o); err == nil && parsed >= 0 {
 			offset = parsed
 		}
 	}
 
 	// Get auth context (optional for search)
-	accountID, _ := middleware.GetAccountID(c)
+	accountID, _ := middleware.GetAccountID(r.Context())
 	_ = accountID // Used for "following" logic in future
 
 	result := SearchResult{
@@ -84,14 +82,14 @@ func (h *SearchHandler) Search(c echo.Context) error {
 		Hashtags: []Hashtag{},
 	}
 
-	ctx := c.Request().Context()
+	ctx := r.Context()
 
 	if !h.useDB() {
-		return c.JSON(http.StatusOK, result)
+		web.JSON(w, http.StatusOK, result)
+		return
 	}
 
 	// Perform search based on type
-
 	if searchType == "accounts" || searchType == "" {
 		accounts, err := h.queries.SearchAccountsV2(ctx, db.SearchAccountsV2Params{
 			Query:  q,
@@ -161,9 +159,10 @@ func (h *SearchHandler) Search(c echo.Context) error {
 		}
 	}
 
-	return c.JSON(http.StatusOK, result)
+	web.JSON(w, http.StatusOK, result)
 }
 
-func (h *SearchHandler) RegisterRoutes(g *echo.Group) {
-	g.GET("/search", h.Search)
+// RegisterRoutes registers search routes
+func (h *SearchHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v2/search", h.Search)
 }

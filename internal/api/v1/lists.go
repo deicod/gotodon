@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/labstack/echo/v4"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/snowflake"
 )
 
@@ -86,26 +86,25 @@ func (h *ListsHandler) useDB() bool {
 }
 
 // GetAll handles GET /api/v1/lists
-func (h *ListsHandler) GetAll(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *ListsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	if h.useDB() {
 		lists, err := h.queries.ListLists(context.Background(), accountID)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, map[string]string{
-				"error": "Database error",
-			})
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
 		}
 		result := make([]List, 0, len(lists))
 		for _, dbList := range lists {
 			result = append(result, h.dbListToAPI(dbList))
 		}
-		return c.JSON(http.StatusOK, result)
+		web.JSON(w, http.StatusOK, result)
+		return
 	}
 
 	// In-memory fallback
@@ -114,23 +113,21 @@ func (h *ListsHandler) GetAll(c echo.Context) error {
 	for _, list := range accountLists {
 		result = append(result, *list)
 	}
-	return c.JSON(http.StatusOK, result)
+	web.JSON(w, http.StatusOK, result)
 }
 
 // Get handles GET /api/v1/lists/:id
-func (h *ListsHandler) Get(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *ListsHandler) Get(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	listID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	listID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	if h.useDB() {
@@ -139,43 +136,39 @@ func (h *ListsHandler) Get(c echo.Context) error {
 			AccountID: accountID,
 		})
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-				"error": "Record not found",
-			})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
-		return c.JSON(http.StatusOK, h.dbListToAPI(dbList))
+		web.JSON(w, http.StatusOK, h.dbListToAPI(dbList))
+		return
 	}
 
 	// In-memory fallback
 	accountLists := h.memLists[accountID]
 	if accountLists == nil || accountLists[listID] == nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
-	return c.JSON(http.StatusOK, accountLists[listID])
+	web.JSON(w, http.StatusOK, accountLists[listID])
 }
 
 // Create handles POST /api/v1/lists
-func (h *ListsHandler) Create(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *ListsHandler) Create(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	var req CreateListRequest
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, map[string]string{
-			"error": "Invalid request body",
-		})
+	if err := web.Bind(r, &req); err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
 	}
 
 	if req.Title == "" {
-		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-			"error": "Validation failed: Title can't be blank",
-		})
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Title can't be blank")
+		return
 	}
 
 	policyInt := int32(RepliesPolicyList)
@@ -183,9 +176,8 @@ func (h *ListsHandler) Create(c echo.Context) error {
 	if req.RepliesPolicy != "" {
 		p, valid := stringToRepliesPolicy[req.RepliesPolicy]
 		if !valid {
-			return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-				"error": "Validation failed: Replies policy is invalid",
-			})
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Replies policy is invalid")
+			return
 		}
 		policyInt = p
 		policyStr = req.RepliesPolicy
@@ -204,11 +196,11 @@ func (h *ListsHandler) Create(c echo.Context) error {
 			Exclusive:     exclusive,
 		})
 		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, map[string]string{
-				"error": "Failed to create list",
-			})
+			web.JSONError(w, http.StatusInternalServerError, "Failed to create list")
+			return
 		}
-		return c.JSON(http.StatusOK, h.dbListToAPI(dbList))
+		web.JSON(w, http.StatusOK, h.dbListToAPI(dbList))
+		return
 	}
 
 	// In-memory fallback
@@ -223,30 +215,27 @@ func (h *ListsHandler) Create(c echo.Context) error {
 		h.memLists[accountID] = make(map[int64]*List)
 	}
 	h.memLists[accountID][listID] = list
-	return c.JSON(http.StatusOK, list)
+	web.JSON(w, http.StatusOK, list)
 }
 
 // Update handles PUT /api/v1/lists/:id
-func (h *ListsHandler) Update(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *ListsHandler) Update(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	listID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	listID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	var req CreateListRequest
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, map[string]string{
-			"error": "Invalid request body",
-		})
+	if err := web.Bind(r, &req); err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
 	}
 
 	if h.useDB() {
@@ -260,9 +249,8 @@ func (h *ListsHandler) Update(c echo.Context) error {
 		if req.RepliesPolicy != "" {
 			p, valid := stringToRepliesPolicy[req.RepliesPolicy]
 			if !valid {
-				return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-					"error": "Validation failed: Replies policy is invalid",
-				})
+				web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Replies policy is invalid")
+				return
 			}
 			params.RepliesPolicy = pgtype.Int4{Int32: p, Valid: true}
 		}
@@ -271,19 +259,18 @@ func (h *ListsHandler) Update(c echo.Context) error {
 		}
 		dbList, err := h.queries.UpdateList(context.Background(), params)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-				"error": "Record not found",
-			})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
-		return c.JSON(http.StatusOK, h.dbListToAPI(dbList))
+		web.JSON(w, http.StatusOK, h.dbListToAPI(dbList))
+		return
 	}
 
 	// In-memory fallback
 	accountLists := h.memLists[accountID]
 	if accountLists == nil || accountLists[listID] == nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 	list := accountLists[listID]
 	if req.Title != "" {
@@ -291,32 +278,29 @@ func (h *ListsHandler) Update(c echo.Context) error {
 	}
 	if req.RepliesPolicy != "" {
 		if _, valid := stringToRepliesPolicy[req.RepliesPolicy]; !valid {
-			return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-				"error": "Validation failed: Replies policy is invalid",
-			})
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Replies policy is invalid")
+			return
 		}
 		list.RepliesPolicy = req.RepliesPolicy
 	}
 	if req.Exclusive != nil {
 		list.Exclusive = *req.Exclusive
 	}
-	return c.JSON(http.StatusOK, list)
+	web.JSON(w, http.StatusOK, list)
 }
 
 // Delete handles DELETE /api/v1/lists/:id
-func (h *ListsHandler) Delete(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *ListsHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	listID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	listID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	if h.useDB() {
@@ -324,39 +308,36 @@ func (h *ListsHandler) Delete(c echo.Context) error {
 			ID:        listID,
 			AccountID: accountID,
 		}); err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-				"error": "Record not found",
-			})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
-		return c.JSON(http.StatusOK, map[string]any{})
+		web.JSON(w, http.StatusOK, map[string]any{})
+		return
 	}
 
 	// In-memory fallback
 	accountLists := h.memLists[accountID]
 	if accountLists == nil || accountLists[listID] == nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 	delete(accountLists, listID)
 	delete(h.memListMembers, listID)
-	return c.JSON(http.StatusOK, map[string]any{})
+	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
 // GetAccounts handles GET /api/v1/lists/:id/accounts
-func (h *ListsHandler) GetAccounts(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *ListsHandler) GetAccounts(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	listID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	listID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	if h.useDB() {
@@ -365,9 +346,8 @@ func (h *ListsHandler) GetAccounts(c echo.Context) error {
 			AccountID: accountID,
 		})
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-				"error": "Record not found",
-			})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
 
 		memberAccounts, err := h.queries.ListAccountsInList(context.Background(), db.ListAccountsInListParams{
@@ -376,9 +356,8 @@ func (h *ListsHandler) GetAccounts(c echo.Context) error {
 			Offset: 0,
 		})
 		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, map[string]string{
-				"error": "Database error",
-			})
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
 		}
 
 		accounts := make([]Account, 0, len(memberAccounts))
@@ -399,15 +378,15 @@ func (h *ListsHandler) GetAccounts(c echo.Context) error {
 				Fields:       []Field{},
 			})
 		}
-		return c.JSON(http.StatusOK, accounts)
+		web.JSON(w, http.StatusOK, accounts)
+		return
 	}
 
 	// In-memory fallback
 	accountLists := h.memLists[accountID]
 	if accountLists == nil || accountLists[listID] == nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 	members := h.memListMembers[listID]
 	accounts := make([]Account, 0, len(members))
@@ -425,32 +404,29 @@ func (h *ListsHandler) GetAccounts(c echo.Context) error {
 			Fields:       []Field{},
 		})
 	}
-	return c.JSON(http.StatusOK, accounts)
+	web.JSON(w, http.StatusOK, accounts)
 }
 
 // AddAccounts handles POST /api/v1/lists/:id/accounts
-func (h *ListsHandler) AddAccounts(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *ListsHandler) AddAccounts(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	listID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	listID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	var req struct {
 		AccountIDs []string `json:"account_ids" form:"account_ids[]"`
 	}
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, map[string]string{
-			"error": "Invalid request body",
-		})
+	if err := web.Bind(r, &req); err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
 	}
 
 	if h.useDB() {
@@ -459,9 +435,8 @@ func (h *ListsHandler) AddAccounts(c echo.Context) error {
 			AccountID: accountID,
 		})
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-				"error": "Record not found",
-			})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
 		for _, idStr := range req.AccountIDs {
 			id, err := strconv.ParseInt(idStr, 10, 64)
@@ -484,15 +459,15 @@ func (h *ListsHandler) AddAccounts(c echo.Context) error {
 				FollowID:  pgtype.Int8{Int64: follow.ID, Valid: true},
 			})
 		}
-		return c.JSON(http.StatusOK, map[string]any{})
+		web.JSON(w, http.StatusOK, map[string]any{})
+		return
 	}
 
 	// In-memory fallback
 	accountLists := h.memLists[accountID]
 	if accountLists == nil || accountLists[listID] == nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 	for _, idStr := range req.AccountIDs {
 		id, err := strconv.ParseInt(idStr, 10, 64)
@@ -501,32 +476,29 @@ func (h *ListsHandler) AddAccounts(c echo.Context) error {
 		}
 		h.memListMembers[listID] = append(h.memListMembers[listID], id)
 	}
-	return c.JSON(http.StatusOK, map[string]any{})
+	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
 // RemoveAccounts handles DELETE /api/v1/lists/:id/accounts
-func (h *ListsHandler) RemoveAccounts(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *ListsHandler) RemoveAccounts(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	listID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	listID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	var req struct {
 		AccountIDs []string `json:"account_ids" form:"account_ids[]"`
 	}
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, map[string]string{
-			"error": "Invalid request body",
-		})
+	if err := web.Bind(r, &req); err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
 	}
 
 	if h.useDB() {
@@ -535,9 +507,8 @@ func (h *ListsHandler) RemoveAccounts(c echo.Context) error {
 			AccountID: accountID,
 		})
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-				"error": "Record not found",
-			})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
 		for _, idStr := range req.AccountIDs {
 			id, err := strconv.ParseInt(idStr, 10, 64)
@@ -549,15 +520,15 @@ func (h *ListsHandler) RemoveAccounts(c echo.Context) error {
 				AccountID: id,
 			})
 		}
-		return c.JSON(http.StatusOK, map[string]any{})
+		web.JSON(w, http.StatusOK, map[string]any{})
+		return
 	}
 
 	// In-memory fallback
 	accountLists := h.memLists[accountID]
 	if accountLists == nil || accountLists[listID] == nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 	toRemove := make(map[int64]bool)
 	for _, idStr := range req.AccountIDs {
@@ -571,18 +542,17 @@ func (h *ListsHandler) RemoveAccounts(c echo.Context) error {
 		}
 	}
 	h.memListMembers[listID] = newMembers
-	return c.JSON(http.StatusOK, map[string]any{})
+	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
 // RegisterRoutes registers list routes
-func (h *ListsHandler) RegisterRoutes(g *echo.Group) {
-	lists := g.Group("/lists")
-	lists.GET("", h.GetAll)
-	lists.POST("", h.Create)
-	lists.GET("/:id", h.Get)
-	lists.PUT("/:id", h.Update)
-	lists.DELETE("/:id", h.Delete)
-	lists.GET("/:id/accounts", h.GetAccounts)
-	lists.POST("/:id/accounts", h.AddAccounts)
-	lists.DELETE("/:id/accounts", h.RemoveAccounts)
+func (h *ListsHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v1/lists", h.GetAll)
+	mux.HandleFunc("POST /api/v1/lists", h.Create)
+	mux.HandleFunc("GET /api/v1/lists/{id}", h.Get)
+	mux.HandleFunc("PUT /api/v1/lists/{id}", h.Update)
+	mux.HandleFunc("DELETE /api/v1/lists/{id}", h.Delete)
+	mux.HandleFunc("GET /api/v1/lists/{id}/accounts", h.GetAccounts)
+	mux.HandleFunc("POST /api/v1/lists/{id}/accounts", h.AddAccounts)
+	mux.HandleFunc("DELETE /api/v1/lists/{id}/accounts", h.RemoveAccounts)
 }

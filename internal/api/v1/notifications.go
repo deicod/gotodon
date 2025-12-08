@@ -7,10 +7,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/labstack/echo/v4"
-
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/web"
 )
 
 // NotificationsHandler handles notification endpoints
@@ -77,19 +76,18 @@ func (h *NotificationsHandler) dbNotificationToAPI(ctx context.Context, dbNotif 
 }
 
 // List handles GET /api/v1/notifications
-func (h *NotificationsHandler) List(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *NotificationsHandler) List(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	limit := parseLimit(c.QueryParam("limit"), 40, 80)
-	types := c.QueryParams()["types[]"]
-	excludeTypes := c.QueryParams()["exclude_types[]"]
+	limit := parseLimit(web.QueryParam(r, "limit"), 40, 80)
+	types := r.URL.Query()["types[]"]
+	excludeTypes := r.URL.Query()["exclude_types[]"]
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	if h.useDB() {
 		dbNotifs, err := h.queries.ListNotifications(ctx, db.ListNotificationsParams{
@@ -100,43 +98,42 @@ func (h *NotificationsHandler) List(c echo.Context) error {
 			Column5:   excludeTypes,
 		})
 		if err != nil {
-			return c.JSON(http.StatusOK, []Notification{})
+			web.JSON(w, http.StatusOK, []Notification{})
+			return
 		}
 
 		notifications := make([]Notification, len(dbNotifs))
 		for i, n := range dbNotifs {
 			notifications[i] = h.dbNotificationToAPI(ctx, n)
 		}
-		return c.JSON(http.StatusOK, notifications)
+		web.JSON(w, http.StatusOK, notifications)
+		return
 	}
 
-	return c.JSON(http.StatusOK, []Notification{})
+	web.JSON(w, http.StatusOK, []Notification{})
 }
 
 // Get handles GET /api/v1/notifications/:id
-func (h *NotificationsHandler) Get(c echo.Context) error {
-	idStr := c.Param("id")
+func (h *NotificationsHandler) Get(w http.ResponseWriter, r *http.Request) {
+	idStr := web.Param(r, "id")
 	if idStr == "" {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
-	accountID, ok := middleware.GetAccountID(c)
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	if h.useDB() {
 		dbNotif, err := h.queries.GetNotification(ctx, db.GetNotificationParams{
@@ -144,17 +141,17 @@ func (h *NotificationsHandler) Get(c echo.Context) error {
 			AccountID: accountID,
 		})
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-				"error": "Record not found",
-			})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
-		return c.JSON(http.StatusOK, h.dbNotificationToAPI(ctx, dbNotif))
+		web.JSON(w, http.StatusOK, h.dbNotificationToAPI(ctx, dbNotif))
+		return
 	}
 
 	// Mock fallback
 	now := time.Now()
 	discoverable := true
-	return c.JSON(http.StatusOK, Notification{
+	web.JSON(w, http.StatusOK, Notification{
 		ID:        idStr,
 		Type:      "favourite",
 		CreatedAt: now.Add(-time.Hour),
@@ -172,57 +169,49 @@ func (h *NotificationsHandler) Get(c echo.Context) error {
 }
 
 // Clear handles POST /api/v1/notifications/clear
-func (h *NotificationsHandler) Clear(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *NotificationsHandler) Clear(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
-
-	ctx := context.Background()
 
 	if h.useDB() {
-		_ = h.queries.ClearNotifications(ctx, accountID)
+		_ = h.queries.ClearNotifications(r.Context(), accountID)
 	}
 
-	return c.JSON(http.StatusOK, map[string]any{})
+	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
 // Dismiss handles POST /api/v1/notifications/:id/dismiss
-func (h *NotificationsHandler) Dismiss(c echo.Context) error {
-	idStr := c.Param("id")
-	accountID, ok := middleware.GetAccountID(c)
+func (h *NotificationsHandler) Dismiss(w http.ResponseWriter, r *http.Request) {
+	idStr := web.Param(r, "id")
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
-	ctx := context.Background()
-
 	if h.useDB() {
-		_ = h.queries.DeleteNotification(ctx, db.DeleteNotificationParams{
+		_ = h.queries.DeleteNotification(r.Context(), db.DeleteNotificationParams{
 			ID:        id,
 			AccountID: accountID,
 		})
 	}
 
-	return c.JSON(http.StatusOK, map[string]any{})
+	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
 // RegisterRoutes registers the notifications routes
-func (h *NotificationsHandler) RegisterRoutes(g *echo.Group) {
-	notifications := g.Group("/notifications")
-	notifications.GET("", h.List)
-	notifications.GET("/:id", h.Get)
-	notifications.POST("/clear", h.Clear)
-	notifications.POST("/:id/dismiss", h.Dismiss)
+func (h *NotificationsHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v1/notifications", h.List)
+	mux.HandleFunc("GET /api/v1/notifications/{id}", h.Get)
+	mux.HandleFunc("POST /api/v1/notifications/clear", h.Clear)
+	mux.HandleFunc("POST /api/v1/notifications/{id}/dismiss", h.Dismiss)
 }

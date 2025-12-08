@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/deicod/gotodon/internal/db"
-	"github.com/labstack/echo/v4"
+	"github.com/deicod/gotodon/internal/web"
 )
 
 // TrendsHandler handles trends endpoints
@@ -59,16 +59,18 @@ type TrendingLink struct {
 }
 
 // Tags handles GET /api/v1/trends/tags
-func (h *TrendsHandler) Tags(c echo.Context) error {
-	limit := parseTrendLimit(c.QueryParam("limit"), 10, 20)
+func (h *TrendsHandler) Tags(w http.ResponseWriter, r *http.Request) {
+	limit := parseTrendLimit(web.QueryParam(r, "limit"), 10, 20)
 
 	if h.queries == nil {
-		return c.JSON(http.StatusOK, []TrendingTag{})
+		web.JSON(w, http.StatusOK, []TrendingTag{})
+		return
 	}
 
-	tags, err := h.queries.GetTrendingTags(c.Request().Context(), int32(limit))
+	tags, err := h.queries.GetTrendingTags(r.Context(), int32(limit))
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		web.JSONError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 
 	resp := []TrendingTag{}
@@ -86,20 +88,22 @@ func (h *TrendsHandler) Tags(c echo.Context) error {
 		})
 	}
 
-	return c.JSON(http.StatusOK, resp)
+	web.JSON(w, http.StatusOK, resp)
 }
 
 // Statuses handles GET /api/v1/trends/statuses
-func (h *TrendsHandler) Statuses(c echo.Context) error {
-	limit := parseTrendLimit(c.QueryParam("limit"), 20, 40)
+func (h *TrendsHandler) Statuses(w http.ResponseWriter, r *http.Request) {
+	limit := parseTrendLimit(web.QueryParam(r, "limit"), 20, 40)
 
 	if h.queries == nil {
-		return c.JSON(http.StatusOK, []Status{})
+		web.JSON(w, http.StatusOK, []Status{})
+		return
 	}
 
-	statuses, err := h.queries.GetTrendingStatuses(c.Request().Context(), int32(limit))
+	statuses, err := h.queries.GetTrendingStatuses(r.Context(), int32(limit))
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		web.JSONError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 
 	resp := []Status{}
@@ -121,13 +125,13 @@ func (h *TrendsHandler) Statuses(c echo.Context) error {
 		})
 	}
 
-	return c.JSON(http.StatusOK, resp)
+	web.JSON(w, http.StatusOK, resp)
 }
 
 // Links handles GET /api/v1/trends/links
-func (h *TrendsHandler) Links(c echo.Context) error {
+func (h *TrendsHandler) Links(w http.ResponseWriter, r *http.Request) {
 	// Mock trending links - empty for now
-	return c.JSON(http.StatusOK, []TrendingLink{})
+	web.JSON(w, http.StatusOK, []TrendingLink{})
 }
 
 func parseTrendLimit(s string, defaultVal, maxVal int) int {
@@ -145,9 +149,8 @@ func parseTrendLimit(s string, defaultVal, maxVal int) int {
 }
 
 // RegisterRoutes registers trends routes
-func (h *TrendsHandler) RegisterRoutes(g *echo.Group) {
-	trends := g.Group("/trends")
-	trends.GET("/tags", h.Tags)
-	trends.GET("/statuses", h.Statuses)
-	trends.GET("/links", h.Links)
+func (h *TrendsHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v1/trends/tags", h.Tags)
+	mux.HandleFunc("GET /api/v1/trends/statuses", h.Statuses)
+	mux.HandleFunc("GET /api/v1/trends/links", h.Links)
 }

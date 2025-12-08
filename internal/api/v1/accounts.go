@@ -8,11 +8,11 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/labstack/echo/v4"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/web"
 )
 
 // AccountsHandler handles account-related endpoints
@@ -162,25 +162,23 @@ func (h *AccountsHandler) dbAccountWithStats(ctx context.Context, dbAcc db.Accou
 }
 
 // VerifyCredentials handles GET /api/v1/accounts/verify_credentials
-func (h *AccountsHandler) VerifyCredentials(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *AccountsHandler) VerifyCredentials(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	if h.useDB() {
 		dbAcc, err := h.queries.GetAccountByID(ctx, accountID)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-				"error": "Record not found",
-			})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
 		acc := h.dbAccountWithStats(ctx, dbAcc)
-		return c.JSON(http.StatusOK, CredentialAccount{
+		web.JSON(w, http.StatusOK, CredentialAccount{
 			Account: acc,
 			Source: AccountSource{
 				Privacy:             "public",
@@ -191,11 +189,12 @@ func (h *AccountsHandler) VerifyCredentials(c echo.Context) error {
 				FollowRequestsCount: 0,
 			},
 		})
+		return
 	}
 
 	// Fallback mock
 	discoverable := true
-	return c.JSON(http.StatusOK, CredentialAccount{
+	web.JSON(w, http.StatusOK, CredentialAccount{
 		Account: Account{
 			ID:             strconv.FormatInt(accountID, 10),
 			Username:       "user",
@@ -249,22 +248,20 @@ type UpdateCredentialsRequest struct {
 }
 
 // UpdateCredentials handles PATCH /api/v1/accounts/update_credentials
-func (h *AccountsHandler) UpdateCredentials(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	var req UpdateCredentialsRequest
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, map[string]string{
-			"error": "Invalid request body",
-		})
+	if err := web.Bind(r, &req); err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	if h.useDB() {
 		params := db.UpdateAccountParams{ID: accountID}
@@ -286,12 +283,11 @@ func (h *AccountsHandler) UpdateCredentials(c echo.Context) error {
 
 		dbAcc, err := h.queries.UpdateAccount(ctx, params)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, map[string]string{
-				"error": "Failed to update account",
-			})
+			web.JSONError(w, http.StatusInternalServerError, "Failed to update account")
+			return
 		}
 		acc := h.dbAccountWithStats(ctx, dbAcc)
-		return c.JSON(http.StatusOK, CredentialAccount{
+		web.JSON(w, http.StatusOK, CredentialAccount{
 			Account: acc,
 			Source: AccountSource{
 				Privacy:             "public",
@@ -302,42 +298,41 @@ func (h *AccountsHandler) UpdateCredentials(c echo.Context) error {
 				FollowRequestsCount: 0,
 			},
 		})
+		return
 	}
 
-	return h.VerifyCredentials(c)
+	h.VerifyCredentials(w, r)
 }
 
 // Get handles GET /api/v1/accounts/:id
-func (h *AccountsHandler) Get(c echo.Context) error {
-	idStr := c.Param("id")
+func (h *AccountsHandler) Get(w http.ResponseWriter, r *http.Request) {
+	idStr := web.Param(r, "id")
 	if idStr == "" {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	if h.useDB() {
 		dbAcc, err := h.queries.GetAccountByID(ctx, id)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-				"error": "Record not found",
-			})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
-		return c.JSON(http.StatusOK, h.dbAccountWithStats(ctx, dbAcc))
+		web.JSON(w, http.StatusOK, h.dbAccountWithStats(ctx, dbAcc))
+		return
 	}
 
 	// Fallback mock
 	discoverable := true
-	return c.JSON(http.StatusOK, Account{
+	web.JSON(w, http.StatusOK, Account{
 		ID:             idStr,
 		Username:       "user",
 		Acct:           "user",
@@ -375,36 +370,31 @@ type RegisterAccountRequest struct {
 }
 
 // Register handles POST /api/v1/accounts
-func (h *AccountsHandler) Register(c echo.Context) error {
+func (h *AccountsHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var req RegisterAccountRequest
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, map[string]string{
-			"error": "Invalid request body",
-		})
+	if err := web.Bind(r, &req); err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
 	}
 
 	if req.Username == "" {
-		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-			"error": "Validation failed: Username can't be blank",
-		})
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Username can't be blank")
+		return
 	}
 	if req.Email == "" || !auth.ValidateEmail(req.Email) {
-		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-			"error": "Validation failed: Email is invalid",
-		})
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Email is invalid")
+		return
 	}
 	if err := auth.ValidatePassword(req.Password); err != nil {
-		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-			"error": "Validation failed: Password " + err.Error(),
-		})
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Password "+err.Error())
+		return
 	}
 	if !req.Agreement {
-		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-			"error": "Validation failed: Agreement must be accepted",
-		})
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Agreement must be accepted")
+		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	if h.useDB() {
 		dbAcc, err := h.queries.CreateAccount(ctx, db.CreateAccountParams{
@@ -418,23 +408,23 @@ func (h *AccountsHandler) Register(c echo.Context) error {
 			Protocol:     0,
 		})
 		if err != nil {
-			return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-				"error": "Validation failed: Username has already been taken",
-			})
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Username has already been taken")
+			return
 		}
 
 		// Create account stats
 		_, _ = h.queries.CreateAccountStats(ctx, dbAcc.ID)
 
-		return c.JSON(http.StatusOK, map[string]interface{}{
+		web.JSON(w, http.StatusOK, map[string]interface{}{
 			"access_token": "placeholder_token",
 			"token_type":   "Bearer",
 			"scope":        "read write follow push",
 			"created_at":   dbAcc.CreatedAt.Time.Unix(),
 		})
+		return
 	}
 
-	return c.JSON(http.StatusOK, map[string]interface{}{
+	web.JSON(w, http.StatusOK, map[string]interface{}{
 		"access_token": "placeholder_token",
 		"token_type":   "Bearer",
 		"scope":        "read write follow push",
@@ -443,20 +433,21 @@ func (h *AccountsHandler) Register(c echo.Context) error {
 }
 
 // Search handles GET /api/v1/accounts/search
-func (h *AccountsHandler) Search(c echo.Context) error {
-	query := c.QueryParam("q")
+func (h *AccountsHandler) Search(w http.ResponseWriter, r *http.Request) {
+	query := web.QueryParam(r, "q")
 	if query == "" {
-		return c.JSON(http.StatusOK, []Account{})
+		web.JSON(w, http.StatusOK, []Account{})
+		return
 	}
 
 	limit := 40
-	if l := c.QueryParam("limit"); l != "" {
+	if l := web.QueryParam(r, "limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 80 {
 			limit = parsed
 		}
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	if h.useDB() {
 		dbAccounts, err := h.queries.SearchAccounts(ctx, db.SearchAccountsParams{
@@ -465,75 +456,83 @@ func (h *AccountsHandler) Search(c echo.Context) error {
 			Offset: 0,
 		})
 		if err != nil {
-			return c.JSON(http.StatusOK, []Account{})
+			web.JSON(w, http.StatusOK, []Account{})
+			return
 		}
 
 		accounts := make([]Account, len(dbAccounts))
 		for i, dbAcc := range dbAccounts {
 			accounts[i] = h.dbAccountWithStats(ctx, dbAcc)
 		}
-		return c.JSON(http.StatusOK, accounts)
+		web.JSON(w, http.StatusOK, accounts)
+		return
 	}
 
-	return c.JSON(http.StatusOK, []Account{})
+	web.JSON(w, http.StatusOK, []Account{})
 }
 
 // Followers handles GET /api/v1/accounts/:id/followers
-func (h *AccountsHandler) Followers(c echo.Context) error {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+func (h *AccountsHandler) Followers(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
-	limit := parseAccountLimit(c.QueryParam("limit"), 40, 80)
+	limit := parseAccountLimit(web.QueryParam(r, "limit"), 40, 80)
 
 	if h.useDB() {
-		followers, err := h.queries.GetFollowers(c.Request().Context(), db.GetFollowersParams{
+		followers, err := h.queries.GetFollowers(r.Context(), db.GetFollowersParams{
 			TargetAccountID: id,
 			Limit:           int32(limit),
 			Offset:          0,
 		})
 		if err != nil {
-			return c.JSON(http.StatusOK, []Account{})
+			web.JSON(w, http.StatusOK, []Account{})
+			return
 		}
 
 		accounts := make([]Account, len(followers))
 		for i, acc := range followers {
 			accounts[i] = h.dbAccountToAPI(acc)
 		}
-		return c.JSON(http.StatusOK, accounts)
+		web.JSON(w, http.StatusOK, accounts)
+		return
 	}
 
-	return c.JSON(http.StatusOK, []Account{})
+	web.JSON(w, http.StatusOK, []Account{})
 }
 
 // Following handles GET /api/v1/accounts/:id/following
-func (h *AccountsHandler) Following(c echo.Context) error {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+func (h *AccountsHandler) Following(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
-	limit := parseAccountLimit(c.QueryParam("limit"), 40, 80)
+	limit := parseAccountLimit(web.QueryParam(r, "limit"), 40, 80)
 
 	if h.useDB() {
-		following, err := h.queries.GetFollowing(c.Request().Context(), db.GetFollowingParams{
+		following, err := h.queries.GetFollowing(r.Context(), db.GetFollowingParams{
 			AccountID: id,
 			Limit:     int32(limit),
 			Offset:    0,
 		})
 		if err != nil {
-			return c.JSON(http.StatusOK, []Account{})
+			web.JSON(w, http.StatusOK, []Account{})
+			return
 		}
 
 		accounts := make([]Account, len(following))
 		for i, acc := range following {
 			accounts[i] = h.dbAccountToAPI(acc)
 		}
-		return c.JSON(http.StatusOK, accounts)
+		web.JSON(w, http.StatusOK, accounts)
+		return
 	}
 
-	return c.JSON(http.StatusOK, []Account{})
+	web.JSON(w, http.StatusOK, []Account{})
 }
 
 // Relationship represents the relationship between accounts
@@ -556,28 +555,32 @@ type Relationship struct {
 }
 
 // Follow handles POST /api/v1/accounts/:id/follow
-func (h *AccountsHandler) Follow(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *AccountsHandler) Follow(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	targetID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	targetID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	if accountID == targetID {
-		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{"error": "Cannot follow yourself"})
+		web.JSONError(w, http.StatusUnprocessableEntity, "Cannot follow yourself")
+		return
 	}
 
 	if h.useDB() {
-		ctx := c.Request().Context()
+		ctx := r.Context()
 
 		// Check if target account exists
 		targetAcc, err := h.queries.GetAccountByID(ctx, targetID)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
 
 		// Create follow (or follow request if locked)
@@ -595,59 +598,65 @@ func (h *AccountsHandler) Follow(c echo.Context) error {
 
 		// Return relationship
 		rel := h.getRelationship(ctx, accountID, targetID)
-		return c.JSON(http.StatusOK, rel)
+		web.JSON(w, http.StatusOK, rel)
+		return
 	}
 
-	return c.JSON(http.StatusOK, Relationship{
-		ID:        c.Param("id"),
+	web.JSON(w, http.StatusOK, Relationship{
+		ID:        web.Param(r, "id"),
 		Following: true,
 		Languages: []any{},
 	})
 }
 
 // Unfollow handles POST /api/v1/accounts/:id/unfollow
-func (h *AccountsHandler) Unfollow(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *AccountsHandler) Unfollow(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	targetID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	targetID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	if h.useDB() {
-		ctx := c.Request().Context()
+		ctx := r.Context()
 		_ = h.queries.DeleteFollow(ctx, db.DeleteFollowParams{
 			AccountID:       accountID,
 			TargetAccountID: targetID,
 		})
 
 		rel := h.getRelationship(ctx, accountID, targetID)
-		return c.JSON(http.StatusOK, rel)
+		web.JSON(w, http.StatusOK, rel)
+		return
 	}
 
-	return c.JSON(http.StatusOK, Relationship{
-		ID:        c.Param("id"),
+	web.JSON(w, http.StatusOK, Relationship{
+		ID:        web.Param(r, "id"),
 		Following: false,
 		Languages: []any{},
 	})
 }
 
 // Relationships handles GET /api/v1/accounts/relationships
-func (h *AccountsHandler) Relationships(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *AccountsHandler) Relationships(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	ids := c.QueryParams()["id[]"]
+	ids := r.URL.Query()["id[]"]
 	if len(ids) == 0 {
-		return c.JSON(http.StatusOK, []Relationship{})
+		web.JSON(w, http.StatusOK, []Relationship{})
+		return
 	}
 
-	ctx := c.Request().Context()
+	ctx := r.Context()
 	relationships := make([]Relationship, 0, len(ids))
 
 	for _, idStr := range ids {
@@ -666,7 +675,7 @@ func (h *AccountsHandler) Relationships(c echo.Context) error {
 		}
 	}
 
-	return c.JSON(http.StatusOK, relationships)
+	web.JSON(w, http.StatusOK, relationships)
 }
 
 func (h *AccountsHandler) getRelationship(ctx context.Context, accountID, targetID int64) Relationship {
@@ -734,149 +743,160 @@ func parseAccountLimit(s string, defaultVal, maxVal int) int {
 }
 
 // Statuses handles GET /api/v1/accounts/:id/statuses
-func (h *AccountsHandler) Statuses(c echo.Context) error {
-	targetID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+func (h *AccountsHandler) Statuses(w http.ResponseWriter, r *http.Request) {
+	targetID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
-	limit := parseAccountLimit(c.QueryParam("limit"), 20, 40)
+	limit := parseAccountLimit(web.QueryParam(r, "limit"), 20, 40)
 
 	if h.useDB() {
-		statuses, err := h.queries.GetAccountStatuses(c.Request().Context(), db.GetAccountStatusesParams{
+		statuses, err := h.queries.GetAccountStatuses(r.Context(), db.GetAccountStatusesParams{
 			AccountID: targetID,
 			Limit:     int32(limit),
 			Offset:    0,
 		})
 		if err != nil {
-			return c.JSON(http.StatusOK, []any{})
+			web.JSON(w, http.StatusOK, []any{})
+			return
 		}
-		return c.JSON(http.StatusOK, statuses)
+		web.JSON(w, http.StatusOK, statuses)
+		return
 	}
 
-	return c.JSON(http.StatusOK, []any{})
+	web.JSON(w, http.StatusOK, []any{})
 }
 
 // Block handles POST /api/v1/accounts/:id/block
-func (h *AccountsHandler) Block(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *AccountsHandler) Block(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	targetID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	targetID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	if h.useDB() {
-		_, _ = h.queries.CreateBlock(c.Request().Context(), db.CreateBlockParams{
+		_, _ = h.queries.CreateBlock(r.Context(), db.CreateBlockParams{
 			AccountID:       accountID,
 			TargetAccountID: targetID,
 		})
 	}
 
-	rel := h.getRelationship(c.Request().Context(), accountID, targetID)
-	return c.JSON(http.StatusOK, rel)
+	rel := h.getRelationship(r.Context(), accountID, targetID)
+	web.JSON(w, http.StatusOK, rel)
 }
 
 // Unblock handles POST /api/v1/accounts/:id/unblock
-func (h *AccountsHandler) Unblock(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *AccountsHandler) Unblock(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	targetID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	targetID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	if h.useDB() {
-		_ = h.queries.DeleteBlock(c.Request().Context(), db.DeleteBlockParams{
+		_ = h.queries.DeleteBlock(r.Context(), db.DeleteBlockParams{
 			AccountID:       accountID,
 			TargetAccountID: targetID,
 		})
 	}
 
-	rel := h.getRelationship(c.Request().Context(), accountID, targetID)
-	return c.JSON(http.StatusOK, rel)
+	rel := h.getRelationship(r.Context(), accountID, targetID)
+	web.JSON(w, http.StatusOK, rel)
 }
 
 // Mute handles POST /api/v1/accounts/:id/mute
-func (h *AccountsHandler) Mute(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *AccountsHandler) Mute(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	targetID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	targetID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	if h.useDB() {
-		_, _ = h.queries.CreateMute(c.Request().Context(), db.CreateMuteParams{
+		_, _ = h.queries.CreateMute(r.Context(), db.CreateMuteParams{
 			AccountID:       accountID,
 			TargetAccountID: targetID,
 		})
 	}
 
-	rel := h.getRelationship(c.Request().Context(), accountID, targetID)
-	return c.JSON(http.StatusOK, rel)
+	rel := h.getRelationship(r.Context(), accountID, targetID)
+	web.JSON(w, http.StatusOK, rel)
 }
 
 // Unmute handles POST /api/v1/accounts/:id/unmute
-func (h *AccountsHandler) Unmute(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *AccountsHandler) Unmute(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	targetID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	targetID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	if h.useDB() {
-		_ = h.queries.DeleteMute(c.Request().Context(), db.DeleteMuteParams{
+		_ = h.queries.DeleteMute(r.Context(), db.DeleteMuteParams{
 			AccountID:       accountID,
 			TargetAccountID: targetID,
 		})
 	}
 
-	rel := h.getRelationship(c.Request().Context(), accountID, targetID)
-	return c.JSON(http.StatusOK, rel)
+	rel := h.getRelationship(r.Context(), accountID, targetID)
+	web.JSON(w, http.StatusOK, rel)
 }
 
 // FamiliarFollowers handles GET /api/v1/accounts/familiar_followers
-func (h *AccountsHandler) FamiliarFollowers(c echo.Context) error {
-	_, ok := middleware.GetAccountID(c)
+func (h *AccountsHandler) FamiliarFollowers(w http.ResponseWriter, r *http.Request) {
+	_, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	// Return empty familiar followers for now
-	return c.JSON(http.StatusOK, []map[string]any{})
+	web.JSON(w, http.StatusOK, []map[string]any{})
 }
 
 // RegisterRoutes registers the accounts routes
-func (h *AccountsHandler) RegisterRoutes(g *echo.Group) {
-	accounts := g.Group("/accounts")
-	accounts.GET("/verify_credentials", h.VerifyCredentials)
-	accounts.PATCH("/update_credentials", h.UpdateCredentials)
-	accounts.GET("/search", h.Search)
-	accounts.GET("/relationships", h.Relationships)
-	accounts.GET("/familiar_followers", h.FamiliarFollowers)
-	accounts.POST("", h.Register)
-	accounts.GET("/:id", h.Get)
-	accounts.GET("/:id/statuses", h.Statuses)
-	accounts.GET("/:id/followers", h.Followers)
-	accounts.GET("/:id/following", h.Following)
-	accounts.POST("/:id/follow", h.Follow)
-	accounts.POST("/:id/unfollow", h.Unfollow)
-	accounts.POST("/:id/block", h.Block)
-	accounts.POST("/:id/unblock", h.Unblock)
-	accounts.POST("/:id/mute", h.Mute)
-	accounts.POST("/:id/unmute", h.Unmute)
+func (h *AccountsHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v1/accounts/verify_credentials", h.VerifyCredentials)
+	mux.HandleFunc("PATCH /api/v1/accounts/update_credentials", h.UpdateCredentials)
+	mux.HandleFunc("GET /api/v1/accounts/search", h.Search)
+	mux.HandleFunc("GET /api/v1/accounts/relationships", h.Relationships)
+	mux.HandleFunc("GET /api/v1/accounts/familiar_followers", h.FamiliarFollowers)
+	mux.HandleFunc("POST /api/v1/accounts", h.Register)
+	mux.HandleFunc("GET /api/v1/accounts/{id}", h.Get)
+	mux.HandleFunc("GET /api/v1/accounts/{id}/statuses", h.Statuses)
+	mux.HandleFunc("GET /api/v1/accounts/{id}/followers", h.Followers)
+	mux.HandleFunc("GET /api/v1/accounts/{id}/following", h.Following)
+	mux.HandleFunc("POST /api/v1/accounts/{id}/follow", h.Follow)
+	mux.HandleFunc("POST /api/v1/accounts/{id}/unfollow", h.Unfollow)
+	mux.HandleFunc("POST /api/v1/accounts/{id}/block", h.Block)
+	mux.HandleFunc("POST /api/v1/accounts/{id}/unblock", h.Unblock)
+	mux.HandleFunc("POST /api/v1/accounts/{id}/mute", h.Mute)
+	mux.HandleFunc("POST /api/v1/accounts/{id}/unmute", h.Unmute)
 }

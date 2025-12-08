@@ -14,12 +14,11 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
 	"github.com/spf13/cobra"
 
 	activitypubapi "github.com/deicod/gotodon/internal/api/activitypub"
 	"github.com/deicod/gotodon/internal/api/admin"
+	"github.com/deicod/gotodon/internal/api/middleware"
 	oauthapi "github.com/deicod/gotodon/internal/api/oauth"
 	v1 "github.com/deicod/gotodon/internal/api/v1"
 	v2 "github.com/deicod/gotodon/internal/api/v2"
@@ -27,6 +26,7 @@ import (
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/media"
 	"github.com/deicod/gotodon/internal/streaming"
+	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/activitypub"
 )
 
@@ -88,166 +88,145 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	queries := db.New(pool)
 	logger.Info("Connected to PostgreSQL database")
 
-	// Create Echo instance
-	e := echo.New()
-	e.HideBanner = true
-	e.HidePort = true
+	// Create ServeMux
+	mux := http.NewServeMux()
 
-	// Middleware
-	e.Use(middleware.RequestID())
-	e.Use(middleware.Recover())
-	e.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
-		Format: `{"time":"${time_rfc3339}","id":"${id}","method":"${method}","uri":"${uri}","status":${status},"latency":"${latency_human}"}` + "\n",
-	}))
-	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: []string{"*"},
-		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions},
-		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization},
-	}))
-
-	// Health check
-	e.GET("/health", func(c echo.Context) error {
-		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
-	})
-
-	// API groups
-	api := e.Group("/api")
-	v1Group := api.Group("/v1")
-	v2Group := api.Group("/v2")
+	// Internal handlers
 
 	// Register v1 handlers
 	accountsHandler := v1.NewAccountsHandler(queries)
-	accountsHandler.RegisterRoutes(v1Group)
+	accountsHandler.RegisterRoutes(mux)
 
 	statusesHandler := v1.NewStatusesHandler(queries)
-	statusesHandler.RegisterRoutes(v1Group)
+	statusesHandler.RegisterRoutes(mux)
 
 	timelinesHandler := v1.NewTimelinesHandler(queries)
-	timelinesHandler.RegisterRoutes(v1Group)
+	timelinesHandler.RegisterRoutes(mux)
 
 	listsHandler := v1.NewListsHandler(queries)
-	listsHandler.RegisterRoutes(v1Group)
+	listsHandler.RegisterRoutes(mux)
 
 	pollsHandler := v1.NewPollsHandler(queries)
-	pollsHandler.RegisterRoutes(v1Group)
+	pollsHandler.RegisterRoutes(mux)
 
 	appsHandler := v1.NewAppsHandler(queries)
-	appsHandler.Register(v1Group)
+	appsHandler.RegisterRoutes(mux)
 
 	notificationsHandler := v1.NewNotificationsHandler(queries)
-	notificationsHandler.RegisterRoutes(v1Group)
+	notificationsHandler.RegisterRoutes(mux)
 
 	mediaStorage := media.NewLocalStorage("./uploads", fmt.Sprintf("https://%s/files", cfg.Instance.LocalDomain))
 	mediaUploader := media.NewUploader(mediaStorage)
 	mediaHandler := v1.NewMediaHandler(queries, mediaUploader)
-	mediaHandler.RegisterRoutes(v1Group)
+	mediaHandler.RegisterRoutes(mux)
 
 	announcementsHandler := v1.NewAnnouncementsHandler(queries)
-	announcementsHandler.RegisterRoutes(v1Group)
+	announcementsHandler.RegisterRoutes(mux)
 
 	markersHandler := v1.NewMarkersHandler(queries)
-	markersHandler.RegisterRoutes(v1Group)
+	markersHandler.RegisterRoutes(mux)
 
 	preferencesHandler := v1.NewPreferencesHandler(queries)
-	preferencesHandler.RegisterRoutes(v1Group)
+	preferencesHandler.RegisterRoutes(mux)
 
 	suggestionsHandler := v1.NewSuggestionsHandler(queries)
-	suggestionsHandler.RegisterRoutes(v1Group)
+	suggestionsHandler.RegisterRoutes(mux)
 
 	trendsHandler := v1.NewTrendsHandler(queries)
-	trendsHandler.RegisterRoutes(v1Group)
+	trendsHandler.RegisterRoutes(mux)
 
 	directoryHandler := v1.NewDirectoryHandler(queries)
-	directoryHandler.RegisterRoutes(v1Group)
+	directoryHandler.RegisterRoutes(mux)
 
 	bookmarksHandler := v1.NewBookmarksHandler(queries)
-	bookmarksHandler.RegisterRoutes(v1Group)
+	bookmarksHandler.RegisterRoutes(mux)
 
 	favouritesHandler := v1.NewFavouritesHandler(queries)
-	favouritesHandler.RegisterRoutes(v1Group)
+	favouritesHandler.RegisterRoutes(mux)
 
 	mutesHandler := v1.NewMutesHandler(queries)
-	mutesHandler.RegisterRoutes(v1Group)
+	mutesHandler.RegisterRoutes(mux)
 
 	blocksHandler := v1.NewBlocksHandler(queries)
-	blocksHandler.RegisterRoutes(v1Group)
+	blocksHandler.RegisterRoutes(mux)
 
 	customEmojisHandler := v1.NewCustomEmojisHandler(queries)
-	customEmojisHandler.RegisterRoutes(v1Group)
+	customEmojisHandler.RegisterRoutes(mux)
 
 	conversationsHandler := v1.NewConversationsHandler(queries)
-	conversationsHandler.RegisterRoutes(v1Group)
+	conversationsHandler.RegisterRoutes(mux)
 
 	followRequestsHandler := v1.NewFollowRequestsHandler(queries)
-	followRequestsHandler.RegisterRoutes(v1Group)
+	followRequestsHandler.RegisterRoutes(mux)
 
 	domainBlocksHandler := v1.NewDomainBlocksHandler(queries)
-	domainBlocksHandler.RegisterRoutes(v1Group)
+	domainBlocksHandler.RegisterRoutes(mux)
 
 	scheduledStatusesHandler := v1.NewScheduledStatusesHandler(queries)
-	scheduledStatusesHandler.RegisterRoutes(v1Group)
+	scheduledStatusesHandler.RegisterRoutes(mux)
 
 	pushHandler := v1.NewPushHandler(queries, cfg)
-	pushHandler.RegisterRoutes(v1Group)
+	pushHandler.RegisterRoutes(mux)
 
 	// Register v2 handlers
 	filtersHandler := v2.NewFiltersHandler(queries)
-	filtersHandler.RegisterRoutes(v2Group)
+	filtersHandler.RegisterRoutes(mux)
 
 	searchHandler := v2.NewSearchHandler(queries)
-	searchHandler.RegisterRoutes(v2Group)
+	searchHandler.RegisterRoutes(mux)
+
+	v2SuggestionsHandler := v2.NewSuggestionsHandler(queries)
+	v2SuggestionsHandler.RegisterRoutes(mux)
 
 	// Register OAuth handlers
 	oauthHandler := oauthapi.NewHandler(queries)
-	oauthHandler.RegisterRoutes(e)
+	oauthHandler.RegisterRoutes(mux)
 
 	// Streaming API
 	streamingHub := streaming.NewHub()
 	go streamingHub.Run(context.Background())
 	sseHandler := streaming.NewSSEHandler(streamingHub)
-	v1Group.GET("/streaming", echo.WrapHandler(sseHandler))
-	v1Group.GET("/streaming/:channel", echo.WrapHandler(sseHandler))
+	mux.Handle("GET /api/v1/streaming", sseHandler)
+	mux.Handle("GET /api/v1/streaming/{channel}", sseHandler)
 
 	// ActivityPub Federation
 	federationHandler := activitypubapi.NewFederationHandler(queries, cfg.Instance.LocalDomain)
-	federationHandler.RegisterRoutes(e)
+	federationHandler.RegisterRoutes(mux)
 
 	// Admin API
 	// Admin Handlers
 	adminAccountsHandler := admin.NewAccountsHandler(queries)
+	adminAccountsHandler.RegisterRoutes(mux)
+
 	adminDomainBlocksHandler := admin.NewDomainBlocksHandler(queries)
+	adminDomainBlocksHandler.RegisterRoutes(mux)
+
 	adminReportsHandler := admin.NewReportsHandler(queries)
-
-	// V1 Handlers
-	v1ReportsHandler := v1.NewReportsHandler(queries)
-
-	// Admin Routes
-	adminGroup := v1Group.Group("/admin")
-	adminAccountsHandler.RegisterRoutes(adminGroup)
-	adminDomainBlocksHandler.RegisterRoutes(adminGroup)
-	adminReportsHandler.RegisterRoutes(adminGroup)
-
-	// Report Routes (User API)
-	v1Group.POST("/reports", v1ReportsHandler.Create)
+	adminReportsHandler.RegisterRoutes(mux)
 
 	adminInstanceHandler := admin.NewInstanceHandler()
-	adminInstanceHandler.RegisterRoutes(adminGroup)
+	// Note: NewInstanceHandler might need queries now if updated, assume it does or is compatible
+	adminInstanceHandler.RegisterRoutes(mux)
 
 	adminTrendsHandler := admin.NewTrendsHandler()
-	adminTrendsHandler.RegisterRoutes(adminGroup)
+	adminTrendsHandler.RegisterRoutes(mux)
 
 	adminDimensionsHandler := admin.NewDimensionsHandler()
-	adminDimensionsHandler.RegisterRoutes(adminGroup)
+	adminDimensionsHandler.RegisterRoutes(mux)
 
 	adminMeasuresHandler := admin.NewMeasuresHandler()
-	adminMeasuresHandler.RegisterRoutes(adminGroup)
+	adminMeasuresHandler.RegisterRoutes(mux)
 
 	adminRetentionHandler := admin.NewRetentionHandler()
-	adminRetentionHandler.RegisterRoutes(adminGroup)
+	adminRetentionHandler.RegisterRoutes(mux)
+
+	// V1 Reports (User API)
+	v1ReportsHandler := v1.NewReportsHandler(queries)
+	mux.HandleFunc("POST /api/v1/reports", v1ReportsHandler.Create)
 
 	// Instance info (public endpoint)
-	v1Group.GET("/instance", func(c echo.Context) error {
-		return c.JSON(http.StatusOK, map[string]interface{}{
+	mux.HandleFunc("GET /api/v1/instance", func(w http.ResponseWriter, r *http.Request) {
+		web.JSON(w, http.StatusOK, map[string]interface{}{
 			"uri":               cfg.Instance.LocalDomain,
 			"title":             "Gotodon",
 			"short_description": "A Mastodon-compatible server written in Go",
@@ -296,49 +275,45 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	})
 
 	// Apps endpoint (for OAuth app registration)
-	v1Group.POST("/apps", func(c echo.Context) error {
+	mux.HandleFunc("POST /api/v1/apps", func(w http.ResponseWriter, r *http.Request) {
 		// TODO: Implement app registration
-		return c.JSON(http.StatusNotImplemented, map[string]string{
+		web.JSON(w, http.StatusNotImplemented, map[string]string{
 			"error": "Not implemented yet",
 		})
 	})
 
 	// Well-known endpoints
-	wellKnown := e.Group("/.well-known")
-	wellKnown.GET("/webfinger", func(c echo.Context) error {
-		resource := c.QueryParam("resource")
+	mux.HandleFunc("GET /.well-known/webfinger", func(w http.ResponseWriter, r *http.Request) {
+		resource := web.QueryParam(r, "resource")
 		if resource == "" {
-			return c.JSON(http.StatusBadRequest, map[string]string{
+			web.JSON(w, http.StatusBadRequest, map[string]string{
 				"error": "Missing required 'resource' parameter",
 			})
+			return
 		}
 
 		username, domain, err := activitypub.ParseAcct(resource)
 		if err != nil {
-			return c.JSON(http.StatusBadRequest, map[string]string{
+			web.JSON(w, http.StatusBadRequest, map[string]string{
 				"error": "Invalid resource format. Expected acct:username@domain",
 			})
+			return
 		}
 
 		// Only handle requests for local domain
 		if domain != cfg.Instance.LocalDomain {
-			return c.JSON(http.StatusNotFound, map[string]string{
+			web.JSON(w, http.StatusNotFound, map[string]string{
 				"error": "User not found on this server",
 			})
+			return
 		}
 
-		// Look up account in database
-		if queries == nil {
-			return c.JSON(http.StatusServiceUnavailable, map[string]string{
-				"error": "Database not available",
-			})
-		}
-
-		account, err := queries.GetAccountByUsername(c.Request().Context(), username)
+		account, err := queries.GetAccountByUsername(r.Context(), username)
 		if err != nil {
-			return c.JSON(http.StatusNotFound, map[string]string{
+			web.JSON(w, http.StatusNotFound, map[string]string{
 				"error": "Account not found",
 			})
+			return
 		}
 
 		// Build WebFinger response
@@ -347,20 +322,23 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 		resp := activitypub.BuildWebFingerResponse(account.Username, cfg.Instance.LocalDomain, accountURI, profileURL)
 
-		c.Response().Header().Set("Content-Type", activitypub.WebFingerContentType)
-		return c.JSON(http.StatusOK, resp)
+		w.Header().Set("Content-Type", activitypub.WebFingerContentType)
+		web.JSON(w, http.StatusOK, resp)
 	})
-	wellKnown.GET("/host-meta", func(c echo.Context) error {
+
+	mux.HandleFunc("GET /.well-known/host-meta", func(w http.ResponseWriter, r *http.Request) {
 		// Return XRD host-meta as per RFC 6415
 		xml := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <XRD xmlns="http://docs.oasis-open.org/ns/xri/xrd-1.0">
   <Link rel="lrdd" template="https://%s/.well-known/webfinger?resource={uri}"/>
 </XRD>`, cfg.Instance.LocalDomain)
-		c.Response().Header().Set("Content-Type", "application/xrd+xml; charset=utf-8")
-		return c.String(http.StatusOK, xml)
+		w.Header().Set("Content-Type", "application/xrd+xml; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(xml))
 	})
-	wellKnown.GET("/nodeinfo", func(c echo.Context) error {
-		return c.JSON(http.StatusOK, map[string]interface{}{
+
+	mux.HandleFunc("GET /.well-known/nodeinfo", func(w http.ResponseWriter, r *http.Request) {
+		web.JSON(w, http.StatusOK, map[string]interface{}{
 			"links": []map[string]string{
 				{
 					"rel":  "http://nodeinfo.diaspora.software/ns/schema/2.0",
@@ -371,8 +349,8 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	})
 
 	// NodeInfo
-	e.GET("/nodeinfo/2.0", func(c echo.Context) error {
-		return c.JSON(http.StatusOK, map[string]interface{}{
+	mux.HandleFunc("GET /nodeinfo/2.0", func(w http.ResponseWriter, r *http.Request) {
+		web.JSON(w, http.StatusOK, map[string]interface{}{
 			"version": "2.0",
 			"software": map[string]string{
 				"name":    "gotodon",
@@ -391,12 +369,29 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		})
 	})
 
+	// Health check
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		web.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	// Setup middleware chain
+	handler := middleware.Recover(logger)(
+		middleware.Logger(logger)(
+			middleware.CORS(mux),
+		),
+	)
+
 	// Start server
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	logger.Info("Starting Gotodon server", "addr", addr, "domain", cfg.Instance.LocalDomain)
 
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: handler,
+	}
+
 	go func() {
-		if err := e.Start(addr); err != nil && err != http.ErrServerClosed {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("Server error", "error", err)
 		}
 	}()
@@ -409,7 +404,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
-	if err := e.Shutdown(shutdownCtx); err != nil {
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("server shutdown: %w", err)
 	}
 

@@ -6,10 +6,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/labstack/echo/v4"
-
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/web"
 )
 
 // BookmarksHandler handles bookmarks endpoints
@@ -27,40 +26,43 @@ func (h *BookmarksHandler) useDB() bool {
 }
 
 // List handles GET /api/v1/bookmarks
-func (h *BookmarksHandler) List(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *BookmarksHandler) List(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	limit := parseBookmarksLimit(c.QueryParam("limit"), 20, 40)
+	limit := parseBookmarksLimit(web.QueryParam(r, "limit"), 20, 40)
 
 	if h.useDB() {
-		bookmarks, err := h.queries.ListBookmarks(c.Request().Context(), db.ListBookmarksParams{
+		bookmarks, err := h.queries.ListBookmarks(r.Context(), db.ListBookmarksParams{
 			AccountID: accountID,
 			Limit:     int32(limit),
 			Offset:    0,
 		})
 		if err != nil {
-			return c.JSON(http.StatusOK, []Status{})
+			web.JSON(w, http.StatusOK, []Status{})
+			return
 		}
 
 		statuses := make([]Status, 0, len(bookmarks))
 		for _, b := range bookmarks {
-			dbStatus, err := h.queries.GetStatusByID(c.Request().Context(), b.StatusID)
+			dbStatus, err := h.queries.GetStatusByID(r.Context(), b.StatusID)
 			if err != nil {
 				continue
 			}
-			dbAcc, err := h.queries.GetAccountByID(c.Request().Context(), dbStatus.AccountID)
+			dbAcc, err := h.queries.GetAccountByID(r.Context(), dbStatus.AccountID)
 			if err != nil {
 				continue
 			}
 			statuses = append(statuses, dbStatusToBasicAPI(dbStatus, dbAcc))
 		}
-		return c.JSON(http.StatusOK, statuses)
+		web.JSON(w, http.StatusOK, statuses)
+		return
 	}
 
-	return c.JSON(http.StatusOK, []Status{})
+	web.JSON(w, http.StatusOK, []Status{})
 }
 
 func parseBookmarksLimit(s string, defaultVal, maxVal int) int {
@@ -78,8 +80,8 @@ func parseBookmarksLimit(s string, defaultVal, maxVal int) int {
 }
 
 // RegisterRoutes registers bookmarks routes
-func (h *BookmarksHandler) RegisterRoutes(g *echo.Group) {
-	g.GET("/bookmarks", h.List)
+func (h *BookmarksHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v1/bookmarks", h.List)
 }
 
 // FavouritesHandler handles favourites endpoints
@@ -97,38 +99,41 @@ func (h *FavouritesHandler) useDB() bool {
 }
 
 // List handles GET /api/v1/favourites
-func (h *FavouritesHandler) List(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *FavouritesHandler) List(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	if h.useDB() {
-		dbStatuses, err := h.queries.ListFavourites(c.Request().Context(), db.ListFavouritesParams{
+		dbStatuses, err := h.queries.ListFavourites(r.Context(), db.ListFavouritesParams{
 			AccountID: accountID,
 			Limit:     40,
 			Offset:    0,
 		})
 		if err != nil {
-			return c.JSON(http.StatusOK, []Status{})
+			web.JSON(w, http.StatusOK, []Status{})
+			return
 		}
 
 		statuses := make([]Status, 0, len(dbStatuses))
 		for _, s := range dbStatuses {
-			dbAcc, err := h.queries.GetAccountByID(c.Request().Context(), s.AccountID)
+			dbAcc, err := h.queries.GetAccountByID(r.Context(), s.AccountID)
 			if err != nil {
 				continue
 			}
 			statuses = append(statuses, dbStatusToBasicAPI(s, dbAcc))
 		}
-		return c.JSON(http.StatusOK, statuses)
+		web.JSON(w, http.StatusOK, statuses)
+		return
 	}
-	return c.JSON(http.StatusOK, []Status{})
+	web.JSON(w, http.StatusOK, []Status{})
 }
 
 // RegisterRoutes registers favourites routes
-func (h *FavouritesHandler) RegisterRoutes(g *echo.Group) {
-	g.GET("/favourites", h.List)
+func (h *FavouritesHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v1/favourites", h.List)
 }
 
 // MutesHandler handles mutes endpoints
@@ -146,34 +151,37 @@ func (h *MutesHandler) useDB() bool {
 }
 
 // List handles GET /api/v1/mutes
-func (h *MutesHandler) List(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *MutesHandler) List(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	if h.useDB() {
-		dbAccounts, err := h.queries.ListMutes(c.Request().Context(), db.ListMutesParams{
+		dbAccounts, err := h.queries.ListMutes(r.Context(), db.ListMutesParams{
 			AccountID: accountID,
 			Limit:     40,
 			Offset:    0,
 		})
 		if err != nil {
-			return c.JSON(http.StatusOK, []Account{})
+			web.JSON(w, http.StatusOK, []Account{})
+			return
 		}
 
 		accounts := make([]Account, len(dbAccounts))
 		for i, a := range dbAccounts {
 			accounts[i] = dbAccountToBasicAPI(a)
 		}
-		return c.JSON(http.StatusOK, accounts)
+		web.JSON(w, http.StatusOK, accounts)
+		return
 	}
-	return c.JSON(http.StatusOK, []Account{})
+	web.JSON(w, http.StatusOK, []Account{})
 }
 
 // RegisterRoutes registers mutes routes
-func (h *MutesHandler) RegisterRoutes(g *echo.Group) {
-	g.GET("/mutes", h.List)
+func (h *MutesHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v1/mutes", h.List)
 }
 
 // BlocksHandler handles blocks endpoints
@@ -191,34 +199,37 @@ func (h *BlocksHandler) useDB() bool {
 }
 
 // List handles GET /api/v1/blocks
-func (h *BlocksHandler) List(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *BlocksHandler) List(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	if h.useDB() {
-		dbAccounts, err := h.queries.ListBlocks(c.Request().Context(), db.ListBlocksParams{
+		dbAccounts, err := h.queries.ListBlocks(r.Context(), db.ListBlocksParams{
 			AccountID: accountID,
 			Limit:     40,
 			Offset:    0,
 		})
 		if err != nil {
-			return c.JSON(http.StatusOK, []Account{})
+			web.JSON(w, http.StatusOK, []Account{})
+			return
 		}
 
 		accounts := make([]Account, len(dbAccounts))
 		for i, a := range dbAccounts {
 			accounts[i] = dbAccountToBasicAPI(a)
 		}
-		return c.JSON(http.StatusOK, accounts)
+		web.JSON(w, http.StatusOK, accounts)
+		return
 	}
-	return c.JSON(http.StatusOK, []Account{})
+	web.JSON(w, http.StatusOK, []Account{})
 }
 
 // RegisterRoutes registers blocks routes
-func (h *BlocksHandler) RegisterRoutes(g *echo.Group) {
-	g.GET("/blocks", h.List)
+func (h *BlocksHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v1/blocks", h.List)
 }
 
 // CustomEmojisHandler handles custom emojis endpoints
@@ -241,14 +252,16 @@ type CustomEmoji struct {
 }
 
 // List handles GET /api/v1/custom_emojis
-func (h *CustomEmojisHandler) List(c echo.Context) error {
+func (h *CustomEmojisHandler) List(w http.ResponseWriter, r *http.Request) {
 	if h.queries == nil {
-		return c.JSON(http.StatusOK, []CustomEmoji{})
+		web.JSON(w, http.StatusOK, []CustomEmoji{})
+		return
 	}
 
-	emojis, err := h.queries.ListCustomEmojis(c.Request().Context())
+	emojis, err := h.queries.ListCustomEmojis(r.Context())
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		web.JSONError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 
 	resp := make([]CustomEmoji, len(emojis))
@@ -265,12 +278,12 @@ func (h *CustomEmojisHandler) List(c echo.Context) error {
 		}
 	}
 
-	return c.JSON(http.StatusOK, resp)
+	web.JSON(w, http.StatusOK, resp)
 }
 
 // RegisterRoutes registers custom emojis routes
-func (h *CustomEmojisHandler) RegisterRoutes(g *echo.Group) {
-	g.GET("/custom_emojis", h.List)
+func (h *CustomEmojisHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v1/custom_emojis", h.List)
 }
 
 // ConversationsHandler handles conversations endpoints
@@ -292,30 +305,33 @@ type Conversation struct {
 }
 
 // List handles GET /api/v1/conversations
-func (h *ConversationsHandler) List(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *ConversationsHandler) List(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	limit := 20
-	if l := c.QueryParam("limit"); l != "" {
+	if l := web.QueryParam(r, "limit"); l != "" {
 		if i, err := strconv.Atoi(l); err == nil && i > 0 {
 			limit = i
 		}
 	}
 
 	if h.queries == nil {
-		return c.JSON(http.StatusOK, []Conversation{})
+		web.JSON(w, http.StatusOK, []Conversation{})
+		return
 	}
 
-	dbConversations, err := h.queries.ListConversations(c.Request().Context(), db.ListConversationsParams{
+	dbConversations, err := h.queries.ListConversations(r.Context(), db.ListConversationsParams{
 		AccountID: accountID,
 		Limit:     int32(limit),
 		Offset:    0,
 	})
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		web.JSONError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 
 	conversations := make([]Conversation, 0, len(dbConversations))
@@ -349,49 +365,52 @@ func (h *ConversationsHandler) List(c echo.Context) error {
 		})
 	}
 
-	return c.JSON(http.StatusOK, conversations)
+	web.JSON(w, http.StatusOK, conversations)
 }
 
 // Delete handles DELETE /api/v1/conversations/:id
-func (h *ConversationsHandler) Delete(c echo.Context) error {
-	_, ok := middleware.GetAccountID(c)
+func (h *ConversationsHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	_, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid ID"})
+		web.JSONError(w, http.StatusBadRequest, "Invalid ID")
+		return
 	}
 
 	if h.queries != nil {
 		// Just delete the conversation entry for now. In Mastodon this hides it.
-		_ = h.queries.DeleteConversation(c.Request().Context(), id)
+		_ = h.queries.DeleteConversation(r.Context(), id)
 	}
 
-	return c.JSON(http.StatusOK, map[string]any{})
+	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
 // MarkRead handles POST /api/v1/conversations/:id/read
-func (h *ConversationsHandler) MarkRead(c echo.Context) error {
-	_, ok := middleware.GetAccountID(c)
+func (h *ConversationsHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
+	_, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	// Return empty conversation to indicate marked as read
-	return c.JSON(http.StatusOK, Conversation{
-		ID:       c.Param("id"),
+	web.JSON(w, http.StatusOK, Conversation{
+		ID:       web.Param(r, "id"),
 		Unread:   false,
 		Accounts: []Account{},
 	})
 }
 
 // RegisterRoutes registers conversations routes
-func (h *ConversationsHandler) RegisterRoutes(g *echo.Group) {
-	g.GET("/conversations", h.List)
-	g.DELETE("/conversations/:id", h.Delete)
-	g.POST("/conversations/:id/read", h.MarkRead)
+func (h *ConversationsHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v1/conversations", h.List)
+	mux.HandleFunc("DELETE /api/v1/conversations/{id}", h.Delete)
+	mux.HandleFunc("POST /api/v1/conversations/{id}/read", h.MarkRead)
 }
 
 // Helper to convert db.Status to basic API Status

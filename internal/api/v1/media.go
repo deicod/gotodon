@@ -11,11 +11,11 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/labstack/echo/v4"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/media"
+	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/snowflake"
 )
 
@@ -50,67 +50,59 @@ type MediaAttachment struct {
 
 // Create handles POST /api/v1/media and POST /api/v2/media
 // Uploads a new media attachment
-func (h *MediaHandler) Create(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *MediaHandler) Create(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	// Limit upload size (e.g. 40MB matches max video size)
+	r.Body = http.MaxBytesReader(w, r.Body, media.MaxVideoSize+1024)
+	if err := r.ParseMultipartForm(media.MaxVideoSize + 1024); err != nil {
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: File is too large")
+		return
 	}
 
 	// Get file from multipart form
-	file, err := c.FormFile("file")
+	file, header, err := r.FormFile("file")
 	if err != nil {
-		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-			"error": "Validation failed: File is required",
-		})
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: File is required")
+		return
 	}
+	defer file.Close()
 
 	// Get optional description
-	description := c.FormValue("description")
+	description := r.FormValue("description")
 	if len(description) > 1500 {
-		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-			"error": "Validation failed: Description is too long (maximum is 1500 characters)",
-		})
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Description is too long (maximum is 1500 characters)")
+		return
 	}
 
 	// Get optional focus point
-	focusX, _ := strconv.ParseFloat(c.FormValue("focus[x]"), 64)
-	focusY, _ := strconv.ParseFloat(c.FormValue("focus[y]"), 64)
-
-	// Open file
-	src, err := file.Open()
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to read uploaded file",
-		})
-	}
-	defer func() { _ = src.Close() }()
+	focusX, _ := strconv.ParseFloat(r.FormValue("focus[x]"), 64)
+	focusY, _ := strconv.ParseFloat(r.FormValue("focus[y]"), 64)
 
 	// Read file data
-	data, err := io.ReadAll(io.LimitReader(src, media.MaxVideoSize+1))
+	data, err := io.ReadAll(io.LimitReader(file, media.MaxVideoSize+1))
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to read uploaded file",
-		})
+		web.JSONError(w, http.StatusInternalServerError, "Failed to read uploaded file")
+		return
 	}
 
 	// Upload and process
-	result, err := h.uploader.Upload(c.Request().Context(), accountID, file.Filename, data)
+	result, err := h.uploader.Upload(r.Context(), accountID, header.Filename, data)
 	if err != nil {
 		switch err {
 		case media.ErrUnsupportedType:
-			return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-				"error": "Validation failed: File type is not supported",
-			})
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: File type is not supported")
+			return
 		case media.ErrFileTooLarge:
-			return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-				"error": "Validation failed: File is too large",
-			})
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: File is too large")
+			return
 		default:
-			return echo.NewHTTPError(http.StatusInternalServerError, map[string]string{
-				"error": fmt.Sprintf("Failed to process file: %v", err),
-			})
+			web.JSONError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to process file: %v", err))
+			return
 		}
 	}
 
@@ -128,7 +120,7 @@ func (h *MediaHandler) Create(c echo.Context) error {
 	}
 
 	// Create in database
-	dbMedia, err := h.queries.CreateMediaAttachment(c.Request().Context(), db.CreateMediaAttachmentParams{
+	dbMedia, err := h.queries.CreateMediaAttachment(r.Context(), db.CreateMediaAttachmentParams{
 		AccountID:       pgtype.Int8{Int64: accountID, Valid: true},
 		FileFileName:    pgtype.Text{String: filepath.Base(result.Path), Valid: true},
 		FileContentType: pgtype.Text{String: result.ContentType, Valid: true},
@@ -141,83 +133,70 @@ func (h *MediaHandler) Create(c echo.Context) error {
 		FileMeta:        fileMeta,
 	})
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to save media record"})
+		web.JSONError(w, http.StatusInternalServerError, "Failed to save media record")
+		return
 	}
-
-	// Since Create does not return RemoteUrl but our API needs URL
-	// We manually set it on the struct or assume dbMedia has what it needs.
-	// But CreateMediaAttachment returns a row which *doesn't* have RemoteURL filled locally usually?
-	// actually it returns all columns.
-	// We need to ensure dbMediaToAPI uses the URL we just got if DB is empty.
-	// But we didn't save URL to DB. Wait.
-	// media_attachments schema has `remote_url` and `file_file_name` etc.
-	// Gotodon stores local files. The URL is constructed from config + path.
-	// My dbMediaToAPI uses m.RemoteUrl.String.
-	// For local files, RemoteUrl is empty.
-	// I need to construct the URL from config/storage.
-	// But MediaHandler struct doesn't have config.
-	// I'll cheat and use result.URL for now in response?
-	// Or update `dbMediaToAPI` to handle local files logic?
-	// For now, I'll pass result.URL back in the response manually if needed, or update DB to store it?
-	// Schema has `remote_url`. Usually for federation.
-	// Local files use `file_file_name` and `file_updated_at`.
-	// I'll stick to `result.URL` for the immediate response.
 
 	resp := dbMediaToAPI(dbMedia)
 	if resp.URL == "" {
 		resp.URL = result.URL
 		resp.PreviewURL = result.URL
 	}
-	return c.JSON(http.StatusOK, resp)
+	web.JSON(w, http.StatusOK, resp)
 }
 
 // Get handles GET /api/v1/media/:id
-func (h *MediaHandler) Get(c echo.Context) error {
-	idStr := c.Param("id")
+func (h *MediaHandler) Get(w http.ResponseWriter, r *http.Request) {
+	idStr := web.Param(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
-	dbMedia, err := h.queries.GetMediaAttachment(c.Request().Context(), id)
+	dbMedia, err := h.queries.GetMediaAttachment(r.Context(), id)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
-	return c.JSON(http.StatusOK, dbMediaToAPI(dbMedia))
+	web.JSON(w, http.StatusOK, dbMediaToAPI(dbMedia))
 }
 
 // Update handles PUT /api/v1/media/:id
 // Updates the description or focus of a media attachment
-func (h *MediaHandler) Update(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *MediaHandler) Update(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	idStr := c.Param("id")
+	idStr := web.Param(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	var req struct {
 		Description string `json:"description"`
 		Focus       string `json:"focus"`
 	}
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
+	if err := web.Bind(r, &req); err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request")
+		return
 	}
 
 	// Verify ownership first
-	mediaRecord, err := h.queries.GetMediaAttachment(c.Request().Context(), id)
+	mediaRecord, err := h.queries.GetMediaAttachment(r.Context(), id)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 	if !mediaRecord.AccountID.Valid || mediaRecord.AccountID.Int64 != accountID {
-		return echo.NewHTTPError(http.StatusForbidden, map[string]string{"error": "Access denied"})
+		web.JSONError(w, http.StatusForbidden, "Access denied")
+		return
 	}
 
 	// Update
@@ -233,27 +212,26 @@ func (h *MediaHandler) Update(c echo.Context) error {
 	}
 
 	// We only use UpdateMediaAttachment to update description for now.
-	// The query parameter $3 is Description.
-	updated, err := h.queries.UpdateMediaAttachment(c.Request().Context(), db.UpdateMediaAttachmentParams{
+	updated, err := h.queries.UpdateMediaAttachment(r.Context(), db.UpdateMediaAttachmentParams{
 		ID:          id,
 		AccountID:   pgtype.Int8{Int64: accountID, Valid: true},
 		Description: desc,
-		// FileMeta, Thumbnail... leave as nil?
-		// UpdateMediaAttachment SET ... COALESCE(..., description)
-		// So if I pass invalid/null, it keeps existing.
 	})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, map[string]string{"error": "Failed to update media"})
+		web.JSONError(w, http.StatusInternalServerError, "Failed to update media")
+		return
 	}
 
-	return c.JSON(http.StatusOK, dbMediaToAPI(updated))
+	web.JSON(w, http.StatusOK, dbMediaToAPI(updated))
 }
 
 // RegisterRoutes registers the media routes
-func (h *MediaHandler) RegisterRoutes(g *echo.Group) {
-	g.POST("/media", h.Create)
-	g.GET("/media/:id", h.Get)
-	g.PUT("/media/:id", h.Update)
+func (h *MediaHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/v1/media", h.Create)
+	mux.HandleFunc("GET /api/v1/media/{id}", h.Get)
+	mux.HandleFunc("PUT /api/v1/media/{id}", h.Update)
+	// V2 endpoint alias
+	mux.HandleFunc("POST /api/v2/media", h.Create)
 }
 
 func mediaTypeToInt(t media.MediaType) int32 {

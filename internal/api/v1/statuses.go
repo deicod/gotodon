@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/labstack/echo/v4"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/oauth"
 )
 
@@ -269,32 +269,28 @@ func (h *StatusesHandler) dbStatusToAPI(ctx context.Context, dbStatus db.Status)
 }
 
 // Create handles POST /api/v1/statuses
-func (h *StatusesHandler) Create(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *StatusesHandler) Create(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	scopes := middleware.GetScopes(c)
+	scopes := middleware.GetScopes(r.Context())
 	if !oauth.HasScope(scopes, "write:statuses") {
-		return echo.NewHTTPError(http.StatusForbidden, map[string]string{
-			"error": "This action is outside the authorized scopes",
-		})
+		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
+		return
 	}
 
 	var req CreateStatusRequest
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, map[string]string{
-			"error": "Invalid request body",
-		})
+	if err := web.Bind(r, &req); err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
 	}
 
 	if req.Status == "" && len(req.MediaIDs) == 0 && req.Poll == nil {
-		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-			"error": "Validation failed: Text can't be blank without media or poll",
-		})
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Text can't be blank without media or poll")
+		return
 	}
 
 	if req.Visibility == "" {
@@ -303,12 +299,11 @@ func (h *StatusesHandler) Create(c echo.Context) error {
 
 	visibility, validVis := stringToVisibility[req.Visibility]
 	if !validVis {
-		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-			"error": "Validation failed: Visibility is not included in the list",
-		})
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Visibility is not included in the list")
+		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	if h.useDB() {
 		var inReplyToID, inReplyToAccountID pgtype.Int8
@@ -342,9 +337,8 @@ func (h *StatusesHandler) Create(c echo.Context) error {
 			Reply:              inReplyToID.Valid,
 		})
 		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, map[string]string{
-				"error": "Failed to create status",
-			})
+			web.JSONError(w, http.StatusInternalServerError, "Failed to create status")
+			return
 		}
 
 		// Create stats
@@ -355,7 +349,8 @@ func (h *StatusesHandler) Create(c echo.Context) error {
 			_ = h.queries.IncrementStatusReplies(ctx, inReplyToID.Int64)
 		}
 
-		return c.JSON(http.StatusOK, h.dbStatusToAPI(ctx, dbStatus))
+		web.JSON(w, http.StatusOK, h.dbStatusToAPI(ctx, dbStatus))
+		return
 	}
 
 	// Mock fallback
@@ -363,7 +358,7 @@ func (h *StatusesHandler) Create(c echo.Context) error {
 	statusID := strconv.FormatInt(now.UnixNano(), 10)
 	discoverable := true
 
-	return c.JSON(http.StatusOK, Status{
+	web.JSON(w, http.StatusOK, Status{
 		ID:          statusID,
 		CreatedAt:   now,
 		Sensitive:   req.Sensitive,
@@ -391,37 +386,35 @@ func (h *StatusesHandler) Create(c echo.Context) error {
 }
 
 // Get handles GET /api/v1/statuses/:id
-func (h *StatusesHandler) Get(c echo.Context) error {
-	idStr := c.Param("id")
+func (h *StatusesHandler) Get(w http.ResponseWriter, r *http.Request) {
+	idStr := web.Param(r, "id")
 	if idStr == "" {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	if h.useDB() {
 		dbStatus, err := h.queries.GetStatusByID(ctx, id)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-				"error": "Record not found",
-			})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
-		return c.JSON(http.StatusOK, h.dbStatusToAPI(ctx, dbStatus))
+		web.JSON(w, http.StatusOK, h.dbStatusToAPI(ctx, dbStatus))
+		return
 	}
 
 	// Mock fallback
 	now := time.Now()
 	discoverable := true
-	return c.JSON(http.StatusOK, Status{
+	web.JSON(w, http.StatusOK, Status{
 		ID:         idStr,
 		CreatedAt:  now.Add(-time.Hour),
 		Visibility: "public",
@@ -446,30 +439,27 @@ func (h *StatusesHandler) Get(c echo.Context) error {
 }
 
 // Delete handles DELETE /api/v1/statuses/:id
-func (h *StatusesHandler) Delete(c echo.Context) error {
-	idStr := c.Param("id")
-	accountID, ok := middleware.GetAccountID(c)
+func (h *StatusesHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	idStr := web.Param(r, "id")
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	if h.useDB() {
 		dbStatus, err := h.queries.GetStatusByID(ctx, id)
 		if err != nil || dbStatus.AccountID != accountID {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-				"error": "Record not found",
-			})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
 
 		_ = h.queries.DeleteStatus(ctx, id)
@@ -479,7 +469,7 @@ func (h *StatusesHandler) Delete(c echo.Context) error {
 			_ = h.queries.DecrementStatusReplies(ctx, dbStatus.InReplyToID.Int64)
 		}
 
-		return c.JSON(http.StatusOK, map[string]any{
+		web.JSON(w, http.StatusOK, map[string]any{
 			"id":                idStr,
 			"text":              dbStatus.Text,
 			"spoiler_text":      dbStatus.SpoilerText,
@@ -487,9 +477,10 @@ func (h *StatusesHandler) Delete(c echo.Context) error {
 			"media_attachments": []any{},
 			"poll":              nil,
 		})
+		return
 	}
 
-	return c.JSON(http.StatusOK, map[string]any{
+	web.JSON(w, http.StatusOK, map[string]any{
 		"id":                idStr,
 		"text":              "Hello, world!",
 		"spoiler_text":      "",
@@ -500,30 +491,27 @@ func (h *StatusesHandler) Delete(c echo.Context) error {
 }
 
 // Favourite handles POST /api/v1/statuses/:id/favourite
-func (h *StatusesHandler) Favourite(c echo.Context) error {
-	idStr := c.Param("id")
-	_, ok := middleware.GetAccountID(c)
+func (h *StatusesHandler) Favourite(w http.ResponseWriter, r *http.Request) {
+	idStr := web.Param(r, "id")
+	_, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	if h.useDB() {
 		dbStatus, err := h.queries.GetStatusByID(ctx, id)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-				"error": "Record not found",
-			})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
 
 		_ = h.queries.IncrementStatusFavourites(ctx, id)
@@ -531,79 +519,75 @@ func (h *StatusesHandler) Favourite(c echo.Context) error {
 		status := h.dbStatusToAPI(ctx, dbStatus)
 		status.Favourited = true
 		status.FavouritesCount++
-		return c.JSON(http.StatusOK, status)
+		web.JSON(w, http.StatusOK, status)
+		return
 	}
 
 	status, _ := h.getStatusByID(idStr)
 	status.Favourited = true
 	status.FavouritesCount++
-	return c.JSON(http.StatusOK, status)
+	web.JSON(w, http.StatusOK, status)
 }
 
 // Unfavourite handles POST /api/v1/statuses/:id/unfavourite
-func (h *StatusesHandler) Unfavourite(c echo.Context) error {
-	idStr := c.Param("id")
-	_, ok := middleware.GetAccountID(c)
+func (h *StatusesHandler) Unfavourite(w http.ResponseWriter, r *http.Request) {
+	idStr := web.Param(r, "id")
+	_, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	if h.useDB() {
 		dbStatus, err := h.queries.GetStatusByID(ctx, id)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-				"error": "Record not found",
-			})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
 
 		_ = h.queries.DecrementStatusFavourites(ctx, id)
 
 		status := h.dbStatusToAPI(ctx, dbStatus)
 		status.Favourited = false
-		return c.JSON(http.StatusOK, status)
+		web.JSON(w, http.StatusOK, status)
+		return
 	}
 
 	status, _ := h.getStatusByID(idStr)
 	status.Favourited = false
-	return c.JSON(http.StatusOK, status)
+	web.JSON(w, http.StatusOK, status)
 }
 
 // Reblog handles POST /api/v1/statuses/:id/reblog
-func (h *StatusesHandler) Reblog(c echo.Context) error {
-	idStr := c.Param("id")
-	accountID, ok := middleware.GetAccountID(c)
+func (h *StatusesHandler) Reblog(w http.ResponseWriter, r *http.Request) {
+	idStr := web.Param(r, "id")
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	if h.useDB() {
 		originalStatus, err := h.queries.GetStatusByID(ctx, id)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-				"error": "Record not found",
-			})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
 
 		// Create reblog status
@@ -614,9 +598,8 @@ func (h *StatusesHandler) Reblog(c echo.Context) error {
 			Local:      pgtype.Bool{Bool: true, Valid: true},
 		})
 		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, map[string]string{
-				"error": "Failed to create reblog",
-			})
+			web.JSONError(w, http.StatusInternalServerError, "Failed to create reblog")
+			return
 		}
 
 		_ = h.queries.IncrementStatusReblogs(ctx, id)
@@ -628,7 +611,8 @@ func (h *StatusesHandler) Reblog(c echo.Context) error {
 		reblog.Reblog = &original
 		reblog.Reblogged = true
 
-		return c.JSON(http.StatusOK, reblog)
+		web.JSON(w, http.StatusOK, reblog)
+		return
 	}
 
 	// Mock fallback
@@ -639,7 +623,7 @@ func (h *StatusesHandler) Reblog(c echo.Context) error {
 	reblogID := strconv.FormatInt(now.UnixNano(), 10)
 	discoverable := true
 
-	return c.JSON(http.StatusOK, Status{
+	web.JSON(w, http.StatusOK, Status{
 		ID:        reblogID,
 		CreatedAt: now,
 		Reblog:    &originalStatus,
@@ -661,66 +645,63 @@ func (h *StatusesHandler) Reblog(c echo.Context) error {
 }
 
 // Unreblog handles POST /api/v1/statuses/:id/unreblog
-func (h *StatusesHandler) Unreblog(c echo.Context) error {
-	idStr := c.Param("id")
-	_, ok := middleware.GetAccountID(c)
+func (h *StatusesHandler) Unreblog(w http.ResponseWriter, r *http.Request) {
+	idStr := web.Param(r, "id")
+	_, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	if h.useDB() {
 		dbStatus, err := h.queries.GetStatusByID(ctx, id)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-				"error": "Record not found",
-			})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
 
 		_ = h.queries.DecrementStatusReblogs(ctx, id)
 
 		status := h.dbStatusToAPI(ctx, dbStatus)
 		status.Reblogged = false
-		return c.JSON(http.StatusOK, status)
+		web.JSON(w, http.StatusOK, status)
+		return
 	}
 
 	status, _ := h.getStatusByID(idStr)
 	status.Reblogged = false
-	return c.JSON(http.StatusOK, status)
+	web.JSON(w, http.StatusOK, status)
 }
 
 // Bookmark handles POST /api/v1/statuses/:id/bookmark
-func (h *StatusesHandler) Bookmark(c echo.Context) error {
-	idStr := c.Param("id")
-	accountID, ok := middleware.GetAccountID(c)
+func (h *StatusesHandler) Bookmark(w http.ResponseWriter, r *http.Request) {
+	idStr := web.Param(r, "id")
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
-	ctx := c.Request().Context()
+	ctx := r.Context()
 	if h.useDB() {
 		status, err := h.queries.GetStatusByID(ctx, id)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
 
 		err = h.queries.CreateBookmark(ctx, db.CreateBookmarkParams{
@@ -733,36 +714,36 @@ func (h *StatusesHandler) Bookmark(c echo.Context) error {
 
 		s := h.dbStatusToAPI(ctx, status)
 		s.Bookmarked = true
-		return c.JSON(http.StatusOK, s)
+		web.JSON(w, http.StatusOK, s)
+		return
 	}
 
 	status, _ := h.getStatusByID(idStr)
 	status.Bookmarked = true
-	return c.JSON(http.StatusOK, status)
+	web.JSON(w, http.StatusOK, status)
 }
 
 // Unbookmark handles POST /api/v1/statuses/:id/unbookmark
-func (h *StatusesHandler) Unbookmark(c echo.Context) error {
-	idStr := c.Param("id")
-	accountID, ok := middleware.GetAccountID(c)
+func (h *StatusesHandler) Unbookmark(w http.ResponseWriter, r *http.Request) {
+	idStr := web.Param(r, "id")
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
-	ctx := c.Request().Context()
+	ctx := r.Context()
 	if h.useDB() {
 		status, err := h.queries.GetStatusByID(ctx, id)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
 
 		err = h.queries.DeleteBookmark(ctx, db.DeleteBookmarkParams{
@@ -772,31 +753,30 @@ func (h *StatusesHandler) Unbookmark(c echo.Context) error {
 
 		s := h.dbStatusToAPI(ctx, status)
 		s.Bookmarked = false
-		return c.JSON(http.StatusOK, s)
+		web.JSON(w, http.StatusOK, s)
+		return
 	}
 
 	status, _ := h.getStatusByID(idStr)
 	status.Bookmarked = false
-	return c.JSON(http.StatusOK, status)
+	web.JSON(w, http.StatusOK, status)
 }
 
 // Context handles GET /api/v1/statuses/:id/context
-func (h *StatusesHandler) Context(c echo.Context) error {
-	idStr := c.Param("id")
+func (h *StatusesHandler) Context(w http.ResponseWriter, r *http.Request) {
+	idStr := web.Param(r, "id")
 	if idStr == "" {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	if h.useDB() {
 		// Get ancestors
@@ -819,13 +799,14 @@ func (h *StatusesHandler) Context(c echo.Context) error {
 			descendantStatuses[i] = h.dbStatusToAPI(ctx, s)
 		}
 
-		return c.JSON(http.StatusOK, map[string][]Status{
+		web.JSON(w, http.StatusOK, map[string][]Status{
 			"ancestors":   ancestorStatuses,
 			"descendants": descendantStatuses,
 		})
+		return
 	}
 
-	return c.JSON(http.StatusOK, map[string][]Status{
+	web.JSON(w, http.StatusOK, map[string][]Status{
 		"ancestors":   {},
 		"descendants": {},
 	})
@@ -865,15 +846,17 @@ func ptrStr(s string) *string {
 }
 
 // Edit handles PUT /api/v1/statuses/:id
-func (h *StatusesHandler) Edit(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *StatusesHandler) Edit(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	statusID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	statusID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	var req struct {
@@ -882,127 +865,144 @@ func (h *StatusesHandler) Edit(c echo.Context) error {
 		Sensitive   bool     `json:"sensitive" form:"sensitive"`
 		MediaIDs    []string `json:"media_ids" form:"media_ids[]"`
 	}
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
+	if err := web.Bind(r, &req); err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request")
+		return
 	}
 
 	if h.useDB() {
-		status, err := h.queries.GetStatusByID(c.Request().Context(), statusID)
+		status, err := h.queries.GetStatusByID(r.Context(), statusID)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
 		if status.AccountID != accountID {
-			return echo.NewHTTPError(http.StatusForbidden, map[string]string{"error": "This action is not allowed"})
+			web.JSONError(w, http.StatusForbidden, "This action is not allowed")
+			return
 		}
 
 		// Update status with pgtype
-		_, _ = h.queries.UpdateStatus(c.Request().Context(), db.UpdateStatusParams{
+		_, _ = h.queries.UpdateStatus(r.Context(), db.UpdateStatusParams{
 			ID:   statusID,
 			Text: pgtype.Text{String: req.Status, Valid: true},
 		})
 
 		// Return updated status from DB
-		s := h.dbStatusToAPI(c.Request().Context(), status)
-		return c.JSON(http.StatusOK, s)
+		s := h.dbStatusToAPI(r.Context(), status)
+		web.JSON(w, http.StatusOK, s)
+		return
 	}
 
-	return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+	web.JSONError(w, http.StatusNotFound, "Record not found")
 }
 
 // Pin handles POST /api/v1/statuses/:id/pin
-func (h *StatusesHandler) Pin(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *StatusesHandler) Pin(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	statusID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	statusID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	if h.useDB() {
-		status, err := h.queries.GetStatusByID(c.Request().Context(), statusID)
+		status, err := h.queries.GetStatusByID(r.Context(), statusID)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
 		if status.AccountID != accountID {
-			return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{"error": "Validation failed: Someone else's toot cannot be pinned"})
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Someone else's toot cannot be pinned")
+			return
 		}
 
 		// Check visibility (must be public or unlisted)
 		if status.Visibility != 0 && status.Visibility != 1 {
-			return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{"error": "Validation failed: Private or direct statuses cannot be pinned"})
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Private or direct statuses cannot be pinned")
+			return
 		}
 
 		// Check limit (max 5)
-		pinned, err := h.queries.GetPinnedStatuses(c.Request().Context(), accountID)
+		pinned, err := h.queries.GetPinnedStatuses(r.Context(), accountID)
 		if err == nil && len(pinned) >= 5 {
-			return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{"error": "Validation failed: You have already pinned 5 statuses"})
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: You have already pinned 5 statuses")
+			return
 		}
 
-		_, err = h.queries.PinStatus(c.Request().Context(), db.PinStatusParams{
+		_, err = h.queries.PinStatus(r.Context(), db.PinStatusParams{
 			AccountID: accountID,
 			StatusID:  statusID,
 		})
 		// Ignore constraint violation (already pinned)
 
-		s := h.dbStatusToAPI(c.Request().Context(), status)
+		s := h.dbStatusToAPI(r.Context(), status)
 		s.Pinned = true
-		return c.JSON(http.StatusOK, s)
+		web.JSON(w, http.StatusOK, s)
+		return
 	}
 
-	return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+	web.JSONError(w, http.StatusNotFound, "Record not found")
 }
 
 // Unpin handles POST /api/v1/statuses/:id/unpin
-func (h *StatusesHandler) Unpin(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *StatusesHandler) Unpin(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	statusID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	statusID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	_ = accountID // Will be used when unpin query exists
 
 	if h.useDB() {
-		status, err := h.queries.GetStatusByID(c.Request().Context(), statusID)
+		status, err := h.queries.GetStatusByID(r.Context(), statusID)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
 		}
 
-		err = h.queries.UnpinStatus(c.Request().Context(), db.UnpinStatusParams{
+		err = h.queries.UnpinStatus(r.Context(), db.UnpinStatusParams{
 			AccountID: accountID,
 			StatusID:  statusID,
 		})
 
-		s := h.dbStatusToAPI(c.Request().Context(), status)
+		s := h.dbStatusToAPI(r.Context(), status)
 		s.Pinned = false
-		return c.JSON(http.StatusOK, s)
+		web.JSON(w, http.StatusOK, s)
+		return
 	}
 
-	return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+	web.JSONError(w, http.StatusNotFound, "Record not found")
 }
 
 // FavouritedBy handles GET /api/v1/statuses/:id/favourited_by
-func (h *StatusesHandler) FavouritedBy(c echo.Context) error {
-	statusID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+func (h *StatusesHandler) FavouritedBy(w http.ResponseWriter, r *http.Request) {
+	statusID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	if h.useDB() {
-		dbAccounts, err := h.queries.GetFavouritedBy(c.Request().Context(), db.GetFavouritedByParams{
+		dbAccounts, err := h.queries.GetFavouritedBy(r.Context(), db.GetFavouritedByParams{
 			StatusID: statusID,
 			Limit:    40,
 			Offset:   0,
 		})
 		if err != nil {
-			return c.JSON(http.StatusOK, []any{})
+			web.JSON(w, http.StatusOK, []any{})
+			return
 		}
 
 		accounts := make([]Account, len(dbAccounts))
@@ -1010,27 +1010,30 @@ func (h *StatusesHandler) FavouritedBy(c echo.Context) error {
 			accounts[i] = h.dbAccountToAPI(a)
 		}
 
-		return c.JSON(http.StatusOK, accounts)
+		web.JSON(w, http.StatusOK, accounts)
+		return
 	}
 
-	return c.JSON(http.StatusOK, []any{})
+	web.JSON(w, http.StatusOK, []any{})
 }
 
 // RebloggedBy handles GET /api/v1/statuses/:id/reblogged_by
-func (h *StatusesHandler) RebloggedBy(c echo.Context) error {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+func (h *StatusesHandler) RebloggedBy(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	if h.useDB() {
-		dbAccounts, err := h.queries.GetRebloggers(c.Request().Context(), db.GetRebloggersParams{
+		dbAccounts, err := h.queries.GetRebloggers(r.Context(), db.GetRebloggersParams{
 			ReblogOfID: pgtype.Int8{Int64: id, Valid: true},
 			Limit:      40,
 			Offset:     0,
 		})
 		if err != nil {
-			return c.JSON(http.StatusOK, []any{})
+			web.JSON(w, http.StatusOK, []any{})
+			return
 		}
 
 		accounts := make([]Account, len(dbAccounts))
@@ -1038,10 +1041,11 @@ func (h *StatusesHandler) RebloggedBy(c echo.Context) error {
 			accounts[i] = h.dbAccountToAPI(a)
 		}
 
-		return c.JSON(http.StatusOK, accounts)
+		web.JSON(w, http.StatusOK, accounts)
+		return
 	}
 
-	return c.JSON(http.StatusOK, []any{})
+	web.JSON(w, http.StatusOK, []any{})
 }
 
 func (h *StatusesHandler) dbAccountToAPI(dbAcc db.Account) Account {
@@ -1063,21 +1067,20 @@ func (h *StatusesHandler) dbAccountToAPI(dbAcc db.Account) Account {
 }
 
 // RegisterRoutes registers the statuses routes
-func (h *StatusesHandler) RegisterRoutes(g *echo.Group) {
-	statuses := g.Group("/statuses")
-	statuses.POST("", h.Create)
-	statuses.GET("/:id", h.Get)
-	statuses.PUT("/:id", h.Edit)
-	statuses.DELETE("/:id", h.Delete)
-	statuses.GET("/:id/context", h.Context)
-	statuses.POST("/:id/favourite", h.Favourite)
-	statuses.POST("/:id/unfavourite", h.Unfavourite)
-	statuses.POST("/:id/reblog", h.Reblog)
-	statuses.POST("/:id/unreblog", h.Unreblog)
-	statuses.POST("/:id/bookmark", h.Bookmark)
-	statuses.POST("/:id/unbookmark", h.Unbookmark)
-	statuses.POST("/:id/pin", h.Pin)
-	statuses.POST("/:id/unpin", h.Unpin)
-	statuses.GET("/:id/favourited_by", h.FavouritedBy)
-	statuses.GET("/:id/reblogged_by", h.RebloggedBy)
+func (h *StatusesHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/v1/statuses", h.Create)
+	mux.HandleFunc("GET /api/v1/statuses/{id}", h.Get)
+	mux.HandleFunc("PUT /api/v1/statuses/{id}", h.Edit)
+	mux.HandleFunc("DELETE /api/v1/statuses/{id}", h.Delete)
+	mux.HandleFunc("GET /api/v1/statuses/{id}/context", h.Context)
+	mux.HandleFunc("POST /api/v1/statuses/{id}/favourite", h.Favourite)
+	mux.HandleFunc("POST /api/v1/statuses/{id}/unfavourite", h.Unfavourite)
+	mux.HandleFunc("POST /api/v1/statuses/{id}/reblog", h.Reblog)
+	mux.HandleFunc("POST /api/v1/statuses/{id}/unreblog", h.Unreblog)
+	mux.HandleFunc("POST /api/v1/statuses/{id}/bookmark", h.Bookmark)
+	mux.HandleFunc("POST /api/v1/statuses/{id}/unbookmark", h.Unbookmark)
+	mux.HandleFunc("POST /api/v1/statuses/{id}/pin", h.Pin)
+	mux.HandleFunc("POST /api/v1/statuses/{id}/unpin", h.Unpin)
+	mux.HandleFunc("GET /api/v1/statuses/{id}/favourited_by", h.FavouritedBy)
+	mux.HandleFunc("GET /api/v1/statuses/{id}/reblogged_by", h.RebloggedBy)
 }

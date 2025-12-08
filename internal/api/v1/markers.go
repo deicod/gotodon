@@ -6,10 +6,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/labstack/echo/v4"
-
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/web"
 )
 
 // MarkersHandler handles marker endpoints
@@ -48,15 +47,14 @@ var validMarkerTimelines = map[string]bool{
 }
 
 // Get handles GET /api/v1/markers
-func (h *MarkersHandler) Get(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *MarkersHandler) Get(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	timelines := c.QueryParams()["timeline[]"]
+	timelines := r.URL.Query()["timeline[]"]
 	if len(timelines) == 0 {
 		timelines = []string{"home", "notifications"}
 	}
@@ -65,17 +63,18 @@ func (h *MarkersHandler) Get(c echo.Context) error {
 
 	if h.useDB() {
 		// Get User ID from Account ID
-		user, err := h.queries.GetUserByAccountID(c.Request().Context(), accountID)
+		user, err := h.queries.GetUserByAccountID(r.Context(), accountID)
 		if err != nil {
 			// If user not found (e.g. implementation limitation), return empty
-			return c.JSON(http.StatusOK, result)
+			web.JSON(w, http.StatusOK, result)
+			return
 		}
 
 		for _, timeline := range timelines {
 			if !validMarkerTimelines[timeline] {
 				continue
 			}
-			marker, err := h.queries.GetMarker(c.Request().Context(), db.GetMarkerParams{
+			marker, err := h.queries.GetMarker(r.Context(), db.GetMarkerParams{
 				UserID:   user.ID,
 				Timeline: timeline,
 			})
@@ -87,7 +86,8 @@ func (h *MarkersHandler) Get(c echo.Context) error {
 				}
 			}
 		}
-		return c.JSON(http.StatusOK, result)
+		web.JSON(w, http.StatusOK, result)
+		return
 	}
 
 	// In-memory fallback
@@ -103,26 +103,24 @@ func (h *MarkersHandler) Get(c echo.Context) error {
 		}
 	}
 
-	return c.JSON(http.StatusOK, result)
+	web.JSON(w, http.StatusOK, result)
 }
 
 // Update handles POST /api/v1/markers
-func (h *MarkersHandler) Update(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *MarkersHandler) Update(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	// Parse request - can have home[last_read_id] and/or notifications[last_read_id]
 	var req map[string]struct {
 		LastReadID string `json:"last_read_id" form:"last_read_id"`
 	}
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, map[string]string{
-			"error": "Invalid request body",
-		})
+	if err := web.Bind(r, &req); err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
 	}
 
 	// Initialize account markers if needed (for fallback)
@@ -131,7 +129,7 @@ func (h *MarkersHandler) Update(c echo.Context) error {
 	}
 
 	result := make(MarkersResponse)
-	ctx := c.Request().Context()
+	ctx := r.Context()
 
 	var userID int64
 	if h.useDB() {
@@ -156,15 +154,6 @@ func (h *MarkersHandler) Update(c echo.Context) error {
 
 		// DB Update
 		if h.useDB() && userID > 0 {
-			// We need to know current version or just increment?
-			// Mastodon API says client sends `last_read_id`. Server increments version.
-			// Or client sends version? Docs say client sends `last_read_id`.
-			// Response includes `version`. Client should use `headers["Link"]` for locking but here we simplify.
-			// We will just fetch (to get version) and increment, or use Upsert.
-			// UpsertMarker in SQL doesn't increment version efficiently if we don't pass it.
-			// But my SQL UpsertMarker takes `lock_version` as input.
-			// Logic: Get existing version, increment, Save.
-
 			currentVersion := 0
 			existing, err := h.queries.GetMarker(ctx, db.GetMarkerParams{
 				UserID:   userID,
@@ -207,11 +196,11 @@ func (h *MarkersHandler) Update(c echo.Context) error {
 		result[timeline] = marker
 	}
 
-	return c.JSON(http.StatusOK, result)
+	web.JSON(w, http.StatusOK, result)
 }
 
 // RegisterRoutes registers marker routes
-func (h *MarkersHandler) RegisterRoutes(g *echo.Group) {
-	g.GET("/markers", h.Get)
-	g.POST("/markers", h.Update)
+func (h *MarkersHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v1/markers", h.Get)
+	mux.HandleFunc("POST /api/v1/markers", h.Update)
 }

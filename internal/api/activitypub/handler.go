@@ -6,9 +6,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/labstack/echo/v4"
-
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/activitypub"
 )
 
@@ -31,31 +30,34 @@ func (h *FederationHandler) useDB() bool {
 }
 
 // GetActor handles GET /users/:username - returns the actor profile
-func (h *FederationHandler) GetActor(c echo.Context) error {
-	username := c.Param("username")
+func (h *FederationHandler) GetActor(w http.ResponseWriter, r *http.Request) {
+	username := web.Param(r, "username")
 
 	// Check Accept header for ActivityPub
-	accept := c.Request().Header.Get("Accept")
+	accept := r.Header.Get("Accept")
 	if accept != activitypub.ActivityPubContentType &&
 		accept != activitypub.ActivityPubLDContentType &&
 		accept != "application/activity+json" {
 		// Redirect to web profile for non-AP requests
-		return c.Redirect(http.StatusFound, fmt.Sprintf("https://%s/@%s", h.domain, username))
+		http.Redirect(w, r, fmt.Sprintf("https://%s/@%s", h.domain, username), http.StatusFound)
+		return
 	}
 
 	if !h.useDB() {
-		return h.mockActor(c, username)
+		h.mockActor(w, username)
+		return
 	}
 
-	account, err := h.queries.GetAccountByUsername(c.Request().Context(), username)
+	account, err := h.queries.GetAccountByUsername(r.Context(), username)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, "Actor not found")
+		web.JSONError(w, http.StatusNotFound, "Actor not found")
+		return
 	}
 
-	return h.renderActor(c, account)
+	h.renderActor(w, account)
 }
 
-func (h *FederationHandler) renderActor(c echo.Context, account db.Account) error {
+func (h *FederationHandler) renderActor(w http.ResponseWriter, account db.Account) {
 	actorURI := fmt.Sprintf("https://%s/users/%s", h.domain, account.Username)
 	discoverable := account.Discoverable.Valid && account.Discoverable.Bool
 	indexable := account.Indexable
@@ -97,11 +99,11 @@ func (h *FederationHandler) renderActor(c echo.Context, account db.Account) erro
 		actor.Object.Published = account.CreatedAt.Time.Format("2006-01-02T15:04:05Z")
 	}
 
-	c.Response().Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	return c.JSON(http.StatusOK, actor)
+	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
+	web.JSON(w, http.StatusOK, actor)
 }
 
-func (h *FederationHandler) mockActor(c echo.Context, username string) error {
+func (h *FederationHandler) mockActor(w http.ResponseWriter, username string) {
 	actorURI := fmt.Sprintf("https://%s/users/%s", h.domain, username)
 	discoverable := true
 
@@ -124,13 +126,13 @@ func (h *FederationHandler) mockActor(c echo.Context, username string) error {
 		},
 	}
 
-	c.Response().Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	return c.JSON(http.StatusOK, actor)
+	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
+	web.JSON(w, http.StatusOK, actor)
 }
 
 // GetOutbox handles GET /users/:username/outbox
-func (h *FederationHandler) GetOutbox(c echo.Context) error {
-	username := c.Param("username")
+func (h *FederationHandler) GetOutbox(w http.ResponseWriter, r *http.Request) {
+	username := web.Param(r, "username")
 	actorURI := fmt.Sprintf("https://%s/users/%s", h.domain, username)
 
 	// Return an empty ordered collection for now
@@ -146,20 +148,20 @@ func (h *FederationHandler) GetOutbox(c echo.Context) error {
 		},
 	}
 
-	c.Response().Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	return c.JSON(http.StatusOK, collection)
+	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
+	web.JSON(w, http.StatusOK, collection)
 }
 
 // GetFollowers handles GET /users/:username/followers
-func (h *FederationHandler) GetFollowers(c echo.Context) error {
-	username := c.Param("username")
+func (h *FederationHandler) GetFollowers(w http.ResponseWriter, r *http.Request) {
+	username := web.Param(r, "username")
 	actorURI := fmt.Sprintf("https://%s/users/%s", h.domain, username)
 
 	totalItems := 0
 	if h.useDB() {
-		account, err := h.queries.GetAccountByUsername(c.Request().Context(), username)
+		account, err := h.queries.GetAccountByUsername(r.Context(), username)
 		if err == nil {
-			stats, err := h.queries.GetAccountStats(c.Request().Context(), account.ID)
+			stats, err := h.queries.GetAccountStats(r.Context(), account.ID)
 			if err == nil {
 				totalItems = int(stats.FollowersCount)
 			}
@@ -178,20 +180,20 @@ func (h *FederationHandler) GetFollowers(c echo.Context) error {
 		},
 	}
 
-	c.Response().Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	return c.JSON(http.StatusOK, collection)
+	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
+	web.JSON(w, http.StatusOK, collection)
 }
 
 // GetFollowing handles GET /users/:username/following
-func (h *FederationHandler) GetFollowing(c echo.Context) error {
-	username := c.Param("username")
+func (h *FederationHandler) GetFollowing(w http.ResponseWriter, r *http.Request) {
+	username := web.Param(r, "username")
 	actorURI := fmt.Sprintf("https://%s/users/%s", h.domain, username)
 
 	totalItems := 0
 	if h.useDB() {
-		account, err := h.queries.GetAccountByUsername(c.Request().Context(), username)
+		account, err := h.queries.GetAccountByUsername(r.Context(), username)
 		if err == nil {
-			stats, err := h.queries.GetAccountStats(c.Request().Context(), account.ID)
+			stats, err := h.queries.GetAccountStats(r.Context(), account.ID)
 			if err == nil {
 				totalItems = int(stats.FollowingCount)
 			}
@@ -210,28 +212,28 @@ func (h *FederationHandler) GetFollowing(c echo.Context) error {
 		},
 	}
 
-	c.Response().Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	return c.JSON(http.StatusOK, collection)
+	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
+	web.JSON(w, http.StatusOK, collection)
 }
 
 // PostInbox handles POST /users/:username/inbox and POST /inbox
-func (h *FederationHandler) PostInbox(c echo.Context) error {
+func (h *FederationHandler) PostInbox(w http.ResponseWriter, r *http.Request) {
 	// For now, accept the activity and return 202 Accepted
 	// Full implementation would verify signatures and process activities
-	return c.NoContent(http.StatusAccepted)
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // RegisterRoutes registers federation routes
-func (h *FederationHandler) RegisterRoutes(e *echo.Echo) {
+func (h *FederationHandler) RegisterRoutes(mux *http.ServeMux) {
 	// Actor endpoints
-	e.GET("/users/:username", h.GetActor)
-	e.GET("/users/:username/outbox", h.GetOutbox)
-	e.GET("/users/:username/followers", h.GetFollowers)
-	e.GET("/users/:username/following", h.GetFollowing)
+	mux.HandleFunc("GET /users/{username}", h.GetActor)
+	mux.HandleFunc("GET /users/{username}/outbox", h.GetOutbox)
+	mux.HandleFunc("GET /users/{username}/followers", h.GetFollowers)
+	mux.HandleFunc("GET /users/{username}/following", h.GetFollowing)
 
 	// Inbox endpoints
-	e.POST("/inbox", h.PostInbox)
-	e.POST("/users/:username/inbox", h.PostInbox)
+	mux.HandleFunc("POST /inbox", h.PostInbox)
+	mux.HandleFunc("POST /users/{username}/inbox", h.PostInbox)
 }
 
 // Helper to format account ID

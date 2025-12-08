@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/labstack/echo/v4"
 
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/web"
 )
 
 // DomainBlocksHandler handles admin domain block endpoints
@@ -73,30 +73,31 @@ func intToSeverity(i int32) string {
 }
 
 // GetAll handles GET /api/v1/admin/domain_blocks
-func (h *DomainBlocksHandler) GetAll(c echo.Context) error {
-	if err := requireAdmin(c); err != nil {
-		return err
+func (h *DomainBlocksHandler) GetAll(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
 	}
 
 	limit := 100
-	if l := c.QueryParam("limit"); l != "" {
+	if l := web.QueryParam(r, "limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 200 {
 			limit = parsed
 		}
 	}
 	offset := 0
-	if o := c.QueryParam("offset"); o != "" {
+	if o := web.QueryParam(r, "offset"); o != "" {
 		if parsed, err := strconv.Atoi(o); err == nil && parsed >= 0 {
 			offset = parsed
 		}
 	}
 
-	rows, err := h.queries.AdminListDomainBlocks(c.Request().Context(), db.AdminListDomainBlocksParams{
+	rows, err := h.queries.AdminListDomainBlocks(r.Context(), db.AdminListDomainBlocksParams{
 		Limit:  int32(limit),
 		Offset: int32(offset),
 	})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Database error").SetInternal(err)
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
 	blocks := make([]DomainBlock, 0, len(rows))
@@ -114,27 +115,25 @@ func (h *DomainBlocksHandler) GetAll(c echo.Context) error {
 		})
 	}
 
-	return c.JSON(http.StatusOK, blocks)
+	web.JSON(w, http.StatusOK, blocks)
 }
 
 // Get handles GET /api/v1/admin/domain_blocks/:id
-func (h *DomainBlocksHandler) Get(c echo.Context) error {
-	if err := requireAdmin(c); err != nil {
-		return err
+func (h *DomainBlocksHandler) Get(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
 	}
 
-	blockID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	blockID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
-	row, err := h.queries.AdminGetDomainBlock(c.Request().Context(), blockID)
+	row, err := h.queries.AdminGetDomainBlock(r.Context(), blockID)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	block := DomainBlock{
@@ -149,13 +148,13 @@ func (h *DomainBlocksHandler) Get(c echo.Context) error {
 		Obfuscate:      row.Obfuscate,
 	}
 
-	return c.JSON(http.StatusOK, block)
+	web.JSON(w, http.StatusOK, block)
 }
 
 // Create handles POST /api/v1/admin/domain_blocks
-func (h *DomainBlocksHandler) Create(c echo.Context) error {
-	if err := requireAdmin(c); err != nil {
-		return err
+func (h *DomainBlocksHandler) Create(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
 	}
 
 	var req struct {
@@ -167,24 +166,21 @@ func (h *DomainBlocksHandler) Create(c echo.Context) error {
 		PublicComment  string `json:"public_comment" form:"public_comment"`
 		Obfuscate      bool   `json:"obfuscate" form:"obfuscate"`
 	}
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, map[string]string{
-			"error": "Invalid request body",
-		})
+	if err := web.Bind(r, &req); err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
 	}
 
 	if req.Domain == "" {
-		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-			"error": "Validation failed: Domain can't be blank",
-		})
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Domain can't be blank")
+		return
 	}
 
 	severityStr := "silence"
 	if req.Severity != "" {
 		if !validSeverity[req.Severity] {
-			return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-				"error": "Invalid severity",
-			})
+			web.JSONError(w, http.StatusUnprocessableEntity, "Invalid severity")
+			return
 		}
 		severityStr = req.Severity
 	}
@@ -203,9 +199,10 @@ func (h *DomainBlocksHandler) Create(c echo.Context) error {
 		params.PublicComment = pgtype.Text{String: req.PublicComment, Valid: true}
 	}
 
-	row, err := h.queries.AdminCreateDomainBlock(c.Request().Context(), params)
+	row, err := h.queries.AdminCreateDomainBlock(r.Context(), params)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Database error").SetInternal(err)
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
 	block := DomainBlock{
@@ -220,20 +217,19 @@ func (h *DomainBlocksHandler) Create(c echo.Context) error {
 		Obfuscate:      row.Obfuscate,
 	}
 
-	return c.JSON(http.StatusOK, block)
+	web.JSON(w, http.StatusOK, block)
 }
 
 // Update handles PUT /api/v1/admin/domain_blocks/:id
-func (h *DomainBlocksHandler) Update(c echo.Context) error {
-	if err := requireAdmin(c); err != nil {
-		return err
+func (h *DomainBlocksHandler) Update(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
 	}
 
-	blockID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	blockID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	var req struct {
@@ -244,50 +240,26 @@ func (h *DomainBlocksHandler) Update(c echo.Context) error {
 		PublicComment  *string `json:"public_comment" form:"public_comment"`
 		Obfuscate      *bool   `json:"obfuscate" form:"obfuscate"`
 	}
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, map[string]string{
-			"error": "Invalid request body",
-		})
+	if err := web.Bind(r, &req); err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
 	}
 
 	// Validations
 	if req.Severity != nil && !validSeverity[*req.Severity] {
-		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-			"error": "Invalid severity",
-		})
+		web.JSONError(w, http.StatusUnprocessableEntity, "Invalid severity")
+		return
 	}
-
-	// Because sqlc Update is specific about what is updated or we use COALESCE in SQL,
-	// We matched SQL with COALESCE. We need to pass valid params.
-	// However, we don't have the current values easily without a Get.
-	// But COALESCE(NULL, old) works if we pass NULL for unaffected fields.
-	// pgtype handles NULLs.
 
 	params := db.AdminUpdateDomainBlockParams{
 		ID: blockID,
 	}
 
-	// We need to fetch current to handle defaulting?
-	// Actually our SQL uses COALESCE($X, column). So if we pass NULL, it keeps existing.
-	// But pgtype doesn't have a simple "Null" that means "don't change" unless the query expects it.
-	// The query expects typed parameters.
-	// $2 is severity. If we pass NULL (impossible for int32 unless wrapped), we can't update to NULL.
-	// But severity is NOT NULL in DB.
-	// Wait, `AdminUpdateDomainBlock` generated code signature:
-	// Severity int32 `db:"severity" json:"severity"`
-	// This means it takes an int32, NOT a pointer. So we CANNOT pass NULL for int32.
-	// This implies the SQL `COALESCE($2, severity)` assumes $2 can be null, but sqlc generated a non-null primitive because the column is non-null?
-	// ACTUALLY: `sqlc` generates primitives for non-null columns usually.
-	// To support optional updates, I should have used `sqlc.narg` or nullable params in SQL, but sqlc is strict.
-	// Best practice: Fetch the object, apply changes in Go, then Update.
-	// Or change query to take nullable params.
-
-	// Let's fetch first.
-	existing, err := h.queries.AdminGetDomainBlock(c.Request().Context(), blockID)
+	// Fetch first.
+	existing, err := h.queries.AdminGetDomainBlock(r.Context(), blockID)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	params.Severity = existing.Severity
@@ -316,9 +288,10 @@ func (h *DomainBlocksHandler) Update(c echo.Context) error {
 		params.PublicComment = pgtype.Text{String: *req.PublicComment, Valid: true}
 	}
 
-	updated, err := h.queries.AdminUpdateDomainBlock(c.Request().Context(), params)
+	updated, err := h.queries.AdminUpdateDomainBlock(r.Context(), params)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Database error").SetInternal(err)
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
 	block := DomainBlock{
@@ -333,38 +306,34 @@ func (h *DomainBlocksHandler) Update(c echo.Context) error {
 		Obfuscate:      updated.Obfuscate,
 	}
 
-	return c.JSON(http.StatusOK, block)
+	web.JSON(w, http.StatusOK, block)
 }
 
 // Delete handles DELETE /api/v1/admin/domain_blocks/:id
-func (h *DomainBlocksHandler) Delete(c echo.Context) error {
-	if err := requireAdmin(c); err != nil {
-		return err
+func (h *DomainBlocksHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
 	}
 
-	blockID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	blockID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
-	if err := h.queries.AdminDeleteDomainBlock(c.Request().Context(), blockID); err != nil {
-		// Could check for not found, but delete is idempotent effectively if we don't care about 404
-		return echo.NewHTTPError(http.StatusInternalServerError, "Database error").SetInternal(err)
+	if err := h.queries.AdminDeleteDomainBlock(r.Context(), blockID); err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
-	return c.JSON(http.StatusOK, map[string]any{})
+	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
-// requireAdmin checked via shared helper in package
-
 // RegisterRoutes registers domain block routes
-func (h *DomainBlocksHandler) RegisterRoutes(g *echo.Group) {
-	blocks := g.Group("/domain_blocks")
-	blocks.GET("", h.GetAll)
-	blocks.POST("", h.Create)
-	blocks.GET("/:id", h.Get)
-	blocks.PUT("/:id", h.Update)
-	blocks.DELETE("/:id", h.Delete)
+func (h *DomainBlocksHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v1/admin/domain_blocks", h.GetAll)
+	mux.HandleFunc("POST /api/v1/admin/domain_blocks", h.Create)
+	mux.HandleFunc("GET /api/v1/admin/domain_blocks/{id}", h.Get)
+	mux.HandleFunc("PUT /api/v1/admin/domain_blocks/{id}", h.Update)
+	mux.HandleFunc("DELETE /api/v1/admin/domain_blocks/{id}", h.Delete)
 }

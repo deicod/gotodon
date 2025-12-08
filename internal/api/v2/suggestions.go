@@ -6,20 +6,20 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/labstack/echo/v4"
-
 	"github.com/deicod/gotodon/internal/api/middleware"
 	v1 "github.com/deicod/gotodon/internal/api/v1"
+	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/web"
 )
 
 // SuggestionsHandler handles v2 suggestion endpoints
 type SuggestionsHandler struct {
-	// In production, this would use database/algorithms
+	queries *db.Queries
 }
 
 // NewSuggestionsHandler creates a new suggestions handler
-func NewSuggestionsHandler() *SuggestionsHandler {
-	return &SuggestionsHandler{}
+func NewSuggestionsHandler(queries *db.Queries) *SuggestionsHandler {
+	return &SuggestionsHandler{queries: queries}
 }
 
 // SuggestionV2 represents a v2 follow suggestion
@@ -30,18 +30,17 @@ type SuggestionV2 struct {
 }
 
 // Get handles GET /api/v2/suggestions
-func (h *SuggestionsHandler) Get(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *SuggestionsHandler) Get(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
 	_ = accountID
 
 	limit := 40
-	if l := c.QueryParam("limit"); l != "" {
+	if l := web.QueryParam(r, "limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 80 {
 			limit = parsed
 		}
@@ -50,24 +49,23 @@ func (h *SuggestionsHandler) Get(c echo.Context) error {
 	// Return mock suggestions
 	suggestions := h.generateSuggestions(limit)
 
-	return c.JSON(http.StatusOK, suggestions)
+	web.JSON(w, http.StatusOK, suggestions)
 }
 
 // Delete handles DELETE /api/v2/suggestions/:account_id
-func (h *SuggestionsHandler) Delete(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
+func (h *SuggestionsHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
 	}
 
-	suggestionAccountID := c.Param("account_id")
+	suggestionAccountID := web.Param(r, "account_id")
 
 	_ = accountID
 	_ = suggestionAccountID
 
-	return c.JSON(http.StatusOK, map[string]any{})
+	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
 func (h *SuggestionsHandler) generateSuggestions(limit int) []SuggestionV2 {
@@ -106,7 +104,7 @@ func (h *SuggestionsHandler) generateSuggestions(limit int) []SuggestionV2 {
 }
 
 // RegisterRoutes registers suggestion routes
-func (h *SuggestionsHandler) RegisterRoutes(g *echo.Group) {
-	g.GET("/suggestions", h.Get)
-	g.DELETE("/suggestions/:account_id", h.Delete)
+func (h *SuggestionsHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v2/suggestions", h.Get)
+	mux.HandleFunc("DELETE /api/v2/suggestions/{account_id}", h.Delete)
 }

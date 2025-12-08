@@ -5,11 +5,11 @@ import (
 	"strconv"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/labstack/echo/v4"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	v1 "github.com/deicod/gotodon/internal/api/v1"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/web"
 )
 
 // ReportsHandler handles admin report endpoints
@@ -54,29 +54,29 @@ func mapCategory(c int32) string {
 }
 
 // GetAll handles GET /api/v1/admin/reports
-func (h *ReportsHandler) GetAll(c echo.Context) error {
-	if err := requireAdmin(c); err != nil {
-		return err
+func (h *ReportsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
 	}
 
 	limit := 100
-	if l := c.QueryParam("limit"); l != "" {
+	if l := web.QueryParam(r, "limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 200 {
 			limit = parsed
 		}
 	}
 	offset := 0
-	if o := c.QueryParam("offset"); o != "" {
+	if o := web.QueryParam(r, "offset"); o != "" {
 		if parsed, err := strconv.Atoi(o); err == nil && parsed >= 0 {
 			offset = parsed
 		}
 	}
 
-	resolved := c.QueryParam("resolved") == "true"
-	accountID, _ := strconv.ParseInt(c.QueryParam("account_id"), 10, 64)
-	targetAccountID, _ := strconv.ParseInt(c.QueryParam("target_account_id"), 10, 64)
+	resolved := web.QueryParam(r, "resolved") == "true"
+	accountID, _ := strconv.ParseInt(web.QueryParam(r, "account_id"), 10, 64)
+	targetAccountID, _ := strconv.ParseInt(web.QueryParam(r, "target_account_id"), 10, 64)
 
-	rows, err := h.queries.AdminListReports(c.Request().Context(), db.AdminListReportsParams{
+	rows, err := h.queries.AdminListReports(r.Context(), db.AdminListReportsParams{
 		Limit:           int32(limit),
 		Offset:          int32(offset),
 		Resolved:        resolved,
@@ -84,7 +84,8 @@ func (h *ReportsHandler) GetAll(c echo.Context) error {
 		TargetAccountID: targetAccountID,
 	})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Database error").SetInternal(err)
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
 	reports := make([]AdminReport, 0, len(rows))
@@ -139,23 +140,25 @@ func (h *ReportsHandler) GetAll(c echo.Context) error {
 		reports = append(reports, rep)
 	}
 
-	return c.JSON(http.StatusOK, reports)
+	web.JSON(w, http.StatusOK, reports)
 }
 
 // Get handles GET /api/v1/admin/reports/:id
-func (h *ReportsHandler) Get(c echo.Context) error {
-	if err := requireAdmin(c); err != nil {
-		return err
+func (h *ReportsHandler) Get(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
 	}
 
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, "Not found")
+		web.JSONError(w, http.StatusNotFound, "Not found")
+		return
 	}
 
-	row, err := h.queries.AdminGetReport(c.Request().Context(), id)
+	row, err := h.queries.AdminGetReport(r.Context(), id)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, "Not found")
+		web.JSONError(w, http.StatusNotFound, "Not found")
+		return
 	}
 
 	rep := AdminReport{
@@ -174,43 +177,39 @@ func (h *ReportsHandler) Get(c echo.Context) error {
 	// The List query had JOINs. The Get query did not (in generated code inspection).
 	// Let's rely on basic ID info for now.
 
-	return c.JSON(http.StatusOK, rep)
+	web.JSON(w, http.StatusOK, rep)
 }
 
 // Resolve handles POST /api/v1/admin/reports/:id/resolve
-func (h *ReportsHandler) Resolve(c echo.Context) error {
-	// TODO: Auth check (requireAdmin)
-	if err := requireAdmin(c); err != nil {
-		return err
+func (h *ReportsHandler) Resolve(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
 	}
 
 	// Get current user ID from context as actor
-	// middleware.GetAccountID(c) ...
-	// Since requireAdmin is passed, we assume role check passed, but we need ID for `action_taken_by_account_id`.
-	// Let's skip recording WHO resolved it for a moment if getting ID is complex, or pass 0/NULL.
-	// Actually `GetAccountID` uses "account_id" from JWT/session.
-	adminID, _ := middleware.GetAccountID(c)
+	adminID, _ := middleware.GetAccountID(r.Context())
 
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, "Not found")
+		web.JSONError(w, http.StatusNotFound, "Not found")
+		return
 	}
 
-	err = h.queries.AdminResolveReport(c.Request().Context(), db.AdminResolveReportParams{
+	err = h.queries.AdminResolveReport(r.Context(), db.AdminResolveReportParams{
 		ID:                     id,
 		ActionTakenByAccountID: pgtype.Int8{Int64: adminID, Valid: true},
 	})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Database error").SetInternal(err)
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
-	return h.Get(c)
+	h.Get(w, r)
 }
 
 // RegisterRoutes registers admin report routes
-func (h *ReportsHandler) RegisterRoutes(g *echo.Group) {
-	reports := g.Group("/reports")
-	reports.GET("", h.GetAll)
-	reports.GET("/:id", h.Get)
-	reports.POST("/:id/resolve", h.Resolve)
+func (h *ReportsHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v1/admin/reports", h.GetAll)
+	mux.HandleFunc("GET /api/v1/admin/reports/{id}", h.Get)
+	mux.HandleFunc("POST /api/v1/admin/reports/{id}/resolve", h.Resolve)
 }

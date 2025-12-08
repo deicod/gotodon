@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/labstack/echo/v4"
+	"github.com/deicod/gotodon/internal/web"
 )
 
 // ContextKey type for context keys
@@ -40,110 +40,108 @@ type TokenInfo struct {
 }
 
 // RequireAuth returns middleware that requires authentication
-func RequireAuth(validator TokenValidator) echo.MiddlewareFunc {
-	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			token := extractBearerToken(c.Request())
+func RequireAuth(validator TokenValidator) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			token := extractBearerToken(r)
 			if token == "" {
-				return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-					"error": "The access token is invalid",
-				})
+				web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+				return
 			}
 
-			info, err := validator.ValidateToken(c.Request().Context(), token)
+			info, err := validator.ValidateToken(r.Context(), token)
 			if err != nil {
-				return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-					"error": "The access token is invalid",
-				})
+				web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+				return
 			}
 
-			// Store in echo context
-			c.Set(string(ContextKeyTokenID), info.TokenID)
-			c.Set(string(ContextKeyAppID), info.AppID)
-			c.Set(string(ContextKeyScopes), info.Scopes)
+			// Store in context
+			ctx := context.WithValue(r.Context(), ContextKeyTokenID, info.TokenID)
+			ctx = context.WithValue(ctx, ContextKeyAppID, info.AppID)
+			ctx = context.WithValue(ctx, ContextKeyScopes, info.Scopes)
 
 			if info.UserID != nil {
-				c.Set(string(ContextKeyUserID), *info.UserID)
+				ctx = context.WithValue(ctx, ContextKeyUserID, *info.UserID)
 			}
 			if info.AccountID != nil {
-				c.Set(string(ContextKeyAccountID), *info.AccountID)
+				ctx = context.WithValue(ctx, ContextKeyAccountID, *info.AccountID)
 			}
 
-			return next(c)
-		}
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
 	}
 }
 
 // RequireScope returns middleware that checks for required scopes
-func RequireScope(requiredScopes ...string) echo.MiddlewareFunc {
-	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			scopes, ok := c.Get(string(ContextKeyScopes)).(string)
+func RequireScope(requiredScopes ...string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			scopes, ok := r.Context().Value(ContextKeyScopes).(string)
 			if !ok || scopes == "" {
-				return echo.NewHTTPError(http.StatusForbidden, map[string]string{
-					"error": "This action is outside the authorized scopes",
-				})
+				web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
+				return
 			}
 
 			for _, required := range requiredScopes {
 				if !hasScope(scopes, required) {
-					return echo.NewHTTPError(http.StatusForbidden, map[string]string{
-						"error": "This action is outside the authorized scopes",
-					})
+					web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
+					return
 				}
 			}
 
-			return next(c)
-		}
+			next.ServeHTTP(w, r)
+		})
 	}
 }
 
 // OptionalAuth returns middleware that optionally authenticates
-func OptionalAuth(validator TokenValidator) echo.MiddlewareFunc {
-	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			token := extractBearerToken(c.Request())
+func OptionalAuth(validator TokenValidator) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			token := extractBearerToken(r)
 			if token == "" {
-				return next(c)
+				next.ServeHTTP(w, r)
+				return
 			}
 
-			info, err := validator.ValidateToken(c.Request().Context(), token)
+			info, err := validator.ValidateToken(r.Context(), token)
 			if err != nil {
 				// Invalid token is ignored for optional auth
-				return next(c)
+				next.ServeHTTP(w, r)
+				return
 			}
 
-			c.Set(string(ContextKeyTokenID), info.TokenID)
-			c.Set(string(ContextKeyAppID), info.AppID)
-			c.Set(string(ContextKeyScopes), info.Scopes)
+			ctx := context.WithValue(r.Context(), ContextKeyTokenID, info.TokenID)
+			ctx = context.WithValue(ctx, ContextKeyAppID, info.AppID)
+			ctx = context.WithValue(ctx, ContextKeyScopes, info.Scopes)
 
 			if info.UserID != nil {
-				c.Set(string(ContextKeyUserID), *info.UserID)
+				ctx = context.WithValue(ctx, ContextKeyUserID, *info.UserID)
 			}
 			if info.AccountID != nil {
-				c.Set(string(ContextKeyAccountID), *info.AccountID)
+				ctx = context.WithValue(ctx, ContextKeyAccountID, *info.AccountID)
 			}
 
-			return next(c)
-		}
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
 	}
 }
 
 // GetAccountID gets the account ID from the context
-func GetAccountID(c echo.Context) (int64, bool) {
-	id, ok := c.Get(string(ContextKeyAccountID)).(int64)
+func GetAccountID(ctx context.Context) (int64, bool) {
+	id, ok := ctx.Value(ContextKeyAccountID).(int64)
 	return id, ok
 }
 
 // GetUserID gets the user ID from the context
-func GetUserID(c echo.Context) (int64, bool) {
-	id, ok := c.Get(string(ContextKeyUserID)).(int64)
+func GetUserID(ctx context.Context) (int64, bool) {
+	id, ok := ctx.Value(ContextKeyUserID).(int64)
 	return id, ok
 }
 
 // GetScopes gets the scopes from the context
-func GetScopes(c echo.Context) string {
-	scopes, _ := c.Get(string(ContextKeyScopes)).(string)
+func GetScopes(ctx context.Context) string {
+	scopes, _ := ctx.Value(ContextKeyScopes).(string)
 	return scopes
 }
 
