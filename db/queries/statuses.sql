@@ -107,3 +107,22 @@ SELECT * FROM statuses
 WHERE in_reply_to_id = @status_id AND deleted_at IS NULL
 ORDER BY id;
 
+-- name: GetHashtagTimeline :many
+SELECT s.* FROM statuses s
+JOIN statuses_tags st ON st.status_id = s.id
+JOIN tags t ON t.id = st.tag_id
+WHERE s.deleted_at IS NULL
+  AND s.visibility = 0  -- public
+  AND lower(t.name) = lower(@tag)
+  AND (@local::boolean = false OR s.local = true)
+ORDER BY s.id DESC
+LIMIT $1 OFFSET $2;
+
+-- name: GetListTimeline :many
+SELECT s.* FROM statuses s
+JOIN list_accounts la ON la.account_id = s.account_id
+WHERE la.list_id = @list_id
+  AND s.deleted_at IS NULL
+  AND s.reblog_of_id IS NULL
+ORDER BY s.id DESC
+LIMIT $1 OFFSET $2;

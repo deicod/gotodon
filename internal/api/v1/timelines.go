@@ -187,9 +187,22 @@ func (h *TimelinesHandler) Hashtag(c echo.Context) error {
 	}
 
 	limit := parseLimit(c.QueryParam("limit"), 20, 40)
+	local := c.QueryParam("local") == "true"
 
-	// Hashtag timeline requires a dedicated query not yet implemented
-	_ = limit
+	ctx := context.Background()
+
+	if h.useDB() {
+		dbStatuses, err := h.queries.GetHashtagTimeline(ctx, db.GetHashtagTimelineParams{
+			Tag:    hashtag,
+			Limit:  int32(limit),
+			Offset: 0,
+			Local:  local,
+		})
+		if err != nil {
+			return c.JSON(http.StatusOK, []Status{})
+		}
+		return c.JSON(http.StatusOK, h.dbStatusesToAPI(ctx, dbStatuses))
+	}
 
 	return c.JSON(http.StatusOK, []Status{})
 }
@@ -219,6 +232,8 @@ func (h *TimelinesHandler) List(c echo.Context) error {
 
 	ctx := context.Background()
 
+	limit := parseLimit(c.QueryParam("limit"), 20, 40)
+
 	if h.useDB() {
 		// Verify list ownership
 		_, err := h.queries.GetList(ctx, db.GetListParams{
@@ -231,7 +246,15 @@ func (h *TimelinesHandler) List(c echo.Context) error {
 			})
 		}
 
-		// List timeline requires a dedicated query not yet implemented
+		dbStatuses, err := h.queries.GetListTimeline(ctx, db.GetListTimelineParams{
+			ListID: listID,
+			Limit:  int32(limit),
+			Offset: 0,
+		})
+		if err != nil {
+			return c.JSON(http.StatusOK, []Status{})
+		}
+		return c.JSON(http.StatusOK, h.dbStatusesToAPI(ctx, dbStatuses))
 	}
 
 	return c.JSON(http.StatusOK, []Status{})

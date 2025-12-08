@@ -216,6 +216,75 @@ func (q *Queries) GetAccountStatuses(ctx context.Context, arg GetAccountStatuses
 	return items, nil
 }
 
+const getHashtagTimeline = `-- name: GetHashtagTimeline :many
+SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at FROM statuses s
+JOIN statuses_tags st ON st.status_id = s.id
+JOIN tags t ON t.id = st.tag_id
+WHERE s.deleted_at IS NULL
+  AND s.visibility = 0  -- public
+  AND lower(t.name) = lower($3)
+  AND ($4::boolean = false OR s.local = true)
+ORDER BY s.id DESC
+LIMIT $1 OFFSET $2
+`
+
+type GetHashtagTimelineParams struct {
+	Limit  int32  `db:"limit" json:"limit"`
+	Offset int32  `db:"offset" json:"offset"`
+	Tag    string `db:"tag" json:"tag"`
+	Local  bool   `db:"local" json:"local"`
+}
+
+func (q *Queries) GetHashtagTimeline(ctx context.Context, arg GetHashtagTimelineParams) ([]Status, error) {
+	rows, err := q.db.Query(ctx, getHashtagTimeline,
+		arg.Limit,
+		arg.Offset,
+		arg.Tag,
+		arg.Local,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Status{}
+	for rows.Next() {
+		var i Status
+		if err := rows.Scan(
+			&i.ID,
+			&i.Uri,
+			&i.Text,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.InReplyToID,
+			&i.ReblogOfID,
+			&i.Url,
+			&i.Sensitive,
+			&i.Visibility,
+			&i.SpoilerText,
+			&i.Reply,
+			&i.Language,
+			&i.ConversationID,
+			&i.Local,
+			&i.AccountID,
+			&i.ApplicationID,
+			&i.InReplyToAccountID,
+			&i.PollID,
+			&i.DeletedAt,
+			&i.EditedAt,
+			&i.Trendable,
+			&i.OrderedMediaAttachmentIds,
+			&i.FetchedRepliesAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getHomeTimeline = `-- name: GetHomeTimeline :many
 SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at FROM statuses s
 WHERE s.deleted_at IS NULL
@@ -238,6 +307,67 @@ type GetHomeTimelineParams struct {
 
 func (q *Queries) GetHomeTimeline(ctx context.Context, arg GetHomeTimelineParams) ([]Status, error) {
 	rows, err := q.db.Query(ctx, getHomeTimeline, arg.Limit, arg.Offset, arg.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Status{}
+	for rows.Next() {
+		var i Status
+		if err := rows.Scan(
+			&i.ID,
+			&i.Uri,
+			&i.Text,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.InReplyToID,
+			&i.ReblogOfID,
+			&i.Url,
+			&i.Sensitive,
+			&i.Visibility,
+			&i.SpoilerText,
+			&i.Reply,
+			&i.Language,
+			&i.ConversationID,
+			&i.Local,
+			&i.AccountID,
+			&i.ApplicationID,
+			&i.InReplyToAccountID,
+			&i.PollID,
+			&i.DeletedAt,
+			&i.EditedAt,
+			&i.Trendable,
+			&i.OrderedMediaAttachmentIds,
+			&i.FetchedRepliesAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getListTimeline = `-- name: GetListTimeline :many
+SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at FROM statuses s
+JOIN list_accounts la ON la.account_id = s.account_id
+WHERE la.list_id = $3
+  AND s.deleted_at IS NULL
+  AND s.reblog_of_id IS NULL
+ORDER BY s.id DESC
+LIMIT $1 OFFSET $2
+`
+
+type GetListTimelineParams struct {
+	Limit  int32 `db:"limit" json:"limit"`
+	Offset int32 `db:"offset" json:"offset"`
+	ListID int64 `db:"list_id" json:"list_id"`
+}
+
+func (q *Queries) GetListTimeline(ctx context.Context, arg GetListTimelineParams) ([]Status, error) {
+	rows, err := q.db.Query(ctx, getListTimeline, arg.Limit, arg.Offset, arg.ListID)
 	if err != nil {
 		return nil, err
 	}

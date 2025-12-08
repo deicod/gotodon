@@ -2,7 +2,9 @@
 package v1
 
 import (
+	"context"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -21,6 +23,10 @@ func NewNotificationsHandler(queries *db.Queries) *NotificationsHandler {
 	return &NotificationsHandler{queries: queries}
 }
 
+func (h *NotificationsHandler) useDB() bool {
+	return h.queries != nil
+}
+
 // Notification represents a Mastodon notification
 type Notification struct {
 	ID        string    `json:"id"`
@@ -30,41 +36,126 @@ type Notification struct {
 	Status    *Status   `json:"status,omitempty"`
 }
 
+func (h *NotificationsHandler) dbNotificationToAPI(ctx context.Context, dbNotif db.Notification) Notification {
+	createdAt := time.Now()
+	if dbNotif.CreatedAt.Valid {
+		createdAt = dbNotif.CreatedAt.Time
+	}
+
+	notifType := ""
+	if dbNotif.Type.Valid {
+		notifType = dbNotif.Type.String
+	}
+
+	notif := Notification{
+		ID:        strconv.FormatInt(dbNotif.ID, 10),
+		Type:      notifType,
+		CreatedAt: createdAt,
+	}
+
+	// Load account
+	if h.useDB() && dbNotif.FromAccountID > 0 {
+		dbAcc, err := h.queries.GetAccountByID(ctx, dbNotif.FromAccountID)
+		if err == nil {
+			discoverable := dbAcc.Discoverable.Valid && dbAcc.Discoverable.Bool
+			notif.Account = Account{
+				ID:           strconv.FormatInt(dbAcc.ID, 10),
+				Username:     dbAcc.Username,
+				Acct:         dbAcc.Username,
+				DisplayName:  dbAcc.DisplayName,
+				Discoverable: &discoverable,
+				Emojis:       []any{},
+				Fields:       []Field{},
+			}
+			if dbAcc.CreatedAt.Valid {
+				notif.Account.CreatedAt = dbAcc.CreatedAt.Time
+			}
+		}
+	}
+
+	return notif
+}
+
 // List handles GET /api/v1/notifications
 func (h *NotificationsHandler) List(c echo.Context) error {
-	_, ok := middleware.GetAccountID(c)
+	accountID, ok := middleware.GetAccountID(c)
 	if !ok {
 		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
 			"error": "The access token is invalid",
 		})
 	}
 
-	// No notifications table in DB yet, return empty
+	limit := parseLimit(c.QueryParam("limit"), 40, 80)
+	types := c.QueryParams()["types[]"]
+	excludeTypes := c.QueryParams()["exclude_types[]"]
+
+	ctx := context.Background()
+
+	if h.useDB() {
+		dbNotifs, err := h.queries.ListNotifications(ctx, db.ListNotificationsParams{
+			AccountID: accountID,
+			Limit:     int32(limit),
+			Offset:    0,
+			Column4:   types,
+			Column5:   excludeTypes,
+		})
+		if err != nil {
+			return c.JSON(http.StatusOK, []Notification{})
+		}
+
+		notifications := make([]Notification, len(dbNotifs))
+		for i, n := range dbNotifs {
+			notifications[i] = h.dbNotificationToAPI(ctx, n)
+		}
+		return c.JSON(http.StatusOK, notifications)
+	}
+
 	return c.JSON(http.StatusOK, []Notification{})
 }
 
 // Get handles GET /api/v1/notifications/:id
 func (h *NotificationsHandler) Get(c echo.Context) error {
-	id := c.Param("id")
-	if id == "" {
+	idStr := c.Param("id")
+	if idStr == "" {
 		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
 			"error": "Record not found",
 		})
 	}
 
-	_, ok := middleware.GetAccountID(c)
+	accountID, ok := middleware.GetAccountID(c)
 	if !ok {
 		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
 			"error": "The access token is invalid",
 		})
 	}
 
-	// Mock response
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+			"error": "Record not found",
+		})
+	}
+
+	ctx := context.Background()
+
+	if h.useDB() {
+		dbNotif, err := h.queries.GetNotification(ctx, db.GetNotificationParams{
+			ID:        id,
+			AccountID: accountID,
+		})
+		if err != nil {
+			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+				"error": "Record not found",
+			})
+		}
+		return c.JSON(http.StatusOK, h.dbNotificationToAPI(ctx, dbNotif))
+	}
+
+	// Mock fallback
 	now := time.Now()
 	discoverable := true
-
 	return c.JSON(http.StatusOK, Notification{
-		ID:        id,
+		ID:        idStr,
 		Type:      "favourite",
 		CreatedAt: now.Add(-time.Hour),
 		Account: Account{
@@ -82,11 +173,17 @@ func (h *NotificationsHandler) Get(c echo.Context) error {
 
 // Clear handles POST /api/v1/notifications/clear
 func (h *NotificationsHandler) Clear(c echo.Context) error {
-	_, ok := middleware.GetAccountID(c)
+	accountID, ok := middleware.GetAccountID(c)
 	if !ok {
 		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
 			"error": "The access token is invalid",
 		})
+	}
+
+	ctx := context.Background()
+
+	if h.useDB() {
+		_ = h.queries.ClearNotifications(ctx, accountID)
 	}
 
 	return c.JSON(http.StatusOK, map[string]any{})
@@ -94,10 +191,27 @@ func (h *NotificationsHandler) Clear(c echo.Context) error {
 
 // Dismiss handles POST /api/v1/notifications/:id/dismiss
 func (h *NotificationsHandler) Dismiss(c echo.Context) error {
-	_, ok := middleware.GetAccountID(c)
+	idStr := c.Param("id")
+	accountID, ok := middleware.GetAccountID(c)
 	if !ok {
 		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
 			"error": "The access token is invalid",
+		})
+	}
+
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+			"error": "Record not found",
+		})
+	}
+
+	ctx := context.Background()
+
+	if h.useDB() {
+		_ = h.queries.DeleteNotification(ctx, db.DeleteNotificationParams{
+			ID:        id,
+			AccountID: accountID,
 		})
 	}
 
