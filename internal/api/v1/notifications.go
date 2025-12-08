@@ -9,17 +9,22 @@ import (
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/streaming"
 	"github.com/deicod/gotodon/internal/web"
 )
 
 // NotificationsHandler handles notification endpoints
 type NotificationsHandler struct {
-	queries *db.Queries
+	queries   *db.Queries
+	publisher streaming.Publisher
 }
 
 // NewNotificationsHandler creates a new notifications handler
-func NewNotificationsHandler(queries *db.Queries) *NotificationsHandler {
-	return &NotificationsHandler{queries: queries}
+func NewNotificationsHandler(queries *db.Queries, publisher streaming.Publisher) *NotificationsHandler {
+	return &NotificationsHandler{
+		queries:   queries,
+		publisher: publisher,
+	}
 }
 
 func (h *NotificationsHandler) useDB() bool {

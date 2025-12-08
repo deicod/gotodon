@@ -3,6 +3,7 @@ package v1
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/streaming"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/oauth"
 )
@@ -39,12 +41,16 @@ var stringToVisibility = map[string]int32{
 
 // StatusesHandler handles status-related endpoints
 type StatusesHandler struct {
-	queries *db.Queries
+	queries   *db.Queries
+	publisher streaming.Publisher
 }
 
 // NewStatusesHandler creates a new statuses handler
-func NewStatusesHandler(queries *db.Queries) *StatusesHandler {
-	return &StatusesHandler{queries: queries}
+func NewStatusesHandler(queries *db.Queries, publisher streaming.Publisher) *StatusesHandler {
+	return &StatusesHandler{
+		queries:   queries,
+		publisher: publisher,
+	}
 }
 
 func (h *StatusesHandler) useDB() bool {
@@ -349,7 +355,26 @@ func (h *StatusesHandler) Create(w http.ResponseWriter, r *http.Request) {
 			_ = h.queries.IncrementStatusReplies(ctx, inReplyToID.Int64)
 		}
 
-		web.JSON(w, http.StatusOK, h.dbStatusToAPI(ctx, dbStatus))
+		apiStatus := h.dbStatusToAPI(ctx, dbStatus)
+
+		// Publish streaming events
+		if h.publisher != nil {
+			// Publish to public timeline if public
+			streams := []string{}
+			if dbStatus.Visibility == VisibilityPublic {
+				streams = append(streams, streaming.StreamPublic, streaming.StreamPublicLocal)
+			}
+
+			// Publish to user stream (home of followers would be distributed by worker usually,
+			// but simply publishing to author's user stream is good for self)
+			streams = append(streams, fmt.Sprintf("user:%d", accountID))
+
+			// TODO: Add hashtags streams if any
+
+			_ = h.publisher.PublishStatusToRedis(context.Background(), apiStatus, streams)
+		}
+
+		web.JSON(w, http.StatusOK, apiStatus)
 		return
 	}
 
@@ -477,6 +502,19 @@ func (h *StatusesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 			"media_attachments": []any{},
 			"poll":              nil,
 		})
+
+		// Publish delete event
+		if h.publisher != nil {
+			streams := []string{}
+			if dbStatus.Visibility == VisibilityPublic {
+				streams = append(streams, streaming.StreamPublic, streaming.StreamPublicLocal)
+			}
+			streams = append(streams, fmt.Sprintf("user:%d", dbStatus.AccountID))
+			// TODO: Add hashtag streams if we knew them
+
+			_ = h.publisher.PublishDeleteToRedis(context.Background(), idStr, streams)
+		}
+
 		return
 	}
 

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 	"github.com/spf13/cobra"
 
 	activitypubapi "github.com/deicod/gotodon/internal/api/activitypub"
@@ -88,8 +89,52 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	queries := db.New(pool)
 	logger.Info("Connected to PostgreSQL database")
 
+	// Connect to Redis (required for streaming)
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Addr(),
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.Database,
+	})
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		logger.Warn("Failed to connect to Redis, streaming will be disabled", "error", err)
+	} else {
+		logger.Info("Connected to Redis", "addr", cfg.Redis.Addr())
+	}
+
 	// Create ServeMux
 	mux := http.NewServeMux()
+
+	// Streaming API (Initialize before handlers to inject)
+	var streamingHub *streaming.RedisHub
+	if rdb != nil {
+		streamingHub = streaming.NewRedisHub(rdb, "gotodon")
+		if err := streamingHub.Start(context.Background()); err != nil {
+			logger.Error("Failed to start RedisHub", "error", err)
+		} else {
+			go func() {
+				<-ctx.Done()
+				streamingHub.Stop()
+			}()
+		}
+	} else {
+		logger.Warn("Redis unavailable, streaming API will not function correctly across instances")
+	}
+
+	var pubSubHandler http.Handler
+	if streamingHub != nil {
+		wsHandler := streaming.NewWSHandler(streamingHub.Hub)
+		sseHandler := streaming.NewSSEHandler(streamingHub.Hub)
+
+		pubSubHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Upgrade") == "websocket" {
+				wsHandler.ServeHTTP(w, r)
+			} else {
+				sseHandler.ServeHTTP(w, r)
+			}
+		})
+
+		mux.Handle("GET /api/v1/streaming", pubSubHandler)
+	}
 
 	// Internal handlers
 
@@ -97,7 +142,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	accountsHandler := v1.NewAccountsHandler(queries)
 	accountsHandler.RegisterRoutes(mux)
 
-	statusesHandler := v1.NewStatusesHandler(queries)
+	statusesHandler := v1.NewStatusesHandler(queries, streamingHub)
 	statusesHandler.RegisterRoutes(mux)
 
 	timelinesHandler := v1.NewTimelinesHandler(queries)
@@ -112,7 +157,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	appsHandler := v1.NewAppsHandler(queries)
 	appsHandler.RegisterRoutes(mux)
 
-	notificationsHandler := v1.NewNotificationsHandler(queries)
+	notificationsHandler := v1.NewNotificationsHandler(queries, streamingHub)
 	notificationsHandler.RegisterRoutes(mux)
 
 	mediaStorage := media.NewLocalStorage("./uploads", fmt.Sprintf("https://%s/files", cfg.Instance.LocalDomain))
@@ -181,13 +226,6 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	// Register OAuth handlers
 	oauthHandler := oauthapi.NewHandler(queries)
 	oauthHandler.RegisterRoutes(mux)
-
-	// Streaming API
-	streamingHub := streaming.NewHub()
-	go streamingHub.Run(context.Background())
-	sseHandler := streaming.NewSSEHandler(streamingHub)
-	mux.Handle("GET /api/v1/streaming", sseHandler)
-	mux.Handle("GET /api/v1/streaming/{channel}", sseHandler)
 
 	// ActivityPub Federation
 	federationHandler := activitypubapi.NewFederationHandler(queries, cfg.Instance.LocalDomain)
