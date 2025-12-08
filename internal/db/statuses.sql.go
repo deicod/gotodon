@@ -18,7 +18,7 @@ INSERT INTO statuses (
     conversation_id, local, application_id, reply
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
-) RETURNING id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at
+) RETURNING id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at, search_index
 `
 
 type CreateStatusParams struct {
@@ -81,6 +81,7 @@ func (q *Queries) CreateStatus(ctx context.Context, arg CreateStatusParams) (Sta
 		&i.Trendable,
 		&i.OrderedMediaAttachmentIds,
 		&i.FetchedRepliesAt,
+		&i.SearchIndex,
 	)
 	return i, err
 }
@@ -145,7 +146,7 @@ func (q *Queries) DeleteStatus(ctx context.Context, id int64) error {
 }
 
 const getAccountStatuses = `-- name: GetAccountStatuses :many
-SELECT id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at FROM statuses
+SELECT id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at, search_index FROM statuses
 WHERE account_id = $1 
   AND deleted_at IS NULL
   AND ($4::boolean = false OR NOT reply OR in_reply_to_account_id = account_id)
@@ -205,6 +206,7 @@ func (q *Queries) GetAccountStatuses(ctx context.Context, arg GetAccountStatuses
 			&i.Trendable,
 			&i.OrderedMediaAttachmentIds,
 			&i.FetchedRepliesAt,
+			&i.SearchIndex,
 		); err != nil {
 			return nil, err
 		}
@@ -217,7 +219,7 @@ func (q *Queries) GetAccountStatuses(ctx context.Context, arg GetAccountStatuses
 }
 
 const getHashtagTimeline = `-- name: GetHashtagTimeline :many
-SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at FROM statuses s
+SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at, s.search_index FROM statuses s
 JOIN statuses_tags st ON st.status_id = s.id
 JOIN tags t ON t.id = st.tag_id
 WHERE s.deleted_at IS NULL
@@ -274,6 +276,7 @@ func (q *Queries) GetHashtagTimeline(ctx context.Context, arg GetHashtagTimeline
 			&i.Trendable,
 			&i.OrderedMediaAttachmentIds,
 			&i.FetchedRepliesAt,
+			&i.SearchIndex,
 		); err != nil {
 			return nil, err
 		}
@@ -286,7 +289,7 @@ func (q *Queries) GetHashtagTimeline(ctx context.Context, arg GetHashtagTimeline
 }
 
 const getHomeTimeline = `-- name: GetHomeTimeline :many
-SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at FROM statuses s
+SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at, s.search_index FROM statuses s
 WHERE s.deleted_at IS NULL
   AND s.account_id IN (
     SELECT f.target_account_id FROM follows f WHERE f.account_id = $3
@@ -339,6 +342,7 @@ func (q *Queries) GetHomeTimeline(ctx context.Context, arg GetHomeTimelineParams
 			&i.Trendable,
 			&i.OrderedMediaAttachmentIds,
 			&i.FetchedRepliesAt,
+			&i.SearchIndex,
 		); err != nil {
 			return nil, err
 		}
@@ -351,7 +355,7 @@ func (q *Queries) GetHomeTimeline(ctx context.Context, arg GetHomeTimelineParams
 }
 
 const getListTimeline = `-- name: GetListTimeline :many
-SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at FROM statuses s
+SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at, s.search_index FROM statuses s
 JOIN list_accounts la ON la.account_id = s.account_id
 WHERE la.list_id = $3
   AND s.deleted_at IS NULL
@@ -400,6 +404,7 @@ func (q *Queries) GetListTimeline(ctx context.Context, arg GetListTimelineParams
 			&i.Trendable,
 			&i.OrderedMediaAttachmentIds,
 			&i.FetchedRepliesAt,
+			&i.SearchIndex,
 		); err != nil {
 			return nil, err
 		}
@@ -412,7 +417,7 @@ func (q *Queries) GetListTimeline(ctx context.Context, arg GetListTimelineParams
 }
 
 const getPinnedStatuses = `-- name: GetPinnedStatuses :many
-SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at FROM statuses s
+SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at, s.search_index FROM statuses s
 JOIN status_pins sp ON sp.status_id = s.id
 WHERE sp.account_id = $1 AND s.deleted_at IS NULL
 ORDER BY sp.id DESC
@@ -452,6 +457,7 @@ func (q *Queries) GetPinnedStatuses(ctx context.Context, accountID int64) ([]Sta
 			&i.Trendable,
 			&i.OrderedMediaAttachmentIds,
 			&i.FetchedRepliesAt,
+			&i.SearchIndex,
 		); err != nil {
 			return nil, err
 		}
@@ -464,7 +470,7 @@ func (q *Queries) GetPinnedStatuses(ctx context.Context, accountID int64) ([]Sta
 }
 
 const getPublicTimeline = `-- name: GetPublicTimeline :many
-SELECT id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at FROM statuses
+SELECT id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at, search_index FROM statuses
 WHERE deleted_at IS NULL
   AND visibility = 0  -- public
   AND reblog_of_id IS NULL
@@ -514,6 +520,7 @@ func (q *Queries) GetPublicTimeline(ctx context.Context, arg GetPublicTimelinePa
 			&i.Trendable,
 			&i.OrderedMediaAttachmentIds,
 			&i.FetchedRepliesAt,
+			&i.SearchIndex,
 		); err != nil {
 			return nil, err
 		}
@@ -531,7 +538,7 @@ WITH RECURSIVE ancestors AS (
   UNION ALL
   SELECT s.id, s.in_reply_to_id FROM statuses s JOIN ancestors a ON s.id = a.in_reply_to_id WHERE s.deleted_at IS NULL
 )
-SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at FROM statuses s JOIN ancestors a ON s.id = a.id WHERE s.id != $1 ORDER BY s.id
+SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at, s.search_index FROM statuses s JOIN ancestors a ON s.id = a.id WHERE s.id != $1 ORDER BY s.id
 `
 
 func (q *Queries) GetStatusAncestors(ctx context.Context, statusID int64) ([]Status, error) {
@@ -568,6 +575,7 @@ func (q *Queries) GetStatusAncestors(ctx context.Context, statusID int64) ([]Sta
 			&i.Trendable,
 			&i.OrderedMediaAttachmentIds,
 			&i.FetchedRepliesAt,
+			&i.SearchIndex,
 		); err != nil {
 			return nil, err
 		}
@@ -580,7 +588,7 @@ func (q *Queries) GetStatusAncestors(ctx context.Context, statusID int64) ([]Sta
 }
 
 const getStatusByID = `-- name: GetStatusByID :one
-SELECT id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at FROM statuses WHERE id = $1 AND deleted_at IS NULL
+SELECT id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at, search_index FROM statuses WHERE id = $1 AND deleted_at IS NULL
 `
 
 func (q *Queries) GetStatusByID(ctx context.Context, id int64) (Status, error) {
@@ -611,12 +619,13 @@ func (q *Queries) GetStatusByID(ctx context.Context, id int64) (Status, error) {
 		&i.Trendable,
 		&i.OrderedMediaAttachmentIds,
 		&i.FetchedRepliesAt,
+		&i.SearchIndex,
 	)
 	return i, err
 }
 
 const getStatusByURI = `-- name: GetStatusByURI :one
-SELECT id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at FROM statuses WHERE uri = $1 AND deleted_at IS NULL
+SELECT id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at, search_index FROM statuses WHERE uri = $1 AND deleted_at IS NULL
 `
 
 func (q *Queries) GetStatusByURI(ctx context.Context, uri pgtype.Text) (Status, error) {
@@ -647,12 +656,13 @@ func (q *Queries) GetStatusByURI(ctx context.Context, uri pgtype.Text) (Status, 
 		&i.Trendable,
 		&i.OrderedMediaAttachmentIds,
 		&i.FetchedRepliesAt,
+		&i.SearchIndex,
 	)
 	return i, err
 }
 
 const getStatusDescendants = `-- name: GetStatusDescendants :many
-SELECT id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at FROM statuses
+SELECT id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at, search_index FROM statuses
 WHERE in_reply_to_id = $1 AND deleted_at IS NULL
 ORDER BY id
 `
@@ -691,6 +701,7 @@ func (q *Queries) GetStatusDescendants(ctx context.Context, statusID pgtype.Int8
 			&i.Trendable,
 			&i.OrderedMediaAttachmentIds,
 			&i.FetchedRepliesAt,
+			&i.SearchIndex,
 		); err != nil {
 			return nil, err
 		}
@@ -722,7 +733,7 @@ func (q *Queries) GetStatusStats(ctx context.Context, statusID int64) (StatusSta
 }
 
 const getStatusesByIDs = `-- name: GetStatusesByIDs :many
-SELECT id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at FROM statuses WHERE id = ANY($1::bigint[]) AND deleted_at IS NULL
+SELECT id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at, search_index FROM statuses WHERE id = ANY($1::bigint[]) AND deleted_at IS NULL
 `
 
 func (q *Queries) GetStatusesByIDs(ctx context.Context, ids []int64) ([]Status, error) {
@@ -759,6 +770,7 @@ func (q *Queries) GetStatusesByIDs(ctx context.Context, ids []int64) ([]Status, 
 			&i.Trendable,
 			&i.OrderedMediaAttachmentIds,
 			&i.FetchedRepliesAt,
+			&i.SearchIndex,
 		); err != nil {
 			return nil, err
 		}
@@ -847,7 +859,7 @@ UPDATE statuses SET
     edited_at = now(),
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at
+RETURNING id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at, search_index
 `
 
 type UpdateStatusParams struct {
@@ -892,6 +904,7 @@ func (q *Queries) UpdateStatus(ctx context.Context, arg UpdateStatusParams) (Sta
 		&i.Trendable,
 		&i.OrderedMediaAttachmentIds,
 		&i.FetchedRepliesAt,
+		&i.SearchIndex,
 	)
 	return i, err
 }

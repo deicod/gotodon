@@ -59,6 +59,7 @@ type Account struct {
 	RequestedReviewAt          pgtype.Timestamptz `db:"requested_review_at" json:"requested_review_at"`
 	Indexable                  bool               `db:"indexable" json:"indexable"`
 	AttributionDomains         []string           `db:"attribution_domains" json:"attribution_domains"`
+	SearchIndex                interface{}        `db:"search_index" json:"search_index"`
 }
 
 type AccountDomainBlock struct {
@@ -452,6 +453,7 @@ type Status struct {
 	Trendable                 pgtype.Bool        `db:"trendable" json:"trendable"`
 	OrderedMediaAttachmentIds []int64            `db:"ordered_media_attachment_ids" json:"ordered_media_attachment_ids"`
 	FetchedRepliesAt          pgtype.Timestamptz `db:"fetched_replies_at" json:"fetched_replies_at"`
+	SearchIndex               interface{}        `db:"search_index" json:"search_index"`
 }
 
 type StatusPin struct {

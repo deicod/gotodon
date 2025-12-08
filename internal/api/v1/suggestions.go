@@ -9,16 +9,17 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/db"
 )
 
-// SuggestionsHandler handles suggestion endpoints
+// SuggestionsHandler handles suggestions endpoints
 type SuggestionsHandler struct {
-	// In production, this would use database/algorithms
+	queries *db.Queries
 }
 
 // NewSuggestionsHandler creates a new suggestions handler
-func NewSuggestionsHandler() *SuggestionsHandler {
-	return &SuggestionsHandler{}
+func NewSuggestionsHandler(queries *db.Queries) *SuggestionsHandler {
+	return &SuggestionsHandler{queries: queries}
 }
 
 // Suggestion represents a follow suggestion
@@ -29,15 +30,6 @@ type Suggestion struct {
 
 // Get handles GET /api/v1/suggestions (deprecated, use v2)
 func (h *SuggestionsHandler) Get(c echo.Context) error {
-	accountID, ok := middleware.GetAccountID(c)
-	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
-	}
-
-	_ = accountID
-
 	limit := 40
 	if l := c.QueryParam("limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 80 {
@@ -45,10 +37,40 @@ func (h *SuggestionsHandler) Get(c echo.Context) error {
 		}
 	}
 
-	// Return mock suggestions
-	suggestions := h.generateSuggestions(limit)
+	accountID, ok := middleware.GetAccountID(c)
+	if !ok {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
+	}
 
-	return c.JSON(http.StatusOK, suggestions)
+	if h.queries == nil {
+		return c.JSON(http.StatusOK, []Account{})
+	}
+
+	accounts, err := h.queries.GetFollowSuggestions(c.Request().Context(), db.GetFollowSuggestionsParams{
+		AccountID: accountID,
+		Limit:     int32(limit),
+	})
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	resp := []Account{}
+	for _, a := range accounts {
+		discoverable := a.Discoverable.Valid && a.Discoverable.Bool
+		resp = append(resp, Account{
+			ID:           strconv.FormatInt(a.ID, 10),
+			Username:     a.Username,
+			Acct:         a.Username,
+			DisplayName:  a.DisplayName,
+			Note:         a.Note,
+			Locked:       a.Locked,
+			Discoverable: &discoverable,
+			Emojis:       []any{},
+			Fields:       []Field{},
+		})
+	}
+
+	return c.JSON(http.StatusOK, resp)
 }
 
 // Delete handles DELETE /api/v1/suggestions/:account_id

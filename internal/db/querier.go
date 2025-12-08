@@ -78,6 +78,7 @@ type Querier interface {
 	GetFiltersForAccount(ctx context.Context, accountID int64) ([]GetFiltersForAccountRow, error)
 	GetFollow(ctx context.Context, arg GetFollowParams) (Follow, error)
 	GetFollowRequest(ctx context.Context, arg GetFollowRequestParams) (FollowRequest, error)
+	GetFollowSuggestions(ctx context.Context, arg GetFollowSuggestionsParams) ([]Account, error)
 	GetFollowers(ctx context.Context, arg GetFollowersParams) ([]Account, error)
 	GetFollowing(ctx context.Context, arg GetFollowingParams) ([]Account, error)
 	GetHashtagTimeline(ctx context.Context, arg GetHashtagTimelineParams) ([]Status, error)
@@ -109,6 +110,10 @@ type Querier interface {
 	GetStatusDescendants(ctx context.Context, statusID pgtype.Int8) ([]Status, error)
 	GetStatusStats(ctx context.Context, statusID int64) (StatusStat, error)
 	GetStatusesByIDs(ctx context.Context, ids []int64) ([]Status, error)
+	// Placeholder: In future, use preview_cards table
+	GetTrendingLinks(ctx context.Context) ([]int32, error)
+	GetTrendingStatuses(ctx context.Context, limit int32) ([]GetTrendingStatusesRow, error)
+	GetTrendingTags(ctx context.Context, limit int32) ([]GetTrendingTagsRow, error)
 	GetUserByAccountID(ctx context.Context, accountID int64) (User, error)
 	GetUserByConfirmationToken(ctx context.Context, confirmationToken pgtype.Text) (User, error)
 	GetUserByEmail(ctx context.Context, lower string) (User, error)
@@ -149,6 +154,9 @@ type Querier interface {
 	RevokeOAuthAccessTokensByApplication(ctx context.Context, arg RevokeOAuthAccessTokensByApplicationParams) error
 	RevokeOAuthAccessTokensByUser(ctx context.Context, resourceOwnerID pgtype.Int8) error
 	SearchAccounts(ctx context.Context, arg SearchAccountsParams) ([]Account, error)
+	SearchAccountsV2(ctx context.Context, arg SearchAccountsV2Params) ([]Account, error)
+	SearchHashtags(ctx context.Context, arg SearchHashtagsParams) ([]Tag, error)
+	SearchStatuses(ctx context.Context, arg SearchStatusesParams) ([]SearchStatusesRow, error)
 	SetResetPasswordToken(ctx context.Context, arg SetResetPasswordTokenParams) error
 	SuspendAccount(ctx context.Context, arg SuspendAccountParams) error
 	UnpinStatus(ctx context.Context, arg UnpinStatusParams) error

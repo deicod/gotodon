@@ -151,10 +151,10 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	preferencesHandler := v1.NewPreferencesHandler()
 	preferencesHandler.RegisterRoutes(v1Group)
 
-	suggestionsHandler := v1.NewSuggestionsHandler()
+	suggestionsHandler := v1.NewSuggestionsHandler(queries)
 	suggestionsHandler.RegisterRoutes(v1Group)
 
-	trendsHandler := v1.NewTrendsHandler()
+	trendsHandler := v1.NewTrendsHandler(queries)
 	trendsHandler.RegisterRoutes(v1Group)
 
 	directoryHandler := v1.NewDirectoryHandler(queries)
@@ -194,7 +194,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	filtersHandler := v2.NewFiltersHandler(queries)
 	filtersHandler.RegisterRoutes(v2Group)
 
-	searchHandler := v2.NewSearchHandler()
+	searchHandler := v2.NewSearchHandler(queries)
 	searchHandler.RegisterRoutes(v2Group)
 
 	// Register OAuth handlers

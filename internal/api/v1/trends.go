@@ -6,15 +6,18 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/deicod/gotodon/internal/db"
 	"github.com/labstack/echo/v4"
 )
 
 // TrendsHandler handles trends endpoints
-type TrendsHandler struct{}
+type TrendsHandler struct {
+	queries *db.Queries
+}
 
 // NewTrendsHandler creates a new trends handler
-func NewTrendsHandler() *TrendsHandler {
-	return &TrendsHandler{}
+func NewTrendsHandler(queries *db.Queries) *TrendsHandler {
+	return &TrendsHandler{queries: queries}
 }
 
 // TrendingTag represents a trending hashtag
@@ -59,44 +62,66 @@ type TrendingLink struct {
 func (h *TrendsHandler) Tags(c echo.Context) error {
 	limit := parseTrendLimit(c.QueryParam("limit"), 10, 20)
 
-	// Mock trending tags
-	now := time.Now()
-	tags := []TrendingTag{
-		{
-			Name: "golang",
-			URL:  "https://example.com/tags/golang",
-			History: []HashtagUsage{
-				{
-					Day:      strconv.FormatInt(now.Add(-24*time.Hour).Unix(), 10),
-					Uses:     "50",
-					Accounts: "30",
-				},
-			},
-		},
-		{
-			Name: "fediverse",
-			URL:  "https://example.com/tags/fediverse",
-			History: []HashtagUsage{
-				{
-					Day:      strconv.FormatInt(now.Add(-24*time.Hour).Unix(), 10),
-					Uses:     "40",
-					Accounts: "25",
-				},
-			},
-		},
+	if h.queries == nil {
+		return c.JSON(http.StatusOK, []TrendingTag{})
 	}
 
-	if len(tags) > limit {
-		tags = tags[:limit]
+	tags, err := h.queries.GetTrendingTags(c.Request().Context(), int32(limit))
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
-	return c.JSON(http.StatusOK, tags)
+	resp := []TrendingTag{}
+	for _, t := range tags {
+		resp = append(resp, TrendingTag{
+			Name: t.Name,
+			URL:  "/tags/" + t.Name, // Construct proper URL
+			History: []HashtagUsage{
+				{
+					Day:      strconv.FormatInt(time.Now().Unix(), 10),
+					Uses:     strconv.FormatInt(t.UsageCount, 10),
+					Accounts: strconv.FormatInt(t.AccountCount, 10),
+				},
+			},
+		})
+	}
+
+	return c.JSON(http.StatusOK, resp)
 }
 
 // Statuses handles GET /api/v1/trends/statuses
 func (h *TrendsHandler) Statuses(c echo.Context) error {
-	// Mock trending statuses - empty for now
-	return c.JSON(http.StatusOK, []Status{})
+	limit := parseTrendLimit(c.QueryParam("limit"), 20, 40)
+
+	if h.queries == nil {
+		return c.JSON(http.StatusOK, []Status{})
+	}
+
+	statuses, err := h.queries.GetTrendingStatuses(c.Request().Context(), int32(limit))
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	resp := []Status{}
+	for _, s := range statuses {
+		account := Account{
+			Username:    s.AccountUsername,
+			DisplayName: s.AccountDisplayName,
+		}
+		if s.AccountAvatar.Valid {
+			account.Avatar = s.AccountAvatar.String
+		}
+
+		resp = append(resp, Status{
+			ID:         strconv.FormatInt(s.ID, 10),
+			Content:    s.Text,
+			Account:    account,
+			Visibility: "public",
+			// Minimal fields
+		})
+	}
+
+	return c.JSON(http.StatusOK, resp)
 }
 
 // Links handles GET /api/v1/trends/links
