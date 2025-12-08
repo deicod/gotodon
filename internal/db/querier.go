@@ -130,6 +130,7 @@ type Querier interface {
 	ListAccountsInList(ctx context.Context, arg ListAccountsInListParams) ([]Account, error)
 	ListBlocks(ctx context.Context, arg ListBlocksParams) ([]Account, error)
 	ListBookmarks(ctx context.Context, arg ListBookmarksParams) ([]ListBookmarksRow, error)
+	ListDeepDirectory(ctx context.Context, arg ListDeepDirectoryParams) ([]Account, error)
 	ListDomainBlocks(ctx context.Context, arg ListDomainBlocksParams) ([]AccountDomainBlock, error)
 	ListDueScheduledStatuses(ctx context.Context) ([]ScheduledStatus, error)
 	ListFavourites(ctx context.Context, arg ListFavouritesParams) ([]Status, error)
