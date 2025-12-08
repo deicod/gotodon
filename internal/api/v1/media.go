@@ -261,11 +261,26 @@ func dbMediaToAPI(m db.MediaAttachment) MediaAttachment {
 
 	return MediaAttachment{
 		ID:          strconv.FormatInt(m.ID, 10),
-		Type:        "image",     // TODO: map properly from m.Type
+		Type:        mapMediaType(m.Type),
 		URL:         m.RemoteUrl, // If remote
 		PreviewURL:  m.RemoteUrl,
 		Description: &m.Description.String,
 		Meta:        meta,
 		Blurhash:    &m.Blurhash.String,
+	}
+}
+
+func mapMediaType(t int32) string {
+	switch t {
+	case 0:
+		return "image"
+	case 1:
+		return "gifv"
+	case 2:
+		return "video"
+	case 3:
+		return "audio"
+	default:
+		return "unknown"
 	}
 }

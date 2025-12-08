@@ -174,8 +174,21 @@ func (h *StatusesHandler) processMentions(ctx context.Context, statusID int64, a
 		mentionsMap[username] = true
 
 		// Find account
-		// TODO: handle domain resolution if present
-		mentionedAcc, err := h.queries.GetAccountByUsername(ctx, username)
+		var mentionedAcc db.Account
+		var err error
+
+		if len(match) > 2 && match[2] != "" {
+			// Remote or local user referenced with domain
+			domain := match[2]
+			mentionedAcc, err = h.queries.GetAccountByUsernameAndDomain(ctx, db.GetAccountByUsernameAndDomainParams{
+				Username: username,
+				Domain:   domain,
+			})
+		} else {
+			// Local user
+			mentionedAcc, err = h.queries.GetAccountByUsername(ctx, username)
+		}
+
 		if err != nil {
 			continue // Account not found, skip
 		}
@@ -186,10 +199,30 @@ func (h *StatusesHandler) processMentions(ctx context.Context, statusID int64, a
 		}
 
 		// Create Mention record
+
+		// Check for mutes/blocks to determine if notification should be hidden
+		silent := false
+		_, errMute := h.queries.GetMute(ctx, db.GetMuteParams{
+			AccountID:       mentionedAcc.ID,
+			TargetAccountID: accountID,
+		})
+		if errMute == nil {
+			silent = true
+		} else {
+			_, errBlock := h.queries.GetBlock(ctx, db.GetBlockParams{
+				AccountID:       mentionedAcc.ID,
+				TargetAccountID: accountID,
+			})
+			if errBlock == nil {
+				silent = true
+			}
+		}
+
+		// Create Mention record
 		_, err = h.queries.CreateMention(ctx, db.CreateMentionParams{
 			StatusID:  statusID,
 			AccountID: mentionedAcc.ID,
-			Silent:    false, // TODO: check if user is muted/blocks
+			Silent:    silent,
 		})
 		if err != nil {
 			// Log error but continue
@@ -238,6 +271,29 @@ func (h *StatusesHandler) processMentions(ctx context.Context, statusID int64, a
 	}
 
 	return mentions, nil
+}
+
+// processTags parses hashtags from text
+func (h *StatusesHandler) processTags(ctx context.Context, statusID int64, text string) ([]string, error) {
+	re := regexp.MustCompile(`#([a-zA-Z0-9_]+)`)
+	matches := re.FindAllStringSubmatch(text, -1)
+
+	tagsMap := make(map[string]bool)
+	var tags []string
+
+	for _, match := range matches {
+		tag := match[1]
+		if tagsMap[tag] {
+			continue
+		}
+		tagsMap[tag] = true
+		tags = append(tags, tag)
+
+		// Note: We are not saving tags to DB in this pass as per request to just stream
+		// But in future use CreateTag and CreateStatusesTag here.
+		// Since CreateStatusesTag query is missing, we skip persistence for now.
+	}
+	return tags, nil
 }
 
 // FilterResult represents a filter match
@@ -457,11 +513,15 @@ func (h *StatusesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Create stats
-		_, _ = h.queries.CreateStatusStats(ctx, dbStatus.ID)
+		if _, err := h.queries.CreateStatusStats(ctx, dbStatus.ID); err != nil {
+			fmt.Printf("Failed to create status stats: %v\n", err)
+		}
 
 		// Increment reply count on parent
 		if inReplyToID.Valid {
-			_ = h.queries.IncrementStatusReplies(ctx, inReplyToID.Int64)
+			if err := h.queries.IncrementStatusReplies(ctx, inReplyToID.Int64); err != nil {
+				fmt.Printf("Failed to increment reply count: %v\n", err)
+			}
 		}
 
 		// Process Mentions
@@ -481,7 +541,15 @@ func (h *StatusesHandler) Create(w http.ResponseWriter, r *http.Request) {
 			// but simply publishing to author's user stream is good for self)
 			streams = append(streams, fmt.Sprintf("user:%d", accountID))
 
-			// TODO: Add hashtags streams if any
+			// Process Hashtags (for streams)
+			// Simple regex for hashtags: #tag
+			// In a real implementation we would save them to DB too
+			// and return them as Tags. For now, we extract for streaming.
+			// Ideally we should process tags and return them.
+			tags, _ := h.processTags(ctx, dbStatus.ID, req.Status)
+			for _, t := range tags {
+				streams = append(streams, fmt.Sprintf("hashtag:%s", t))
+			}
 
 			_ = h.publisher.PublishStatusToRedis(context.Background(), apiStatus, streams)
 		}
@@ -603,7 +671,9 @@ func (h *StatusesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 		// Decrement parent reply count
 		if dbStatus.InReplyToID.Valid {
-			_ = h.queries.DecrementStatusReplies(ctx, dbStatus.InReplyToID.Int64)
+			if err := h.queries.DecrementStatusReplies(ctx, dbStatus.InReplyToID.Int64); err != nil {
+				fmt.Printf("Failed to decrement reply count: %v\n", err)
+			}
 		}
 
 		web.JSON(w, http.StatusOK, map[string]any{
@@ -622,7 +692,7 @@ func (h *StatusesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 				streams = append(streams, streaming.StreamPublic, streaming.StreamPublicLocal)
 			}
 			streams = append(streams, fmt.Sprintf("user:%d", dbStatus.AccountID))
-			// TODO: Add hashtag streams if we knew them
+			// Hashtag streams for delete not fully supported yet (needs query)
 
 			_ = h.publisher.PublishDeleteToRedis(context.Background(), idStr, streams)
 		}

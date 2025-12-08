@@ -153,7 +153,11 @@ func (u *Uploader) Upload(ctx context.Context, accountID int64, filename string,
 		}
 
 		// Generate blurhash
-		blurhash, _ = BlurHashFromBytes(data, 4, 3)
+		var errHash error
+		blurhash, errHash = BlurHashFromBytes(data, 4, 3)
+		if errHash != nil {
+			fmt.Printf("Failed to generate blurhash: %v\n", errHash)
+		}
 	}
 
 	// Generate storage path

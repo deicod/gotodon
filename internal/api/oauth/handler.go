@@ -3,6 +3,7 @@ package oauth
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -244,7 +245,9 @@ func (h *Handler) handleRefreshToken(w http.ResponseWriter, r *http.Request, ctx
 	}
 
 	// Revoke old token
-	_ = h.queries.RevokeOAuthAccessToken(ctx, oldToken.Token)
+	if err := h.queries.RevokeOAuthAccessToken(ctx, oldToken.Token); err != nil {
+		fmt.Printf("Failed to revoke old token: %v\n", err)
+	}
 
 	// Generate new tokens
 	accessToken, err := oauth.GenerateToken(32)
@@ -323,7 +326,9 @@ func (h *Handler) Revoke(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Revoke the token
-	_ = h.queries.RevokeOAuthAccessToken(ctx, req.Token)
+	if err := h.queries.RevokeOAuthAccessToken(ctx, req.Token); err != nil {
+		fmt.Printf("Failed to revoke token: %v\n", err)
+	}
 
 	web.JSON(w, http.StatusOK, map[string]any{})
 }

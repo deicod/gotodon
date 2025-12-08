@@ -255,7 +255,6 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	adminReportsHandler.RegisterRoutes(mux)
 
 	adminInstanceHandler := admin.NewInstanceHandler()
-	// Note: NewInstanceHandler might need queries now if updated, assume it does or is compatible
 	adminInstanceHandler.RegisterRoutes(mux)
 
 	adminTrendsHandler := admin.NewTrendsHandler()

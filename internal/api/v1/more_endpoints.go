@@ -3,9 +3,11 @@ package v1
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
@@ -83,8 +85,14 @@ func (h *FollowRequestsHandler) Authorize(w http.ResponseWriter, r *http.Request
 			Uri:             pgtype.Text{String: "local-follow", Valid: true},
 		})
 		if err != nil {
-			// Ignore if already exists
-			_ = err
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+				// Ignore unique_violation (already exists)
+				_ = err
+			} else {
+				web.JSONError(w, http.StatusInternalServerError, "Failed to create follow")
+				return
+			}
 		}
 
 		// Delete request
@@ -97,7 +105,7 @@ func (h *FollowRequestsHandler) Authorize(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// TODO: Implement authorization
+	// Mock implementation
 	web.JSON(w, http.StatusOK, map[string]any{
 		"id":        web.Param(r, "id"),
 		"following": true,
@@ -129,7 +137,7 @@ func (h *FollowRequestsHandler) Reject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement rejection
+	// Mock implementation
 	web.JSON(w, http.StatusOK, map[string]any{
 		"id":        web.Param(r, "id"),
 		"following": false,

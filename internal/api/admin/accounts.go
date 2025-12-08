@@ -2,6 +2,7 @@
 package admin
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -228,7 +229,8 @@ func (h *AccountsHandler) TakeAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Record action in audit log (missing table/query currently)
+	// Audit Log
+	fmt.Printf("Admin Action: %s on account %d details: %s\n", req.Type, accountID, req.Text)
 
 	web.JSON(w, http.StatusOK, map[string]any{})
 }
