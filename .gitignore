@@ -1,0 +1,25 @@
+# Binaries
+gotodon
+*.exe
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test and coverage
+*.test
+coverage.out
+*.cover
+
+# Mastodon reference repo (for analysis only)
+mastodon/
+
+# Build artifacts
+dist/
+bin/
+
+# OS files
+.DS_Store
+Thumbs.db

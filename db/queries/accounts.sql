@@ -1,0 +1,79 @@
+-- name: GetAccountByID :one
+SELECT * FROM accounts WHERE id = $1 AND suspended_at IS NULL;
+
+-- name: GetAccountByUsername :one
+SELECT * FROM accounts 
+WHERE lower(username) = lower(@username) AND domain IS NULL AND suspended_at IS NULL;
+
+-- name: GetAccountByUsernameAndDomain :one
+SELECT * FROM accounts 
+WHERE lower(username) = lower(@username) 
+  AND lower(domain) = lower(@domain) 
+  AND suspended_at IS NULL;
+
+-- name: GetAccountByURI :one
+SELECT * FROM accounts WHERE uri = $1;
+
+-- name: ListLocalAccounts :many
+SELECT * FROM accounts 
+WHERE domain IS NULL AND suspended_at IS NULL
+ORDER BY id DESC
+LIMIT $1 OFFSET $2;
+
+-- name: CreateAccount :one
+INSERT INTO accounts (
+    username, domain, private_key, public_key, display_name, note, 
+    uri, url, locked, discoverable, indexable, actor_type, protocol
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+) RETURNING *;
+
+-- name: UpdateAccount :one
+UPDATE accounts SET
+    display_name = COALESCE(sqlc.narg('display_name'), display_name),
+    note = COALESCE(sqlc.narg('note'), note),
+    locked = COALESCE(sqlc.narg('locked'), locked),
+    discoverable = COALESCE(sqlc.narg('discoverable'), discoverable),
+    indexable = COALESCE(sqlc.narg('indexable'), indexable),
+    fields = COALESCE(sqlc.narg('fields'), fields),
+    avatar_file_name = COALESCE(sqlc.narg('avatar_file_name'), avatar_file_name),
+    header_file_name = COALESCE(sqlc.narg('header_file_name'), header_file_name),
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: SuspendAccount :exec
+UPDATE accounts SET suspended_at = now(), suspension_origin = $2, updated_at = now()
+WHERE id = $1;
+
+-- name: UnsuspendAccount :exec
+UPDATE accounts SET suspended_at = NULL, suspension_origin = NULL, updated_at = now()
+WHERE id = $1;
+
+-- name: GetAccountStats :one
+SELECT * FROM account_stats WHERE account_id = $1;
+
+-- name: CreateAccountStats :one
+INSERT INTO account_stats (account_id) VALUES ($1) RETURNING *;
+
+-- name: UpdateAccountStats :exec
+UPDATE account_stats SET
+    statuses_count = statuses_count + sqlc.arg('statuses_delta'),
+    following_count = following_count + sqlc.arg('following_delta'),
+    followers_count = followers_count + sqlc.arg('followers_delta'),
+    last_status_at = COALESCE(sqlc.narg('last_status_at'), last_status_at),
+    updated_at = now()
+WHERE account_id = $1;
+
+-- name: SearchAccounts :many
+SELECT * FROM accounts
+WHERE suspended_at IS NULL
+  AND (
+    lower(username) LIKE lower(@query) || '%'
+    OR lower(display_name) LIKE '%' || lower(@query) || '%'
+  )
+ORDER BY 
+    CASE WHEN domain IS NULL THEN 0 ELSE 1 END,
+    lower(username) = lower(@query) DESC,
+    id DESC
+LIMIT $1 OFFSET $2;

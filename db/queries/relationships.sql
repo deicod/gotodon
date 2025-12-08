@@ -1,0 +1,135 @@
+-- name: CreateFollow :one
+INSERT INTO follows (account_id, target_account_id, show_reblogs, notify, uri)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING *;
+
+-- name: GetFollow :one
+SELECT * FROM follows 
+WHERE account_id = $1 AND target_account_id = $2;
+
+-- name: DeleteFollow :exec
+DELETE FROM follows WHERE account_id = $1 AND target_account_id = $2;
+
+-- name: GetFollowers :many
+SELECT a.* FROM accounts a
+JOIN follows f ON f.account_id = a.id
+WHERE f.target_account_id = $1 AND a.suspended_at IS NULL
+ORDER BY f.id DESC
+LIMIT $2 OFFSET $3;
+
+-- name: GetFollowing :many
+SELECT a.* FROM accounts a
+JOIN follows f ON f.target_account_id = a.id
+WHERE f.account_id = $1 AND a.suspended_at IS NULL
+ORDER BY f.id DESC
+LIMIT $2 OFFSET $3;
+
+-- name: CountFollowers :one
+SELECT COUNT(*) FROM follows WHERE target_account_id = $1;
+
+-- name: CountFollowing :one
+SELECT COUNT(*) FROM follows WHERE account_id = $1;
+
+-- name: CreateFollowRequest :one
+INSERT INTO follow_requests (account_id, target_account_id, show_reblogs, notify, uri)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING *;
+
+-- name: GetFollowRequest :one
+SELECT * FROM follow_requests 
+WHERE account_id = $1 AND target_account_id = $2;
+
+-- name: ListFollowRequests :many
+SELECT a.* FROM accounts a
+JOIN follow_requests fr ON fr.account_id = a.id
+WHERE fr.target_account_id = $1 AND a.suspended_at IS NULL
+ORDER BY fr.id DESC
+LIMIT $2 OFFSET $3;
+
+-- name: DeleteFollowRequest :exec
+DELETE FROM follow_requests WHERE account_id = $1 AND target_account_id = $2;
+
+-- name: CreateFavourite :one
+INSERT INTO favourites (account_id, status_id)
+VALUES ($1, $2)
+RETURNING *;
+
+-- name: GetFavourite :one
+SELECT * FROM favourites WHERE account_id = $1 AND status_id = $2;
+
+-- name: DeleteFavourite :exec
+DELETE FROM favourites WHERE account_id = $1 AND status_id = $2;
+
+-- name: GetFavouritedBy :many
+SELECT a.* FROM accounts a
+JOIN favourites f ON f.account_id = a.id
+WHERE f.status_id = $1 AND a.suspended_at IS NULL
+ORDER BY f.id DESC
+LIMIT $2 OFFSET $3;
+
+-- name: ListFavourites :many
+SELECT s.* FROM statuses s
+JOIN favourites f ON f.status_id = s.id
+WHERE f.account_id = $1 AND s.deleted_at IS NULL
+ORDER BY f.id DESC
+LIMIT $2 OFFSET $3;
+
+-- name: CreateBlock :one
+INSERT INTO blocks (account_id, target_account_id, uri)
+VALUES ($1, $2, $3)
+RETURNING *;
+
+-- name: GetBlock :one
+SELECT * FROM blocks WHERE account_id = $1 AND target_account_id = $2;
+
+-- name: DeleteBlock :exec
+DELETE FROM blocks WHERE account_id = $1 AND target_account_id = $2;
+
+-- name: ListBlocks :many
+SELECT a.* FROM accounts a
+JOIN blocks b ON b.target_account_id = a.id
+WHERE b.account_id = $1
+ORDER BY b.id DESC
+LIMIT $2 OFFSET $3;
+
+-- name: CreateMute :one
+INSERT INTO mutes (account_id, target_account_id, hide_notifications, expires_at)
+VALUES ($1, $2, $3, $4)
+RETURNING *;
+
+-- name: GetMute :one
+SELECT * FROM mutes WHERE account_id = $1 AND target_account_id = $2;
+
+-- name: DeleteMute :exec
+DELETE FROM mutes WHERE account_id = $1 AND target_account_id = $2;
+
+-- name: ListMutes :many
+SELECT a.* FROM accounts a
+JOIN mutes m ON m.target_account_id = a.id
+WHERE m.account_id = $1 AND (m.expires_at IS NULL OR m.expires_at > now())
+ORDER BY m.id DESC
+LIMIT $2 OFFSET $3;
+
+-- name: GetRelationship :one
+SELECT 
+    f.id IS NOT NULL as following,
+    fr.id IS NOT NULL as requested,
+    fb.id IS NOT NULL as followed_by,
+    b.id IS NOT NULL as blocking,
+    bb.id IS NOT NULL as blocked_by,
+    m.id IS NOT NULL as muting,
+    COALESCE(m.hide_notifications, false) as muting_notifications,
+    COALESCE(f.show_reblogs, true) as showing_reblogs,
+    COALESCE(f.notify, false) as notifying,
+    f.languages as languages,
+    false as endorsed,
+    false as domain_blocking,
+    '' as note
+FROM accounts a
+LEFT JOIN follows f ON f.account_id = @account_id AND f.target_account_id = a.id
+LEFT JOIN follow_requests fr ON fr.account_id = @account_id AND fr.target_account_id = a.id
+LEFT JOIN follows fb ON fb.account_id = a.id AND fb.target_account_id = @account_id
+LEFT JOIN blocks b ON b.account_id = @account_id AND b.target_account_id = a.id
+LEFT JOIN blocks bb ON bb.account_id = a.id AND bb.target_account_id = @account_id
+LEFT JOIN mutes m ON m.account_id = @account_id AND m.target_account_id = a.id
+WHERE a.id = @target_account_id;
