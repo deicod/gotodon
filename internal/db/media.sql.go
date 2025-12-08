@@ -30,9 +30,9 @@ func (q *Queries) AttachMediaToStatus(ctx context.Context, arg AttachMediaToStat
 const createMediaAttachment = `-- name: CreateMediaAttachment :one
 INSERT INTO media_attachments (
     account_id, status_id, file_file_name, file_content_type, file_file_size,
-    type, description, blurhash, processing
+    type, description, blurhash, processing, shortcode, file_meta
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
 ) RETURNING id, status_id, file_file_name, file_content_type, file_file_size, file_updated_at, remote_url, created_at, updated_at, shortcode, type, file_meta, account_id, description, scheduled_status_id, blurhash, processing, file_storage_schema_version, thumbnail_file_name, thumbnail_content_type, thumbnail_file_size, thumbnail_updated_at, thumbnail_remote_url
 `
 
@@ -46,6 +46,8 @@ type CreateMediaAttachmentParams struct {
 	Description     pgtype.Text `db:"description" json:"description"`
 	Blurhash        pgtype.Text `db:"blurhash" json:"blurhash"`
 	Processing      pgtype.Int4 `db:"processing" json:"processing"`
+	Shortcode       pgtype.Text `db:"shortcode" json:"shortcode"`
+	FileMeta        []byte      `db:"file_meta" json:"file_meta"`
 }
 
 func (q *Queries) CreateMediaAttachment(ctx context.Context, arg CreateMediaAttachmentParams) (MediaAttachment, error) {
@@ -59,6 +61,8 @@ func (q *Queries) CreateMediaAttachment(ctx context.Context, arg CreateMediaAtta
 		arg.Description,
 		arg.Blurhash,
 		arg.Processing,
+		arg.Shortcode,
+		arg.FileMeta,
 	)
 	var i MediaAttachment
 	err := row.Scan(
@@ -284,19 +288,36 @@ func (q *Queries) ListUnattachedMedia(ctx context.Context, arg ListUnattachedMed
 
 const updateMediaAttachment = `-- name: UpdateMediaAttachment :one
 UPDATE media_attachments SET
-    description = COALESCE($2, description),
+    description = COALESCE($3, description),
+    file_meta = COALESCE($4, file_meta),
+    thumbnail_file_name = COALESCE($5, thumbnail_file_name),
+    thumbnail_content_type = COALESCE($6, thumbnail_content_type),
+    thumbnail_file_size = COALESCE($7, thumbnail_file_size),
     updated_at = now()
-WHERE id = $1
+WHERE id = $1 AND account_id = $2
 RETURNING id, status_id, file_file_name, file_content_type, file_file_size, file_updated_at, remote_url, created_at, updated_at, shortcode, type, file_meta, account_id, description, scheduled_status_id, blurhash, processing, file_storage_schema_version, thumbnail_file_name, thumbnail_content_type, thumbnail_file_size, thumbnail_updated_at, thumbnail_remote_url
 `
 
 type UpdateMediaAttachmentParams struct {
-	ID          int64       `db:"id" json:"id"`
-	Description pgtype.Text `db:"description" json:"description"`
+	ID                   int64       `db:"id" json:"id"`
+	AccountID            pgtype.Int8 `db:"account_id" json:"account_id"`
+	Description          pgtype.Text `db:"description" json:"description"`
+	FileMeta             []byte      `db:"file_meta" json:"file_meta"`
+	ThumbnailFileName    pgtype.Text `db:"thumbnail_file_name" json:"thumbnail_file_name"`
+	ThumbnailContentType pgtype.Text `db:"thumbnail_content_type" json:"thumbnail_content_type"`
+	ThumbnailFileSize    pgtype.Int4 `db:"thumbnail_file_size" json:"thumbnail_file_size"`
 }
 
 func (q *Queries) UpdateMediaAttachment(ctx context.Context, arg UpdateMediaAttachmentParams) (MediaAttachment, error) {
-	row := q.db.QueryRow(ctx, updateMediaAttachment, arg.ID, arg.Description)
+	row := q.db.QueryRow(ctx, updateMediaAttachment,
+		arg.ID,
+		arg.AccountID,
+		arg.Description,
+		arg.FileMeta,
+		arg.ThumbnailFileName,
+		arg.ThumbnailContentType,
+		arg.ThumbnailFileSize,
+	)
 	var i MediaAttachment
 	err := row.Scan(
 		&i.ID,

@@ -61,6 +61,20 @@ WHERE status_id = $1;
 UPDATE status_stats SET favourites_count = GREATEST(0, favourites_count - 1), updated_at = now()
 WHERE status_id = $1;
 
+-- name: PinStatus :one
+INSERT INTO status_pins (account_id, status_id)
+VALUES ($1, $2)
+RETURNING *;
+
+-- name: UnpinStatus :exec
+DELETE FROM status_pins WHERE account_id = $1 AND status_id = $2;
+
+-- name: GetPinnedStatuses :many
+SELECT s.* FROM statuses s
+JOIN status_pins sp ON sp.status_id = s.id
+WHERE sp.account_id = $1 AND s.deleted_at IS NULL
+ORDER BY sp.id DESC;
+
 -- name: GetHomeTimeline :many
 SELECT s.* FROM statuses s
 WHERE s.deleted_at IS NULL

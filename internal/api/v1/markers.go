@@ -3,24 +3,32 @@ package v1
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/labstack/echo/v4"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/db"
 )
 
 // MarkersHandler handles marker endpoints
 type MarkersHandler struct {
-	// In-memory storage for markers
-	markers map[int64]map[string]*Marker // account_id -> timeline -> marker
+	queries *db.Queries
+	// In-memory storage for markers (fallback or during migration)
+	markers map[int64]map[string]*Marker
 }
 
 // NewMarkersHandler creates a new markers handler
-func NewMarkersHandler() *MarkersHandler {
+func NewMarkersHandler(queries *db.Queries) *MarkersHandler {
 	return &MarkersHandler{
+		queries: queries,
 		markers: make(map[int64]map[string]*Marker),
 	}
+}
+
+func (h *MarkersHandler) useDB() bool {
+	return h.queries != nil
 }
 
 // Marker represents a timeline read position marker
@@ -50,13 +58,40 @@ func (h *MarkersHandler) Get(c echo.Context) error {
 
 	timelines := c.QueryParams()["timeline[]"]
 	if len(timelines) == 0 {
-		// Default to all
 		timelines = []string{"home", "notifications"}
 	}
 
 	result := make(MarkersResponse)
-	accountMarkers := h.markers[accountID]
 
+	if h.useDB() {
+		// Get User ID from Account ID
+		user, err := h.queries.GetUserByAccountID(c.Request().Context(), accountID)
+		if err != nil {
+			// If user not found (e.g. implementation limitation), return empty
+			return c.JSON(http.StatusOK, result)
+		}
+
+		for _, timeline := range timelines {
+			if !validMarkerTimelines[timeline] {
+				continue
+			}
+			marker, err := h.queries.GetMarker(c.Request().Context(), db.GetMarkerParams{
+				UserID:   user.ID,
+				Timeline: timeline,
+			})
+			if err == nil {
+				result[timeline] = &Marker{
+					LastReadID: strconv.FormatInt(marker.LastReadID, 10),
+					Version:    int(marker.LockVersion),
+					UpdatedAt:  marker.UpdatedAt.Time,
+				}
+			}
+		}
+		return c.JSON(http.StatusOK, result)
+	}
+
+	// In-memory fallback
+	accountMarkers := h.markers[accountID]
 	for _, timeline := range timelines {
 		if !validMarkerTimelines[timeline] {
 			continue
@@ -90,12 +125,21 @@ func (h *MarkersHandler) Update(c echo.Context) error {
 		})
 	}
 
-	// Initialize account markers if needed
+	// Initialize account markers if needed (for fallback)
 	if h.markers[accountID] == nil {
 		h.markers[accountID] = make(map[string]*Marker)
 	}
 
 	result := make(MarkersResponse)
+	ctx := c.Request().Context()
+
+	var userID int64
+	if h.useDB() {
+		user, err := h.queries.GetUserByAccountID(ctx, accountID)
+		if err == nil {
+			userID = user.ID
+		}
+	}
 
 	for timeline, data := range req {
 		if !validMarkerTimelines[timeline] {
@@ -105,7 +149,49 @@ func (h *MarkersHandler) Update(c echo.Context) error {
 			continue
 		}
 
-		// Get existing or create new
+		lastReadID, err := strconv.ParseInt(data.LastReadID, 10, 64)
+		if err != nil {
+			continue
+		}
+
+		// DB Update
+		if h.useDB() && userID > 0 {
+			// We need to know current version or just increment?
+			// Mastodon API says client sends `last_read_id`. Server increments version.
+			// Or client sends version? Docs say client sends `last_read_id`.
+			// Response includes `version`. Client should use `headers["Link"]` for locking but here we simplify.
+			// We will just fetch (to get version) and increment, or use Upsert.
+			// UpsertMarker in SQL doesn't increment version efficiently if we don't pass it.
+			// But my SQL UpsertMarker takes `lock_version` as input.
+			// Logic: Get existing version, increment, Save.
+
+			currentVersion := 0
+			existing, err := h.queries.GetMarker(ctx, db.GetMarkerParams{
+				UserID:   userID,
+				Timeline: timeline,
+			})
+			if err == nil {
+				currentVersion = int(existing.LockVersion)
+			}
+			newVersion := currentVersion + 1
+
+			saved, err := h.queries.UpsertMarker(ctx, db.UpsertMarkerParams{
+				UserID:      userID,
+				Timeline:    timeline,
+				LastReadID:  lastReadID,
+				LockVersion: int32(newVersion),
+			})
+			if err == nil {
+				result[timeline] = &Marker{
+					LastReadID: strconv.FormatInt(saved.LastReadID, 10),
+					Version:    int(saved.LockVersion),
+					UpdatedAt:  saved.UpdatedAt.Time,
+				}
+				continue
+			}
+		}
+
+		// Fallback
 		existing := h.markers[accountID][timeline]
 		version := 0
 		if existing != nil {

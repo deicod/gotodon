@@ -22,7 +22,7 @@ func mockMarkerContext(e *echo.Echo, method, path string, body string) (echo.Con
 
 func TestMarkersHandler_GetEmpty(t *testing.T) {
 	e := echo.New()
-	h := NewMarkersHandler()
+	h := NewMarkersHandler(nil)
 
 	c, rec := mockMarkerContext(e, http.MethodGet, "/api/v1/markers?timeline[]=home", "")
 
@@ -46,7 +46,7 @@ func TestMarkersHandler_GetEmpty(t *testing.T) {
 
 func TestMarkersHandler_UpdateAndGet(t *testing.T) {
 	e := echo.New()
-	h := NewMarkersHandler()
+	h := NewMarkersHandler(nil)
 
 	// Update marker
 	body := `{"home":{"last_read_id":"12345"}}`
@@ -90,7 +90,7 @@ func TestMarkersHandler_UpdateAndGet(t *testing.T) {
 
 func TestMarkersHandler_VersionIncrement(t *testing.T) {
 	e := echo.New()
-	h := NewMarkersHandler()
+	h := NewMarkersHandler(nil)
 
 	// First update
 	c1, _ := mockMarkerContext(e, http.MethodPost, "/api/v1/markers", `{"home":{"last_read_id":"100"}}`)
@@ -110,7 +110,7 @@ func TestMarkersHandler_VersionIncrement(t *testing.T) {
 
 func TestMarkersHandler_MultipleTimelines(t *testing.T) {
 	e := echo.New()
-	h := NewMarkersHandler()
+	h := NewMarkersHandler(nil)
 
 	// Update both
 	body := `{"home":{"last_read_id":"100"},"notifications":{"last_read_id":"200"}}`

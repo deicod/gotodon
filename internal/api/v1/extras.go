@@ -47,9 +47,14 @@ func (h *BookmarksHandler) List(c echo.Context) error {
 		statuses := make([]Status, 0, len(bookmarks))
 		for _, b := range bookmarks {
 			dbStatus, err := h.queries.GetStatusByID(c.Request().Context(), b.StatusID)
-			if err == nil {
-				statuses = append(statuses, dbStatusToBasicAPI(dbStatus))
+			if err != nil {
+				continue
 			}
+			dbAcc, err := h.queries.GetAccountByID(c.Request().Context(), dbStatus.AccountID)
+			if err != nil {
+				continue
+			}
+			statuses = append(statuses, dbStatusToBasicAPI(dbStatus, dbAcc))
 		}
 		return c.JSON(http.StatusOK, statuses)
 	}
@@ -92,12 +97,31 @@ func (h *FavouritesHandler) useDB() bool {
 
 // List handles GET /api/v1/favourites
 func (h *FavouritesHandler) List(c echo.Context) error {
-	_, ok := middleware.GetAccountID(c)
+	accountID, ok := middleware.GetAccountID(c)
 	if !ok {
 		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
 	}
 
-	// TODO: Implement with database queries
+	if h.useDB() {
+		dbStatuses, err := h.queries.ListFavourites(c.Request().Context(), db.ListFavouritesParams{
+			AccountID: accountID,
+			Limit:     40,
+			Offset:    0,
+		})
+		if err != nil {
+			return c.JSON(http.StatusOK, []Status{})
+		}
+
+		statuses := make([]Status, 0, len(dbStatuses))
+		for _, s := range dbStatuses {
+			dbAcc, err := h.queries.GetAccountByID(c.Request().Context(), s.AccountID)
+			if err != nil {
+				continue
+			}
+			statuses = append(statuses, dbStatusToBasicAPI(s, dbAcc))
+		}
+		return c.JSON(http.StatusOK, statuses)
+	}
 	return c.JSON(http.StatusOK, []Status{})
 }
 
@@ -122,12 +146,27 @@ func (h *MutesHandler) useDB() bool {
 
 // List handles GET /api/v1/mutes
 func (h *MutesHandler) List(c echo.Context) error {
-	_, ok := middleware.GetAccountID(c)
+	accountID, ok := middleware.GetAccountID(c)
 	if !ok {
 		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
 	}
 
-	// TODO: Implement with database queries
+	if h.useDB() {
+		dbAccounts, err := h.queries.ListMutes(c.Request().Context(), db.ListMutesParams{
+			AccountID: accountID,
+			Limit:     40,
+			Offset:    0,
+		})
+		if err != nil {
+			return c.JSON(http.StatusOK, []Account{})
+		}
+
+		accounts := make([]Account, len(dbAccounts))
+		for i, a := range dbAccounts {
+			accounts[i] = dbAccountToBasicAPI(a)
+		}
+		return c.JSON(http.StatusOK, accounts)
+	}
 	return c.JSON(http.StatusOK, []Account{})
 }
 
@@ -152,12 +191,27 @@ func (h *BlocksHandler) useDB() bool {
 
 // List handles GET /api/v1/blocks
 func (h *BlocksHandler) List(c echo.Context) error {
-	_, ok := middleware.GetAccountID(c)
+	accountID, ok := middleware.GetAccountID(c)
 	if !ok {
 		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
 	}
 
-	// TODO: Implement with database queries
+	if h.useDB() {
+		dbAccounts, err := h.queries.ListBlocks(c.Request().Context(), db.ListBlocksParams{
+			AccountID: accountID,
+			Limit:     40,
+			Offset:    0,
+		})
+		if err != nil {
+			return c.JSON(http.StatusOK, []Account{})
+		}
+
+		accounts := make([]Account, len(dbAccounts))
+		for i, a := range dbAccounts {
+			accounts[i] = dbAccountToBasicAPI(a)
+		}
+		return c.JSON(http.StatusOK, accounts)
+	}
 	return c.JSON(http.StatusOK, []Account{})
 }
 
@@ -256,7 +310,8 @@ func (h *ConversationsHandler) RegisterRoutes(g *echo.Group) {
 }
 
 // Helper to convert db.Status to basic API Status
-func dbStatusToBasicAPI(s db.Status) Status {
+// Helper to convert db.Status to basic API Status
+func dbStatusToBasicAPI(s db.Status, a db.Account) Status {
 	visibility := "public"
 	switch s.Visibility {
 	case 1:
@@ -272,6 +327,7 @@ func dbStatusToBasicAPI(s db.Status) Status {
 		Content:          s.Text,
 		Visibility:       visibility,
 		URI:              s.Uri.String,
+		Account:          dbAccountToBasicAPI(a),
 		MediaAttachments: []MediaAttach{},
 		Mentions:         []Mention{},
 		Tags:             []Tag{},

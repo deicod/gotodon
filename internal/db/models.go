@@ -61,6 +61,14 @@ type Account struct {
 	AttributionDomains         []string           `db:"attribution_domains" json:"attribution_domains"`
 }
 
+type AccountDomainBlock struct {
+	ID        int64              `db:"id" json:"id"`
+	Domain    string             `db:"domain" json:"domain"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	AccountID int64              `db:"account_id" json:"account_id"`
+}
+
 type AccountStat struct {
 	ID             int64              `db:"id" json:"id"`
 	AccountID      int64              `db:"account_id" json:"account_id"`
@@ -70,6 +78,38 @@ type AccountStat struct {
 	CreatedAt      pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	LastStatusAt   pgtype.Timestamptz `db:"last_status_at" json:"last_status_at"`
+}
+
+type Announcement struct {
+	ID          int64              `db:"id" json:"id"`
+	Text        string             `db:"text" json:"text"`
+	Published   bool               `db:"published" json:"published"`
+	AllDay      bool               `db:"all_day" json:"all_day"`
+	ScheduledAt pgtype.Timestamptz `db:"scheduled_at" json:"scheduled_at"`
+	StartsAt    pgtype.Timestamptz `db:"starts_at" json:"starts_at"`
+	EndsAt      pgtype.Timestamptz `db:"ends_at" json:"ends_at"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	PublishedAt pgtype.Timestamptz `db:"published_at" json:"published_at"`
+	StatusIds   []int64            `db:"status_ids" json:"status_ids"`
+}
+
+type AnnouncementMute struct {
+	ID             int64              `db:"id" json:"id"`
+	AccountID      int64              `db:"account_id" json:"account_id"`
+	AnnouncementID int64              `db:"announcement_id" json:"announcement_id"`
+	CreatedAt      pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type AnnouncementReaction struct {
+	ID             int64              `db:"id" json:"id"`
+	AccountID      pgtype.Int8        `db:"account_id" json:"account_id"`
+	AnnouncementID int64              `db:"announcement_id" json:"announcement_id"`
+	Name           string             `db:"name" json:"name"`
+	CustomEmojiID  pgtype.Int8        `db:"custom_emoji_id" json:"custom_emoji_id"`
+	CreatedAt      pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 type Block struct {
@@ -96,6 +136,45 @@ type Conversation struct {
 	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	ParentStatusID  pgtype.Int8        `db:"parent_status_id" json:"parent_status_id"`
 	ParentAccountID pgtype.Int8        `db:"parent_account_id" json:"parent_account_id"`
+}
+
+type ConversationMute struct {
+	ID             int64              `db:"id" json:"id"`
+	ConversationID int64              `db:"conversation_id" json:"conversation_id"`
+	AccountID      int64              `db:"account_id" json:"account_id"`
+	CreatedAt      pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type CustomEmoji struct {
+	ID                        int64              `db:"id" json:"id"`
+	Shortcode                 string             `db:"shortcode" json:"shortcode"`
+	Domain                    pgtype.Text        `db:"domain" json:"domain"`
+	ImageFileName             pgtype.Text        `db:"image_file_name" json:"image_file_name"`
+	ImageContentType          pgtype.Text        `db:"image_content_type" json:"image_content_type"`
+	ImageFileSize             pgtype.Int4        `db:"image_file_size" json:"image_file_size"`
+	ImageUpdatedAt            pgtype.Timestamptz `db:"image_updated_at" json:"image_updated_at"`
+	CreatedAt                 pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt                 pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	Disabled                  bool               `db:"disabled" json:"disabled"`
+	Uri                       pgtype.Text        `db:"uri" json:"uri"`
+	ImageRemoteUrl            pgtype.Text        `db:"image_remote_url" json:"image_remote_url"`
+	VisibleInPicker           bool               `db:"visible_in_picker" json:"visible_in_picker"`
+	CategoryID                pgtype.Int8        `db:"category_id" json:"category_id"`
+	ImageStorageSchemaVersion pgtype.Int4        `db:"image_storage_schema_version" json:"image_storage_schema_version"`
+}
+
+type DomainBlock struct {
+	ID             int64              `db:"id" json:"id"`
+	Domain         string             `db:"domain" json:"domain"`
+	CreatedAt      pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	Severity       int32              `db:"severity" json:"severity"`
+	RejectMedia    bool               `db:"reject_media" json:"reject_media"`
+	RejectReports  bool               `db:"reject_reports" json:"reject_reports"`
+	PrivateComment pgtype.Text        `db:"private_comment" json:"private_comment"`
+	PublicComment  pgtype.Text        `db:"public_comment" json:"public_comment"`
+	Obfuscate      bool               `db:"obfuscate" json:"obfuscate"`
 }
 
 type Favourite struct {
@@ -175,6 +254,16 @@ type ListAccount struct {
 	FollowID  pgtype.Int8        `db:"follow_id" json:"follow_id"`
 	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type Marker struct {
+	ID          int64              `db:"id" json:"id"`
+	UserID      int64              `db:"user_id" json:"user_id"`
+	Timeline    string             `db:"timeline" json:"timeline"`
+	LastReadID  int64              `db:"last_read_id" json:"last_read_id"`
+	LockVersion int32              `db:"lock_version" json:"lock_version"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 type MediaAttachment struct {
@@ -304,6 +393,32 @@ type Preference struct {
 	UpdatedAt                pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
+type Report struct {
+	ID                     int64              `db:"id" json:"id"`
+	StatusIds              []int64            `db:"status_ids" json:"status_ids"`
+	Comment                string             `db:"comment" json:"comment"`
+	CreatedAt              pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt              pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	AccountID              int64              `db:"account_id" json:"account_id"`
+	ActionTakenByAccountID pgtype.Int8        `db:"action_taken_by_account_id" json:"action_taken_by_account_id"`
+	TargetAccountID        int64              `db:"target_account_id" json:"target_account_id"`
+	ActionTakenAt          pgtype.Timestamptz `db:"action_taken_at" json:"action_taken_at"`
+	Forwarded              pgtype.Bool        `db:"forwarded" json:"forwarded"`
+	Category               int32              `db:"category" json:"category"`
+	AssignedAccountID      pgtype.Int8        `db:"assigned_account_id" json:"assigned_account_id"`
+	RuleIds                []int32            `db:"rule_ids" json:"rule_ids"`
+	Uri                    pgtype.Text        `db:"uri" json:"uri"`
+}
+
+type ScheduledStatus struct {
+	ID          int64              `db:"id" json:"id"`
+	AccountID   int64              `db:"account_id" json:"account_id"`
+	ScheduledAt pgtype.Timestamptz `db:"scheduled_at" json:"scheduled_at"`
+	Params      []byte             `db:"params" json:"params"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
 type Setting struct {
 	ID        int64              `db:"id" json:"id"`
 	Var       string             `db:"var" json:"var"`
@@ -337,6 +452,14 @@ type Status struct {
 	Trendable                 pgtype.Bool        `db:"trendable" json:"trendable"`
 	OrderedMediaAttachmentIds []int64            `db:"ordered_media_attachment_ids" json:"ordered_media_attachment_ids"`
 	FetchedRepliesAt          pgtype.Timestamptz `db:"fetched_replies_at" json:"fetched_replies_at"`
+}
+
+type StatusPin struct {
+	ID        int64              `db:"id" json:"id"`
+	AccountID int64              `db:"account_id" json:"account_id"`
+	StatusID  int64              `db:"status_id" json:"status_id"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 type StatusStat struct {
@@ -416,4 +539,16 @@ type UserRole struct {
 	Highlighted bool               `db:"highlighted" json:"highlighted"`
 	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type WebPushSubscription struct {
+	ID            int64              `db:"id" json:"id"`
+	Endpoint      string             `db:"endpoint" json:"endpoint"`
+	KeyP256dh     pgtype.Text        `db:"key_p256dh" json:"key_p256dh"`
+	KeyAuth       pgtype.Text        `db:"key_auth" json:"key_auth"`
+	Data          []byte             `db:"data" json:"data"`
+	CreatedAt     pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	AccessTokenID pgtype.Int8        `db:"access_token_id" json:"access_token_id"`
+	UserID        pgtype.Int8        `db:"user_id" json:"user_id"`
 }

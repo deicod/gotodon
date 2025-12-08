@@ -59,6 +59,30 @@ func (q *Queries) CreateBlock(ctx context.Context, arg CreateBlockParams) (Block
 	return i, err
 }
 
+const createDomainBlock = `-- name: CreateDomainBlock :one
+INSERT INTO account_domain_blocks (account_id, domain)
+VALUES ($1, $2)
+RETURNING id, domain, created_at, updated_at, account_id
+`
+
+type CreateDomainBlockParams struct {
+	AccountID int64  `db:"account_id" json:"account_id"`
+	Domain    string `db:"domain" json:"domain"`
+}
+
+func (q *Queries) CreateDomainBlock(ctx context.Context, arg CreateDomainBlockParams) (AccountDomainBlock, error) {
+	row := q.db.QueryRow(ctx, createDomainBlock, arg.AccountID, arg.Domain)
+	var i AccountDomainBlock
+	err := row.Scan(
+		&i.ID,
+		&i.Domain,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AccountID,
+	)
+	return i, err
+}
+
 const createFavourite = `-- name: CreateFavourite :one
 INSERT INTO favourites (account_id, status_id)
 VALUES ($1, $2)
@@ -204,6 +228,20 @@ func (q *Queries) DeleteBlock(ctx context.Context, arg DeleteBlockParams) error 
 	return err
 }
 
+const deleteDomainBlock = `-- name: DeleteDomainBlock :exec
+DELETE FROM account_domain_blocks WHERE account_id = $1 AND domain = $2
+`
+
+type DeleteDomainBlockParams struct {
+	AccountID int64  `db:"account_id" json:"account_id"`
+	Domain    string `db:"domain" json:"domain"`
+}
+
+func (q *Queries) DeleteDomainBlock(ctx context.Context, arg DeleteDomainBlockParams) error {
+	_, err := q.db.Exec(ctx, deleteDomainBlock, arg.AccountID, arg.Domain)
+	return err
+}
+
 const deleteFavourite = `-- name: DeleteFavourite :exec
 DELETE FROM favourites WHERE account_id = $1 AND status_id = $2
 `
@@ -279,6 +317,28 @@ func (q *Queries) GetBlock(ctx context.Context, arg GetBlockParams) (Block, erro
 		&i.AccountID,
 		&i.TargetAccountID,
 		&i.Uri,
+	)
+	return i, err
+}
+
+const getDomainBlock = `-- name: GetDomainBlock :one
+SELECT id, domain, created_at, updated_at, account_id FROM account_domain_blocks WHERE account_id = $1 AND domain = $2
+`
+
+type GetDomainBlockParams struct {
+	AccountID int64  `db:"account_id" json:"account_id"`
+	Domain    string `db:"domain" json:"domain"`
+}
+
+func (q *Queries) GetDomainBlock(ctx context.Context, arg GetDomainBlockParams) (AccountDomainBlock, error) {
+	row := q.db.QueryRow(ctx, getDomainBlock, arg.AccountID, arg.Domain)
+	var i AccountDomainBlock
+	err := row.Scan(
+		&i.ID,
+		&i.Domain,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AccountID,
 	)
 	return i, err
 }
@@ -632,6 +692,89 @@ func (q *Queries) GetMute(ctx context.Context, arg GetMuteParams) (Mute, error) 
 	return i, err
 }
 
+const getRebloggers = `-- name: GetRebloggers :many
+SELECT a.id, a.username, a.domain, a.private_key, a.public_key, a.created_at, a.updated_at, a.note, a.display_name, a.uri, a.url, a.avatar_file_name, a.avatar_content_type, a.avatar_file_size, a.avatar_updated_at, a.header_file_name, a.header_content_type, a.header_file_size, a.header_updated_at, a.avatar_remote_url, a.locked, a.header_remote_url, a.last_webfingered_at, a.inbox_url, a.outbox_url, a.shared_inbox_url, a.followers_url, a.following_url, a.protocol, a.memorial, a.moved_to_account_id, a.featured_collection_url, a.fields, a.actor_type, a.discoverable, a.also_known_as, a.silenced_at, a.suspended_at, a.hide_collections, a.avatar_storage_schema_version, a.header_storage_schema_version, a.suspension_origin, a.sensitized_at, a.trendable, a.reviewed_at, a.requested_review_at, a.indexable, a.attribution_domains FROM accounts a
+JOIN statuses s ON s.account_id = a.id AND s.reblog_of_id = $1
+WHERE a.suspended_at IS NULL AND s.deleted_at IS NULL
+ORDER BY s.id DESC
+LIMIT $2 OFFSET $3
+`
+
+type GetRebloggersParams struct {
+	ReblogOfID pgtype.Int8 `db:"reblog_of_id" json:"reblog_of_id"`
+	Limit      int32       `db:"limit" json:"limit"`
+	Offset     int32       `db:"offset" json:"offset"`
+}
+
+func (q *Queries) GetRebloggers(ctx context.Context, arg GetRebloggersParams) ([]Account, error) {
+	rows, err := q.db.Query(ctx, getRebloggers, arg.ReblogOfID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Account{}
+	for rows.Next() {
+		var i Account
+		if err := rows.Scan(
+			&i.ID,
+			&i.Username,
+			&i.Domain,
+			&i.PrivateKey,
+			&i.PublicKey,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Note,
+			&i.DisplayName,
+			&i.Uri,
+			&i.Url,
+			&i.AvatarFileName,
+			&i.AvatarContentType,
+			&i.AvatarFileSize,
+			&i.AvatarUpdatedAt,
+			&i.HeaderFileName,
+			&i.HeaderContentType,
+			&i.HeaderFileSize,
+			&i.HeaderUpdatedAt,
+			&i.AvatarRemoteUrl,
+			&i.Locked,
+			&i.HeaderRemoteUrl,
+			&i.LastWebfingeredAt,
+			&i.InboxUrl,
+			&i.OutboxUrl,
+			&i.SharedInboxUrl,
+			&i.FollowersUrl,
+			&i.FollowingUrl,
+			&i.Protocol,
+			&i.Memorial,
+			&i.MovedToAccountID,
+			&i.FeaturedCollectionUrl,
+			&i.Fields,
+			&i.ActorType,
+			&i.Discoverable,
+			&i.AlsoKnownAs,
+			&i.SilencedAt,
+			&i.SuspendedAt,
+			&i.HideCollections,
+			&i.AvatarStorageSchemaVersion,
+			&i.HeaderStorageSchemaVersion,
+			&i.SuspensionOrigin,
+			&i.SensitizedAt,
+			&i.Trendable,
+			&i.ReviewedAt,
+			&i.RequestedReviewAt,
+			&i.Indexable,
+			&i.AttributionDomains,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getRelationship = `-- name: GetRelationship :one
 SELECT 
     f.id IS NOT NULL as following,
@@ -645,7 +788,7 @@ SELECT
     COALESCE(f.notify, false) as notifying,
     f.languages as languages,
     false as endorsed,
-    false as domain_blocking,
+    db.id IS NOT NULL as domain_blocking,
     '' as note
 FROM accounts a
 LEFT JOIN follows f ON f.account_id = $1 AND f.target_account_id = a.id
@@ -654,6 +797,7 @@ LEFT JOIN follows fb ON fb.account_id = a.id AND fb.target_account_id = $1
 LEFT JOIN blocks b ON b.account_id = $1 AND b.target_account_id = a.id
 LEFT JOIN blocks bb ON bb.account_id = a.id AND bb.target_account_id = $1
 LEFT JOIN mutes m ON m.account_id = $1 AND m.target_account_id = a.id
+LEFT JOIN account_domain_blocks db ON db.account_id = $1 AND db.domain = a.domain
 WHERE a.id = $2
 `
 
@@ -674,7 +818,7 @@ type GetRelationshipRow struct {
 	Notifying           bool        `db:"notifying" json:"notifying"`
 	Languages           []string    `db:"languages" json:"languages"`
 	Endorsed            bool        `db:"endorsed" json:"endorsed"`
-	DomainBlocking      bool        `db:"domain_blocking" json:"domain_blocking"`
+	DomainBlocking      interface{} `db:"domain_blocking" json:"domain_blocking"`
 	Note                string      `db:"note" json:"note"`
 }
 
@@ -771,6 +915,45 @@ func (q *Queries) ListBlocks(ctx context.Context, arg ListBlocksParams) ([]Accou
 			&i.RequestedReviewAt,
 			&i.Indexable,
 			&i.AttributionDomains,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDomainBlocks = `-- name: ListDomainBlocks :many
+SELECT id, domain, created_at, updated_at, account_id FROM account_domain_blocks
+WHERE account_id = $1
+ORDER BY id DESC
+LIMIT $2 OFFSET $3
+`
+
+type ListDomainBlocksParams struct {
+	AccountID int64 `db:"account_id" json:"account_id"`
+	Limit     int32 `db:"limit" json:"limit"`
+	Offset    int32 `db:"offset" json:"offset"`
+}
+
+func (q *Queries) ListDomainBlocks(ctx context.Context, arg ListDomainBlocksParams) ([]AccountDomainBlock, error) {
+	rows, err := q.db.Query(ctx, listDomainBlocks, arg.AccountID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AccountDomainBlock{}
+	for rows.Next() {
+		var i AccountDomainBlock
+		if err := rows.Scan(
+			&i.ID,
+			&i.Domain,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.AccountID,
 		); err != nil {
 			return nil, err
 		}

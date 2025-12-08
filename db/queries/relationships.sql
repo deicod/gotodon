@@ -123,7 +123,7 @@ SELECT
     COALESCE(f.notify, false) as notifying,
     f.languages as languages,
     false as endorsed,
-    false as domain_blocking,
+    db.id IS NOT NULL as domain_blocking,
     '' as note
 FROM accounts a
 LEFT JOIN follows f ON f.account_id = @account_id AND f.target_account_id = a.id
@@ -132,4 +132,29 @@ LEFT JOIN follows fb ON fb.account_id = a.id AND fb.target_account_id = @account
 LEFT JOIN blocks b ON b.account_id = @account_id AND b.target_account_id = a.id
 LEFT JOIN blocks bb ON bb.account_id = a.id AND bb.target_account_id = @account_id
 LEFT JOIN mutes m ON m.account_id = @account_id AND m.target_account_id = a.id
+LEFT JOIN account_domain_blocks db ON db.account_id = @account_id AND db.domain = a.domain
 WHERE a.id = @target_account_id;
+
+-- name: ListDomainBlocks :many
+SELECT * FROM account_domain_blocks
+WHERE account_id = $1
+ORDER BY id DESC
+LIMIT $2 OFFSET $3;
+
+-- name: CreateDomainBlock :one
+INSERT INTO account_domain_blocks (account_id, domain)
+VALUES ($1, $2)
+RETURNING *;
+
+-- name: DeleteDomainBlock :exec
+DELETE FROM account_domain_blocks WHERE account_id = $1 AND domain = $2;
+
+-- name: GetDomainBlock :one
+SELECT * FROM account_domain_blocks WHERE account_id = $1 AND domain = $2;
+
+-- name: GetRebloggers :many
+SELECT a.* FROM accounts a
+JOIN statuses s ON s.account_id = a.id AND s.reblog_of_id = $1
+WHERE a.suspended_at IS NULL AND s.deleted_at IS NULL
+ORDER BY s.id DESC
+LIMIT $2 OFFSET $3;

@@ -235,21 +235,7 @@ func (h *StatusesHandler) dbStatusToAPI(ctx context.Context, dbStatus db.Status)
 	if h.useDB() {
 		dbAcc, err := h.queries.GetAccountByID(ctx, dbStatus.AccountID)
 		if err == nil {
-			discoverable := dbAcc.Discoverable.Valid && dbAcc.Discoverable.Bool
-			accCreatedAt := time.Now().Add(-24 * time.Hour)
-			if dbAcc.CreatedAt.Valid {
-				accCreatedAt = dbAcc.CreatedAt.Time
-			}
-			account = Account{
-				ID:           strconv.FormatInt(dbAcc.ID, 10),
-				Username:     dbAcc.Username,
-				Acct:         dbAcc.Username,
-				DisplayName:  dbAcc.DisplayName,
-				Discoverable: &discoverable,
-				CreatedAt:    accCreatedAt,
-				Emojis:       []any{},
-				Fields:       []Field{},
-			}
+			account = h.dbAccountToAPI(dbAcc)
 		}
 	}
 
@@ -716,11 +702,38 @@ func (h *StatusesHandler) Unreblog(c echo.Context) error {
 // Bookmark handles POST /api/v1/statuses/:id/bookmark
 func (h *StatusesHandler) Bookmark(c echo.Context) error {
 	idStr := c.Param("id")
-	_, ok := middleware.GetAccountID(c)
+	accountID, ok := middleware.GetAccountID(c)
 	if !ok {
 		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
 			"error": "The access token is invalid",
 		})
+	}
+
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+			"error": "Record not found",
+		})
+	}
+
+	ctx := c.Request().Context()
+	if h.useDB() {
+		status, err := h.queries.GetStatusByID(ctx, id)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		}
+
+		err = h.queries.CreateBookmark(ctx, db.CreateBookmarkParams{
+			AccountID: accountID,
+			StatusID:  id,
+		})
+		if err != nil {
+			// Ignore unique violation
+		}
+
+		s := h.dbStatusToAPI(ctx, status)
+		s.Bookmarked = true
+		return c.JSON(http.StatusOK, s)
 	}
 
 	status, _ := h.getStatusByID(idStr)
@@ -731,11 +744,35 @@ func (h *StatusesHandler) Bookmark(c echo.Context) error {
 // Unbookmark handles POST /api/v1/statuses/:id/unbookmark
 func (h *StatusesHandler) Unbookmark(c echo.Context) error {
 	idStr := c.Param("id")
-	_, ok := middleware.GetAccountID(c)
+	accountID, ok := middleware.GetAccountID(c)
 	if !ok {
 		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
 			"error": "The access token is invalid",
 		})
+	}
+
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+			"error": "Record not found",
+		})
+	}
+
+	ctx := c.Request().Context()
+	if h.useDB() {
+		status, err := h.queries.GetStatusByID(ctx, id)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
+		}
+
+		err = h.queries.DeleteBookmark(ctx, db.DeleteBookmarkParams{
+			AccountID: accountID,
+			StatusID:  id,
+		})
+
+		s := h.dbStatusToAPI(ctx, status)
+		s.Bookmarked = false
+		return c.JSON(http.StatusOK, s)
 	}
 
 	status, _ := h.getStatusByID(idStr)
@@ -892,7 +929,23 @@ func (h *StatusesHandler) Pin(c echo.Context) error {
 		if status.AccountID != accountID {
 			return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{"error": "Validation failed: Someone else's toot cannot be pinned"})
 		}
-		// TODO: Implement pin when query is available
+
+		// Check visibility (must be public or unlisted)
+		if status.Visibility != 0 && status.Visibility != 1 {
+			return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{"error": "Validation failed: Private or direct statuses cannot be pinned"})
+		}
+
+		// Check limit (max 5)
+		pinned, err := h.queries.GetPinnedStatuses(c.Request().Context(), accountID)
+		if err == nil && len(pinned) >= 5 {
+			return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{"error": "Validation failed: You have already pinned 5 statuses"})
+		}
+
+		_, err = h.queries.PinStatus(c.Request().Context(), db.PinStatusParams{
+			AccountID: accountID,
+			StatusID:  statusID,
+		})
+		// Ignore constraint violation (already pinned)
 
 		s := h.dbStatusToAPI(c.Request().Context(), status)
 		s.Pinned = true
@@ -921,7 +974,11 @@ func (h *StatusesHandler) Unpin(c echo.Context) error {
 		if err != nil {
 			return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
 		}
-		// TODO: Implement unpin when query is available
+
+		err = h.queries.UnpinStatus(c.Request().Context(), db.UnpinStatusParams{
+			AccountID: accountID,
+			StatusID:  statusID,
+		})
 
 		s := h.dbStatusToAPI(c.Request().Context(), status)
 		s.Pinned = false
@@ -939,7 +996,7 @@ func (h *StatusesHandler) FavouritedBy(c echo.Context) error {
 	}
 
 	if h.useDB() {
-		accounts, err := h.queries.GetFavouritedBy(c.Request().Context(), db.GetFavouritedByParams{
+		dbAccounts, err := h.queries.GetFavouritedBy(c.Request().Context(), db.GetFavouritedByParams{
 			StatusID: statusID,
 			Limit:    40,
 			Offset:   0,
@@ -947,6 +1004,12 @@ func (h *StatusesHandler) FavouritedBy(c echo.Context) error {
 		if err != nil {
 			return c.JSON(http.StatusOK, []any{})
 		}
+
+		accounts := make([]Account, len(dbAccounts))
+		for i, a := range dbAccounts {
+			accounts[i] = h.dbAccountToAPI(a)
+		}
+
 		return c.JSON(http.StatusOK, accounts)
 	}
 
@@ -955,13 +1018,48 @@ func (h *StatusesHandler) FavouritedBy(c echo.Context) error {
 
 // RebloggedBy handles GET /api/v1/statuses/:id/reblogged_by
 func (h *StatusesHandler) RebloggedBy(c echo.Context) error {
-	_, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusNotFound, map[string]string{"error": "Record not found"})
 	}
 
-	// TODO: Implement with database query when available
+	if h.useDB() {
+		dbAccounts, err := h.queries.GetRebloggers(c.Request().Context(), db.GetRebloggersParams{
+			ReblogOfID: pgtype.Int8{Int64: id, Valid: true},
+			Limit:      40,
+			Offset:     0,
+		})
+		if err != nil {
+			return c.JSON(http.StatusOK, []any{})
+		}
+
+		accounts := make([]Account, len(dbAccounts))
+		for i, a := range dbAccounts {
+			accounts[i] = h.dbAccountToAPI(a)
+		}
+
+		return c.JSON(http.StatusOK, accounts)
+	}
+
 	return c.JSON(http.StatusOK, []any{})
+}
+
+func (h *StatusesHandler) dbAccountToAPI(dbAcc db.Account) Account {
+	discoverable := dbAcc.Discoverable.Valid && dbAcc.Discoverable.Bool
+	accCreatedAt := time.Now().Add(-24 * time.Hour)
+	if dbAcc.CreatedAt.Valid {
+		accCreatedAt = dbAcc.CreatedAt.Time
+	}
+	return Account{
+		ID:           strconv.FormatInt(dbAcc.ID, 10),
+		Username:     dbAcc.Username,
+		Acct:         dbAcc.Username,
+		DisplayName:  dbAcc.DisplayName,
+		Discoverable: &discoverable,
+		CreatedAt:    accCreatedAt,
+		Emojis:       []any{},
+		Fields:       []Field{},
+	}
 }
 
 // RegisterRoutes registers the statuses routes

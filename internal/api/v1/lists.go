@@ -468,9 +468,20 @@ func (h *ListsHandler) AddAccounts(c echo.Context) error {
 			if err != nil {
 				continue
 			}
+
+			// Verify we follow this account
+			follow, err := h.queries.GetFollow(context.Background(), db.GetFollowParams{
+				AccountID:       accountID,
+				TargetAccountID: id,
+			})
+			if err != nil {
+				continue // Must follow account to add to list
+			}
+
 			_ = h.queries.AddAccountToList(context.Background(), db.AddAccountToListParams{
 				ListID:    listID,
 				AccountID: id,
+				FollowID:  pgtype.Int8{Int64: follow.ID, Valid: true},
 			})
 		}
 		return c.JSON(http.StatusOK, map[string]any{})

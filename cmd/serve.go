@@ -139,13 +139,13 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	mediaStorage := media.NewLocalStorage("./uploads", fmt.Sprintf("https://%s/files", cfg.Instance.LocalDomain))
 	mediaUploader := media.NewUploader(mediaStorage)
-	mediaHandler := v1.NewMediaHandler(mediaUploader)
+	mediaHandler := v1.NewMediaHandler(queries, mediaUploader)
 	mediaHandler.RegisterRoutes(v1Group)
 
 	announcementsHandler := v1.NewAnnouncementsHandler()
 	announcementsHandler.RegisterRoutes(v1Group)
 
-	markersHandler := v1.NewMarkersHandler()
+	markersHandler := v1.NewMarkersHandler(queries)
 	markersHandler.RegisterRoutes(v1Group)
 
 	preferencesHandler := v1.NewPreferencesHandler()
@@ -187,7 +187,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	scheduledStatusesHandler := v1.NewScheduledStatusesHandler(queries)
 	scheduledStatusesHandler.RegisterRoutes(v1Group)
 
-	pushHandler := v1.NewPushHandler(queries)
+	pushHandler := v1.NewPushHandler(queries, cfg)
 	pushHandler.RegisterRoutes(v1Group)
 
 	// Register v2 handlers
