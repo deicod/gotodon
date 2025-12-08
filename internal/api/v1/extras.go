@@ -2,6 +2,7 @@
 package v1
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 
@@ -221,11 +222,13 @@ func (h *BlocksHandler) RegisterRoutes(g *echo.Group) {
 }
 
 // CustomEmojisHandler handles custom emojis endpoints
-type CustomEmojisHandler struct{}
+type CustomEmojisHandler struct {
+	queries *db.Queries
+}
 
 // NewCustomEmojisHandler creates a new custom emojis handler
-func NewCustomEmojisHandler() *CustomEmojisHandler {
-	return &CustomEmojisHandler{}
+func NewCustomEmojisHandler(queries *db.Queries) *CustomEmojisHandler {
+	return &CustomEmojisHandler{queries: queries}
 }
 
 // CustomEmoji represents a custom emoji
@@ -239,8 +242,30 @@ type CustomEmoji struct {
 
 // List handles GET /api/v1/custom_emojis
 func (h *CustomEmojisHandler) List(c echo.Context) error {
-	// Return empty list for now
-	return c.JSON(http.StatusOK, []CustomEmoji{})
+	if h.queries == nil {
+		return c.JSON(http.StatusOK, []CustomEmoji{})
+	}
+
+	emojis, err := h.queries.ListCustomEmojis(c.Request().Context())
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	resp := make([]CustomEmoji, len(emojis))
+	for i, e := range emojis {
+		url := e.ImageRemoteUrl.String
+		if url == "" {
+			url = "/emoji/" + e.ImageFileName.String // Fallback or local path
+		}
+		resp[i] = CustomEmoji{
+			Shortcode:       e.Shortcode,
+			URL:             url,
+			StaticURL:       url,
+			VisibleInPicker: e.VisibleInPicker,
+		}
+	}
+
+	return c.JSON(http.StatusOK, resp)
 }
 
 // RegisterRoutes registers custom emojis routes
@@ -268,13 +293,63 @@ type Conversation struct {
 
 // List handles GET /api/v1/conversations
 func (h *ConversationsHandler) List(c echo.Context) error {
-	_, ok := middleware.GetAccountID(c)
+	accountID, ok := middleware.GetAccountID(c)
 	if !ok {
 		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
 	}
 
-	// Return empty list for now
-	return c.JSON(http.StatusOK, []Conversation{})
+	limit := 20
+	if l := c.QueryParam("limit"); l != "" {
+		if i, err := strconv.Atoi(l); err == nil && i > 0 {
+			limit = i
+		}
+	}
+
+	if h.queries == nil {
+		return c.JSON(http.StatusOK, []Conversation{})
+	}
+
+	dbConversations, err := h.queries.ListConversations(c.Request().Context(), db.ListConversationsParams{
+		AccountID: accountID,
+		Limit:     int32(limit),
+		Offset:    0,
+	})
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	conversations := make([]Conversation, 0, len(dbConversations))
+	for _, c := range dbConversations {
+		// Fetch last status
+		status, err := h.queries.GetStatusByID(context.Background(), c.LastStatusID)
+		if err != nil {
+			continue
+		}
+		statusAccount, err := h.queries.GetAccountByID(context.Background(), c.LastStatusAccountID)
+		if err != nil {
+			continue
+		}
+
+		apiStatus := dbStatusToBasicAPI(status, statusAccount)
+
+		// Determine participants (simplified: just the other person in the last status)
+		accounts := []Account{}
+		if c.LastStatusAccountID != accountID {
+			accounts = append(accounts, dbAccountToBasicAPI(statusAccount))
+		} else {
+			// If I am the author, try to find who I replied to or mentioned
+			// This is a simplification. Real implementation would query mentions.
+		}
+
+		conversations = append(conversations, Conversation{
+			ID:         strconv.FormatInt(c.ID, 10),
+			Unread:     false, // TODO: Implement unread logic
+			Accounts:   accounts,
+			LastStatus: &apiStatus,
+		})
+	}
+
+	return c.JSON(http.StatusOK, conversations)
 }
 
 // Delete handles DELETE /api/v1/conversations/:id
@@ -282,6 +357,16 @@ func (h *ConversationsHandler) Delete(c echo.Context) error {
 	_, ok := middleware.GetAccountID(c)
 	if !ok {
 		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{"error": "The access token is invalid"})
+	}
+
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid ID"})
+	}
+
+	if h.queries != nil {
+		// Just delete the conversation entry for now. In Mastodon this hides it.
+		_ = h.queries.DeleteConversation(c.Request().Context(), id)
 	}
 
 	return c.JSON(http.StatusOK, map[string]any{})

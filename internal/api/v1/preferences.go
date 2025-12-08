@@ -7,19 +7,18 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/db"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // PreferencesHandler handles preferences endpoints
 type PreferencesHandler struct {
-	// In-memory storage for now
-	prefs map[int64]*Preferences
+	queries *db.Queries
 }
 
 // NewPreferencesHandler creates a new preferences handler
-func NewPreferencesHandler() *PreferencesHandler {
-	return &PreferencesHandler{
-		prefs: make(map[int64]*Preferences),
-	}
+func NewPreferencesHandler(queries *db.Queries) *PreferencesHandler {
+	return &PreferencesHandler{queries: queries}
 }
 
 // Preferences represents user preferences
@@ -35,23 +34,36 @@ type Preferences struct {
 func (h *PreferencesHandler) Get(c echo.Context) error {
 	accountID, ok := middleware.GetAccountID(c)
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
 	}
 
-	prefs, exists := h.prefs[accountID]
-	if !exists {
-		// Return defaults
-		prefs = &Preferences{
+	if h.queries == nil {
+		return c.JSON(http.StatusOK, Preferences{
 			PostingDefaultVisibility: "public",
 			PostingDefaultSensitive:  false,
 			ReadingExpandMedia:       "default",
 			ReadingExpandSpoilers:    false,
-		}
+		})
 	}
 
-	return c.JSON(http.StatusOK, prefs)
+	prefs, err := h.queries.GetPreferences(c.Request().Context(), accountID)
+	if err != nil {
+		// Return defaults if not found or error
+		return c.JSON(http.StatusOK, Preferences{
+			PostingDefaultVisibility: "public",
+			PostingDefaultSensitive:  false,
+			ReadingExpandMedia:       "default",
+			ReadingExpandSpoilers:    false,
+		})
+	}
+
+	return c.JSON(http.StatusOK, Preferences{
+		PostingDefaultVisibility: prefs.PostingDefaultVisibility.String,
+		PostingDefaultSensitive:  prefs.PostingDefaultSensitive.Bool,
+		PostingDefaultLanguage:   prefs.PostingDefaultLanguage.String,
+		ReadingExpandMedia:       prefs.ReadingExpandMedia.String,
+		ReadingExpandSpoilers:    prefs.ReadingExpandSpoilers.Bool,
+	})
 }
 
 // Update updates preferences (non-standard convenience endpoint)
@@ -86,31 +98,22 @@ func (h *PreferencesHandler) Update(c echo.Context) error {
 		})
 	}
 
-	// Get existing or create defaults
-	existing, exists := h.prefs[accountID]
-	if !exists {
-		existing = &Preferences{
-			PostingDefaultVisibility: "public",
-			ReadingExpandMedia:       "default",
+	// Upsert to DB
+	if h.queries != nil {
+		_, err := h.queries.UpsertPreferences(c.Request().Context(), db.UpsertPreferencesParams{
+			AccountID:                accountID,
+			PostingDefaultVisibility: pgtype.Text{String: req.PostingDefaultVisibility, Valid: req.PostingDefaultVisibility != ""},
+			PostingDefaultSensitive:  pgtype.Bool{Bool: req.PostingDefaultSensitive, Valid: true},
+			PostingDefaultLanguage:   pgtype.Text{String: req.PostingDefaultLanguage, Valid: req.PostingDefaultLanguage != ""},
+			ReadingExpandMedia:       pgtype.Text{String: req.ReadingExpandMedia, Valid: req.ReadingExpandMedia != ""},
+			ReadingExpandSpoilers:    pgtype.Bool{Bool: req.ReadingExpandSpoilers, Valid: true},
+		})
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 	}
 
-	// Update only provided fields
-	if req.PostingDefaultVisibility != "" {
-		existing.PostingDefaultVisibility = req.PostingDefaultVisibility
-	}
-	existing.PostingDefaultSensitive = req.PostingDefaultSensitive
-	if req.PostingDefaultLanguage != "" {
-		existing.PostingDefaultLanguage = req.PostingDefaultLanguage
-	}
-	if req.ReadingExpandMedia != "" {
-		existing.ReadingExpandMedia = req.ReadingExpandMedia
-	}
-	existing.ReadingExpandSpoilers = req.ReadingExpandSpoilers
-
-	h.prefs[accountID] = existing
-
-	return c.JSON(http.StatusOK, existing)
+	return c.JSON(http.StatusOK, req)
 }
 
 // RegisterRoutes registers the preferences routes

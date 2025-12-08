@@ -12,6 +12,7 @@ import (
 
 type Querier interface {
 	AddAccountToList(ctx context.Context, arg AddAccountToListParams) error
+	AddAnnouncementReaction(ctx context.Context, arg AddAnnouncementReactionParams) (AnnouncementReaction, error)
 	AttachMediaToStatus(ctx context.Context, arg AttachMediaToStatusParams) error
 	ClearNotifications(ctx context.Context, accountID int64) error
 	ClearResetPasswordToken(ctx context.Context, id int64) error
@@ -23,6 +24,8 @@ type Querier interface {
 	CreateAccountStats(ctx context.Context, accountID int64) (AccountStat, error)
 	CreateBlock(ctx context.Context, arg CreateBlockParams) (Block, error)
 	CreateBookmark(ctx context.Context, arg CreateBookmarkParams) error
+	CreateConversation(ctx context.Context, arg CreateConversationParams) (Conversation, error)
+	CreateCustomEmoji(ctx context.Context, arg CreateCustomEmojiParams) (CustomEmoji, error)
 	CreateDomainBlock(ctx context.Context, arg CreateDomainBlockParams) (AccountDomainBlock, error)
 	CreateFavourite(ctx context.Context, arg CreateFavouriteParams) (Favourite, error)
 	CreateFilter(ctx context.Context, arg CreateFilterParams) (Filter, error)
@@ -47,6 +50,7 @@ type Querier interface {
 	DecrementStatusReplies(ctx context.Context, statusID int64) error
 	DeleteBlock(ctx context.Context, arg DeleteBlockParams) error
 	DeleteBookmark(ctx context.Context, arg DeleteBookmarkParams) error
+	DeleteConversation(ctx context.Context, id int64) error
 	DeleteDomainBlock(ctx context.Context, arg DeleteDomainBlockParams) error
 	DeleteFavourite(ctx context.Context, arg DeleteFavouriteParams) error
 	DeleteFilter(ctx context.Context, arg DeleteFilterParams) error
@@ -62,6 +66,7 @@ type Querier interface {
 	DeletePushSubscription(ctx context.Context, accessTokenID pgtype.Int8) error
 	DeleteScheduledStatus(ctx context.Context, arg DeleteScheduledStatusParams) error
 	DeleteStatus(ctx context.Context, id int64) error
+	DismissAnnouncement(ctx context.Context, arg DismissAnnouncementParams) error
 	GetAccountByID(ctx context.Context, id int64) (Account, error)
 	GetAccountByURI(ctx context.Context, uri string) (Account, error)
 	GetAccountByUsername(ctx context.Context, username string) (Account, error)
@@ -71,6 +76,8 @@ type Querier interface {
 	GetAllVotes(ctx context.Context, pollID int64) ([]PollVote, error)
 	GetBlock(ctx context.Context, arg GetBlockParams) (Block, error)
 	GetBookmark(ctx context.Context, arg GetBookmarkParams) (Bookmark, error)
+	GetConversation(ctx context.Context, id int64) (Conversation, error)
+	GetCustomEmoji(ctx context.Context, arg GetCustomEmojiParams) (CustomEmoji, error)
 	GetDomainBlock(ctx context.Context, arg GetDomainBlockParams) (AccountDomainBlock, error)
 	GetFavourite(ctx context.Context, arg GetFavouriteParams) (Favourite, error)
 	GetFavouritedBy(ctx context.Context, arg GetFavouritedByParams) ([]Account, error)
@@ -98,6 +105,7 @@ type Querier interface {
 	GetPinnedStatuses(ctx context.Context, accountID int64) ([]Status, error)
 	GetPoll(ctx context.Context, id int64) (Poll, error)
 	GetPollByStatusId(ctx context.Context, statusID pgtype.Int8) (Poll, error)
+	GetPreferences(ctx context.Context, accountID int64) (Preference, error)
 	GetPublicTimeline(ctx context.Context, arg GetPublicTimelineParams) ([]Status, error)
 	GetPushSubscription(ctx context.Context, arg GetPushSubscriptionParams) (WebPushSubscription, error)
 	GetPushSubscriptionByEndpoint(ctx context.Context, endpoint string) (WebPushSubscription, error)
@@ -128,8 +136,12 @@ type Querier interface {
 	IncrementVotersCount(ctx context.Context, id int64) error
 	IsBookmarked(ctx context.Context, arg IsBookmarkedParams) (bool, error)
 	ListAccountsInList(ctx context.Context, arg ListAccountsInListParams) ([]Account, error)
+	ListAnnouncementReactions(ctx context.Context, announcementID int64) ([]AnnouncementReaction, error)
+	ListAnnouncements(ctx context.Context, arg ListAnnouncementsParams) ([]Announcement, error)
 	ListBlocks(ctx context.Context, arg ListBlocksParams) ([]Account, error)
 	ListBookmarks(ctx context.Context, arg ListBookmarksParams) ([]ListBookmarksRow, error)
+	ListConversations(ctx context.Context, arg ListConversationsParams) ([]ListConversationsRow, error)
+	ListCustomEmojis(ctx context.Context) ([]CustomEmoji, error)
 	ListDeepDirectory(ctx context.Context, arg ListDeepDirectoryParams) ([]Account, error)
 	ListDomainBlocks(ctx context.Context, arg ListDomainBlocksParams) ([]AccountDomainBlock, error)
 	ListDueScheduledStatuses(ctx context.Context) ([]ScheduledStatus, error)
@@ -148,9 +160,13 @@ type Querier interface {
 	ListUnattachedMedia(ctx context.Context, arg ListUnattachedMediaParams) ([]MediaAttachment, error)
 	ListUserOAuthTokens(ctx context.Context, resourceOwnerID pgtype.Int8) ([]ListUserOAuthTokensRow, error)
 	ListUserRoles(ctx context.Context) ([]UserRole, error)
+	// Placeholder: Requires conversation_mutes or new table for read state which implies 'unread' logic
+	// Currently just creating a stub query if we add unread tracking later
+	MarkConversationRead(ctx context.Context) error
 	MarkNotificationsRead(ctx context.Context, accountID int64) error
 	PinStatus(ctx context.Context, arg PinStatusParams) (StatusPin, error)
 	RemoveAccountFromList(ctx context.Context, arg RemoveAccountFromListParams) error
+	RemoveAnnouncementReaction(ctx context.Context, arg RemoveAnnouncementReactionParams) error
 	RevokeOAuthAccessToken(ctx context.Context, token string) error
 	RevokeOAuthAccessTokensByApplication(ctx context.Context, arg RevokeOAuthAccessTokensByApplicationParams) error
 	RevokeOAuthAccessTokensByUser(ctx context.Context, resourceOwnerID pgtype.Int8) error
@@ -174,6 +190,7 @@ type Querier interface {
 	UpdateStatus(ctx context.Context, arg UpdateStatusParams) (Status, error)
 	UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error)
 	UpsertMarker(ctx context.Context, arg UpsertMarkerParams) (Marker, error)
+	UpsertPreferences(ctx context.Context, arg UpsertPreferencesParams) (Preference, error)
 	Vote(ctx context.Context, arg VoteParams) error
 }
 

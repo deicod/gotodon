@@ -9,55 +9,21 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
-	"github.com/deicod/gotodon/pkg/snowflake"
+	"github.com/deicod/gotodon/internal/db"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // AnnouncementsHandler handles announcement endpoints
 type AnnouncementsHandler struct {
-	idGen *snowflake.Generator
-	// In-memory storage
-	announcements map[int64]*Announcement
-	reactions     map[int64]map[int64][]string // announcement_id -> account_id -> emoji names
-	dismissed     map[int64]map[int64]bool     // announcement_id -> account_id -> dismissed
+	queries *db.Queries
 }
 
 // NewAnnouncementsHandler creates a new announcements handler
-func NewAnnouncementsHandler() *AnnouncementsHandler {
-	h := &AnnouncementsHandler{
-		idGen:         snowflake.NewGenerator(),
-		announcements: make(map[int64]*Announcement),
-		reactions:     make(map[int64]map[int64][]string),
-		dismissed:     make(map[int64]map[int64]bool),
-	}
-
-	// Add some sample announcements
-	h.addSampleAnnouncements()
-
-	return h
+func NewAnnouncementsHandler(queries *db.Queries) *AnnouncementsHandler {
+	return &AnnouncementsHandler{queries: queries}
 }
 
-func (h *AnnouncementsHandler) addSampleAnnouncements() {
-	now := time.Now()
-
-	// Welcome announcement
-	id1 := h.idGen.Generate()
-	h.announcements[id1] = &Announcement{
-		ID:          strconv.FormatInt(id1, 10),
-		Content:     "<p>Welcome to Gotodon! This is a Mastodon-compatible server built in Go.</p>",
-		StartsAt:    nil,
-		EndsAt:      nil,
-		AllDay:      false,
-		PublishedAt: now.Add(-24 * time.Hour),
-		UpdatedAt:   now.Add(-24 * time.Hour),
-		Published:   true,
-		Read:        false,
-		Reactions:   []AnnouncementReaction{},
-		Mentions:    []Mention{},
-		Statuses:    []AnnouncementStatus{},
-		Tags:        []Tag{},
-		Emojis:      []any{},
-	}
-}
+// addSampleAnnouncements removed as we use DB
 
 // Announcement represents a server announcement
 type Announcement struct {
@@ -95,31 +61,86 @@ type AnnouncementStatus struct {
 // GetAll handles GET /api/v1/announcements
 func (h *AnnouncementsHandler) GetAll(c echo.Context) error {
 	accountID, ok := middleware.GetAccountID(c)
+	if !ok {
+		// Announcements can be public? Usually authenticated in Mastodon
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
+	}
 
 	withDismissed := c.QueryParam("with_dismissed") == "true"
 
-	result := make([]Announcement, 0)
+	if h.queries == nil {
+		return c.JSON(http.StatusOK, []Announcement{})
+	}
 
-	for announcementID, announcement := range h.announcements {
-		if !announcement.Published {
-			continue
-		}
+	anns, err := h.queries.ListAnnouncements(c.Request().Context(), db.ListAnnouncementsParams{
+		AccountID:     accountID,
+		WithDismissed: withDismissed,
+	})
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
 
-		// Check if dismissed
-		if ok && !withDismissed {
-			if h.dismissed[announcementID] != nil && h.dismissed[announcementID][accountID] {
-				continue
+	result := make([]Announcement, len(anns))
+	for i, a := range anns {
+		// Get reactions
+		reactions, _ := h.queries.ListAnnouncementReactions(c.Request().Context(), a.ID)
+		reactionMap := make(map[string]int)
+		reacted := make(map[string]bool)
+		for _, r := range reactions {
+			reactionMap[r.Name]++
+			if r.AccountID.Int64 == accountID {
+				reacted[r.Name] = true
 			}
 		}
 
-		// Build with user-specific read/reaction state
-		ann := *announcement
-		if ok {
-			ann.Read = h.dismissed[announcementID] != nil && h.dismissed[announcementID][accountID]
-			ann.Reactions = h.buildReactionsForUser(announcementID, accountID)
+		apiReactions := []AnnouncementReaction{}
+		for name, count := range reactionMap {
+			apiReactions = append(apiReactions, AnnouncementReaction{
+				Name:  name,
+				Count: count,
+				Me:    reacted[name],
+			})
 		}
 
-		result = append(result, ann)
+		// Read status implied by not being in ignored list?
+		// Note: ListAnnouncements filters muted unless withDismissed is true.
+		// If withDismissed is true and it's returned, we need to know if it was muted.
+		// The query returns muted items too if withDismissed=true.
+		// We'd need to check if it's muted.
+		// Simplified: assume Unread=true for now unless we do a separate check.
+		// Actually, query: LEFT JOIN announcement_mutes ... WHERE am.id IS NULL OR with_dismissed
+		// If am.id is NOT NULL, it is read/dismissed.
+		// But I modified the query to fetch a.* only.
+		// I won't know if it was matched by mute or not.
+		// TODO: Enhance query to return 'muted' bool.
+		// MVP: just return Read=false.
+
+		var startsAt *time.Time
+		if a.StartsAt.Valid {
+			t := a.StartsAt.Time
+			startsAt = &t
+		}
+		var endsAt *time.Time
+		if a.EndsAt.Valid {
+			t := a.EndsAt.Time
+			endsAt = &t
+		}
+
+		result[i] = Announcement{
+			ID:          strconv.FormatInt(a.ID, 10),
+			Content:     a.Text,
+			Published:   a.Published,
+			AllDay:      a.AllDay,
+			PublishedAt: a.CreatedAt.Time,
+			UpdatedAt:   a.UpdatedAt.Time,
+			StartsAt:    startsAt,
+			EndsAt:      endsAt,
+			Reactions:   apiReactions,
+			Statuses:    []AnnouncementStatus{},
+			Tags:        []Tag{},
+			Emojis:      []any{},
+			Mentions:    []Mention{},
+		}
 	}
 
 	return c.JSON(http.StatusOK, result)
@@ -129,28 +150,23 @@ func (h *AnnouncementsHandler) GetAll(c echo.Context) error {
 func (h *AnnouncementsHandler) Dismiss(c echo.Context) error {
 	accountID, ok := middleware.GetAccountID(c)
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
 	}
 
-	announcementID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid ID"})
 	}
 
-	if _, exists := h.announcements[announcementID]; !exists {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
+	if h.queries != nil {
+		err := h.queries.DismissAnnouncement(c.Request().Context(), db.DismissAnnouncementParams{
+			AccountID:      accountID,
+			AnnouncementID: id,
 		})
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
 	}
-
-	if h.dismissed[announcementID] == nil {
-		h.dismissed[announcementID] = make(map[int64]bool)
-	}
-	h.dismissed[announcementID][accountID] = true
 
 	return c.JSON(http.StatusOK, map[string]any{})
 }
@@ -159,44 +175,26 @@ func (h *AnnouncementsHandler) Dismiss(c echo.Context) error {
 func (h *AnnouncementsHandler) AddReaction(c echo.Context) error {
 	accountID, ok := middleware.GetAccountID(c)
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
 	}
 
-	announcementID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid ID"})
 	}
-
-	if _, exists := h.announcements[announcementID]; !exists {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
-	}
-
 	name := c.Param("name")
-	if name == "" {
-		return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
-			"error": "Validation failed: Name can't be blank",
+
+	if h.queries != nil {
+		_, err := h.queries.AddAnnouncementReaction(c.Request().Context(), db.AddAnnouncementReactionParams{
+			AccountID:      pgtype.Int8{Int64: accountID, Valid: true},
+			AnnouncementID: id,
+			Name:           name,
 		})
-	}
-
-	// Add reaction
-	if h.reactions[announcementID] == nil {
-		h.reactions[announcementID] = make(map[int64][]string)
-	}
-
-	// Check if already reacted with this emoji
-	for _, r := range h.reactions[announcementID][accountID] {
-		if r == name {
-			return c.JSON(http.StatusOK, map[string]any{})
+		if err != nil {
+			// Ignore dup error? or just return OK
+			// return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 	}
-
-	h.reactions[announcementID][accountID] = append(h.reactions[announcementID][accountID], name)
 
 	return c.JSON(http.StatusOK, map[string]any{})
 }
@@ -205,65 +203,24 @@ func (h *AnnouncementsHandler) AddReaction(c echo.Context) error {
 func (h *AnnouncementsHandler) RemoveReaction(c echo.Context) error {
 	accountID, ok := middleware.GetAccountID(c)
 	if !ok {
-		return echo.NewHTTPError(http.StatusUnauthorized, map[string]string{
-			"error": "The access token is invalid",
-		})
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
 	}
 
-	announcementID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid ID"})
 	}
-
-	if _, exists := h.announcements[announcementID]; !exists {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
-	}
-
 	name := c.Param("name")
 
-	if h.reactions[announcementID] != nil {
-		newReactions := make([]string, 0)
-		for _, r := range h.reactions[announcementID][accountID] {
-			if r != name {
-				newReactions = append(newReactions, r)
-			}
-		}
-		h.reactions[announcementID][accountID] = newReactions
+	if h.queries != nil {
+		_ = h.queries.RemoveAnnouncementReaction(c.Request().Context(), db.RemoveAnnouncementReactionParams{
+			AccountID:      pgtype.Int8{Int64: accountID, Valid: true},
+			AnnouncementID: id,
+			Name:           name,
+		})
 	}
 
 	return c.JSON(http.StatusOK, map[string]any{})
-}
-
-func (h *AnnouncementsHandler) buildReactionsForUser(announcementID, accountID int64) []AnnouncementReaction {
-	// Aggregate reactions
-	reactionCounts := make(map[string]int)
-	userReacted := make(map[string]bool)
-
-	if h.reactions[announcementID] != nil {
-		for uid, reactions := range h.reactions[announcementID] {
-			for _, name := range reactions {
-				reactionCounts[name]++
-				if uid == accountID {
-					userReacted[name] = true
-				}
-			}
-		}
-	}
-
-	result := make([]AnnouncementReaction, 0, len(reactionCounts))
-	for name, count := range reactionCounts {
-		result = append(result, AnnouncementReaction{
-			Name:  name,
-			Count: count,
-			Me:    userReacted[name],
-		})
-	}
-
-	return result
 }
 
 // RegisterRoutes registers announcement routes

@@ -142,13 +142,13 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	mediaHandler := v1.NewMediaHandler(queries, mediaUploader)
 	mediaHandler.RegisterRoutes(v1Group)
 
-	announcementsHandler := v1.NewAnnouncementsHandler()
+	announcementsHandler := v1.NewAnnouncementsHandler(queries)
 	announcementsHandler.RegisterRoutes(v1Group)
 
 	markersHandler := v1.NewMarkersHandler(queries)
 	markersHandler.RegisterRoutes(v1Group)
 
-	preferencesHandler := v1.NewPreferencesHandler()
+	preferencesHandler := v1.NewPreferencesHandler(queries)
 	preferencesHandler.RegisterRoutes(v1Group)
 
 	suggestionsHandler := v1.NewSuggestionsHandler(queries)
@@ -172,7 +172,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	blocksHandler := v1.NewBlocksHandler(queries)
 	blocksHandler.RegisterRoutes(v1Group)
 
-	customEmojisHandler := v1.NewCustomEmojisHandler()
+	customEmojisHandler := v1.NewCustomEmojisHandler(queries)
 	customEmojisHandler.RegisterRoutes(v1Group)
 
 	conversationsHandler := v1.NewConversationsHandler(queries)
