@@ -5,8 +5,8 @@ description: Development workflow for Gotodon
 # Gotodon Development Workflow
 
 ## Prerequisites
-- Go 1.23+
-- PostgreSQL 15+
+- Go 1.25+
+- PostgreSQL 18+
 - Redis 7+
 - sqlc (`go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest`)
 - golangci-lint (`go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest`)
