@@ -266,14 +266,10 @@ func (h *CustomEmojisHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]CustomEmoji, len(emojis))
 	for i, e := range emojis {
-		url := e.ImageRemoteUrl.String
-		if url == "" {
-			url = "/emoji/" + e.ImageFileName.String // Fallback or local path
-		}
 		resp[i] = CustomEmoji{
 			Shortcode:       e.Shortcode,
-			URL:             url,
-			StaticURL:       url,
+			URL:             GetEmojiURL(e),
+			StaticURL:       GetEmojiURL(e),
 			VisibleInPicker: e.VisibleInPicker,
 		}
 	}
@@ -453,4 +449,13 @@ func dbAccountToBasicAPI(a db.Account) Account {
 		Emojis:       []any{},
 		Fields:       []Field{},
 	}
+}
+
+// GetEmojiURL returns the URL for a custom emoji
+func GetEmojiURL(emoji db.CustomEmoji) string {
+	if emoji.ImageRemoteUrl.Valid {
+		return emoji.ImageRemoteUrl.String
+	}
+	// Assuming local storage URL construction
+	return "/files/" + emoji.ImageFileName.String
 }

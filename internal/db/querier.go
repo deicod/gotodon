@@ -15,6 +15,7 @@ type Querier interface {
 	AddAnnouncementReaction(ctx context.Context, arg AddAnnouncementReactionParams) (AnnouncementReaction, error)
 	AdminApproveAccount(ctx context.Context, accountID int64) error
 	AdminAssignReport(ctx context.Context, arg AdminAssignReportParams) error
+	AdminCreateCustomEmoji(ctx context.Context, arg AdminCreateCustomEmojiParams) (CustomEmoji, error)
 	AdminCreateDomainBlock(ctx context.Context, arg AdminCreateDomainBlockParams) (DomainBlock, error)
 	// Note: Cascades to accounts usually, or we should delete account separately? Schema has fk_users_account -> accounts(id).
 	// Accounts table is the parent. FK is in users pointing to accounts.
@@ -31,6 +32,7 @@ type Querier interface {
 	AdminGetDomainBlock(ctx context.Context, id int64) (DomainBlock, error)
 	AdminGetReport(ctx context.Context, id int64) (Report, error)
 	AdminListAccounts(ctx context.Context, arg AdminListAccountsParams) ([]AdminListAccountsRow, error)
+	AdminListCustomEmojis(ctx context.Context, arg AdminListCustomEmojisParams) ([]CustomEmoji, error)
 	AdminListDomainBlocks(ctx context.Context, arg AdminListDomainBlocksParams) ([]DomainBlock, error)
 	AdminListReports(ctx context.Context, arg AdminListReportsParams) ([]AdminListReportsRow, error)
 	AdminRejectAccount(ctx context.Context, accountID int64) error
@@ -82,6 +84,7 @@ type Querier interface {
 	DeleteBlock(ctx context.Context, arg DeleteBlockParams) error
 	DeleteBookmark(ctx context.Context, arg DeleteBookmarkParams) error
 	DeleteConversation(ctx context.Context, id int64) error
+	DeleteCustomEmoji(ctx context.Context, id int64) error
 	DeleteDomainBlock(ctx context.Context, arg DeleteDomainBlockParams) error
 	DeleteFavourite(ctx context.Context, arg DeleteFavouriteParams) error
 	DeleteFilter(ctx context.Context, arg DeleteFilterParams) error
@@ -213,6 +216,7 @@ type Querier interface {
 	UnsuspendAccount(ctx context.Context, id int64) error
 	UpdateAccount(ctx context.Context, arg UpdateAccountParams) (Account, error)
 	UpdateAccountStats(ctx context.Context, arg UpdateAccountStatsParams) error
+	UpdateCustomEmoji(ctx context.Context, arg UpdateCustomEmojiParams) (CustomEmoji, error)
 	UpdateFilter(ctx context.Context, arg UpdateFilterParams) (Filter, error)
 	UpdateFilterKeyword(ctx context.Context, arg UpdateFilterKeywordParams) (FilterKeyword, error)
 	UpdateList(ctx context.Context, arg UpdateListParams) (List, error)

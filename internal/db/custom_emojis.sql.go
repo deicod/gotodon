@@ -11,6 +11,102 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const adminCreateCustomEmoji = `-- name: AdminCreateCustomEmoji :one
+INSERT INTO custom_emojis (
+    shortcode, domain, image_file_name, image_content_type, image_file_size, image_updated_at, category_id, visible_in_picker, created_at, updated_at
+) VALUES (
+    $1, $2, $3, $4, $5, NOW(), $6, $7, NOW(), NOW()
+) RETURNING id, shortcode, domain, image_file_name, image_content_type, image_file_size, image_updated_at, created_at, updated_at, disabled, uri, image_remote_url, visible_in_picker, category_id, image_storage_schema_version
+`
+
+type AdminCreateCustomEmojiParams struct {
+	Shortcode        string      `db:"shortcode" json:"shortcode"`
+	Domain           pgtype.Text `db:"domain" json:"domain"`
+	ImageFileName    pgtype.Text `db:"image_file_name" json:"image_file_name"`
+	ImageContentType pgtype.Text `db:"image_content_type" json:"image_content_type"`
+	ImageFileSize    pgtype.Int4 `db:"image_file_size" json:"image_file_size"`
+	CategoryID       pgtype.Int8 `db:"category_id" json:"category_id"`
+	VisibleInPicker  bool        `db:"visible_in_picker" json:"visible_in_picker"`
+}
+
+func (q *Queries) AdminCreateCustomEmoji(ctx context.Context, arg AdminCreateCustomEmojiParams) (CustomEmoji, error) {
+	row := q.db.QueryRow(ctx, adminCreateCustomEmoji,
+		arg.Shortcode,
+		arg.Domain,
+		arg.ImageFileName,
+		arg.ImageContentType,
+		arg.ImageFileSize,
+		arg.CategoryID,
+		arg.VisibleInPicker,
+	)
+	var i CustomEmoji
+	err := row.Scan(
+		&i.ID,
+		&i.Shortcode,
+		&i.Domain,
+		&i.ImageFileName,
+		&i.ImageContentType,
+		&i.ImageFileSize,
+		&i.ImageUpdatedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Disabled,
+		&i.Uri,
+		&i.ImageRemoteUrl,
+		&i.VisibleInPicker,
+		&i.CategoryID,
+		&i.ImageStorageSchemaVersion,
+	)
+	return i, err
+}
+
+const adminListCustomEmojis = `-- name: AdminListCustomEmojis :many
+SELECT id, shortcode, domain, image_file_name, image_content_type, image_file_size, image_updated_at, created_at, updated_at, disabled, uri, image_remote_url, visible_in_picker, category_id, image_storage_schema_version FROM custom_emojis
+ORDER BY id DESC
+LIMIT $1 OFFSET $2
+`
+
+type AdminListCustomEmojisParams struct {
+	Limit  int32 `db:"limit" json:"limit"`
+	Offset int32 `db:"offset" json:"offset"`
+}
+
+func (q *Queries) AdminListCustomEmojis(ctx context.Context, arg AdminListCustomEmojisParams) ([]CustomEmoji, error) {
+	rows, err := q.db.Query(ctx, adminListCustomEmojis, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CustomEmoji{}
+	for rows.Next() {
+		var i CustomEmoji
+		if err := rows.Scan(
+			&i.ID,
+			&i.Shortcode,
+			&i.Domain,
+			&i.ImageFileName,
+			&i.ImageContentType,
+			&i.ImageFileSize,
+			&i.ImageUpdatedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Disabled,
+			&i.Uri,
+			&i.ImageRemoteUrl,
+			&i.VisibleInPicker,
+			&i.CategoryID,
+			&i.ImageStorageSchemaVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const createCustomEmoji = `-- name: CreateCustomEmoji :one
 INSERT INTO custom_emojis (
     shortcode, domain, image_remote_url, category_id, visible_in_picker
@@ -54,6 +150,15 @@ func (q *Queries) CreateCustomEmoji(ctx context.Context, arg CreateCustomEmojiPa
 		&i.ImageStorageSchemaVersion,
 	)
 	return i, err
+}
+
+const deleteCustomEmoji = `-- name: DeleteCustomEmoji :exec
+DELETE FROM custom_emojis WHERE id = $1
+`
+
+func (q *Queries) DeleteCustomEmoji(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, deleteCustomEmoji, id)
+	return err
 }
 
 const getCustomEmoji = `-- name: GetCustomEmoji :one
@@ -130,4 +235,40 @@ func (q *Queries) ListCustomEmojis(ctx context.Context) ([]CustomEmoji, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateCustomEmoji = `-- name: UpdateCustomEmoji :one
+UPDATE custom_emojis
+SET disabled = $2, visible_in_picker = $3, updated_at = NOW()
+WHERE id = $1
+RETURNING id, shortcode, domain, image_file_name, image_content_type, image_file_size, image_updated_at, created_at, updated_at, disabled, uri, image_remote_url, visible_in_picker, category_id, image_storage_schema_version
+`
+
+type UpdateCustomEmojiParams struct {
+	ID              int64 `db:"id" json:"id"`
+	Disabled        bool  `db:"disabled" json:"disabled"`
+	VisibleInPicker bool  `db:"visible_in_picker" json:"visible_in_picker"`
+}
+
+func (q *Queries) UpdateCustomEmoji(ctx context.Context, arg UpdateCustomEmojiParams) (CustomEmoji, error) {
+	row := q.db.QueryRow(ctx, updateCustomEmoji, arg.ID, arg.Disabled, arg.VisibleInPicker)
+	var i CustomEmoji
+	err := row.Scan(
+		&i.ID,
+		&i.Shortcode,
+		&i.Domain,
+		&i.ImageFileName,
+		&i.ImageContentType,
+		&i.ImageFileSize,
+		&i.ImageUpdatedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Disabled,
+		&i.Uri,
+		&i.ImageRemoteUrl,
+		&i.VisibleInPicker,
+		&i.CategoryID,
+		&i.ImageStorageSchemaVersion,
+	)
+	return i, err
 }

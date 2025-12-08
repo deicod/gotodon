@@ -258,6 +258,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	adminRetentionHandler := admin.NewRetentionHandler()
 	adminRetentionHandler.RegisterRoutes(mux)
 
+	adminCustomEmojisHandler := admin.NewCustomEmojisHandler(queries, mediaUploader)
+	adminCustomEmojisHandler.RegisterRoutes(mux)
+
 	// V1 Reports (User API)
 	v1ReportsHandler := v1.NewReportsHandler(queries)
 	mux.HandleFunc("POST /api/v1/reports", v1ReportsHandler.Create)
