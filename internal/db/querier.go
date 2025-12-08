@@ -13,6 +13,35 @@ import (
 type Querier interface {
 	AddAccountToList(ctx context.Context, arg AddAccountToListParams) error
 	AddAnnouncementReaction(ctx context.Context, arg AddAnnouncementReactionParams) (AnnouncementReaction, error)
+	AdminApproveAccount(ctx context.Context, accountID int64) error
+	AdminAssignReport(ctx context.Context, arg AdminAssignReportParams) error
+	AdminCreateDomainBlock(ctx context.Context, arg AdminCreateDomainBlockParams) (DomainBlock, error)
+	// Note: Cascades to accounts usually, or we should delete account separately? Schema has fk_users_account -> accounts(id).
+	// Accounts table is the parent. FK is in users pointing to accounts.
+	// Actually, deleting the USER might not delete the ACCOUNT if the FK is ON DELETE CASCADE on the user side?
+	// Schema: users.account_id REFERENCES accounts(id) ON DELETE CASCADE.
+	// So deleting account deletes user. Deleting user does NOT delete account automatically unless we do it manually.
+	// For rejection, we usually want to delete the account entirely.
+	// Let's change this to delete from accounts.
+	AdminDeleteAccount(ctx context.Context, id int64) error
+	AdminDeleteDomainBlock(ctx context.Context, id int64) error
+	AdminDisableAccount(ctx context.Context, accountID int64) error
+	AdminEnableAccount(ctx context.Context, accountID int64) error
+	AdminGetAccount(ctx context.Context, id int64) (AdminGetAccountRow, error)
+	AdminGetDomainBlock(ctx context.Context, id int64) (DomainBlock, error)
+	AdminGetReport(ctx context.Context, id int64) (Report, error)
+	AdminListAccounts(ctx context.Context, arg AdminListAccountsParams) ([]AdminListAccountsRow, error)
+	AdminListDomainBlocks(ctx context.Context, arg AdminListDomainBlocksParams) ([]DomainBlock, error)
+	AdminListReports(ctx context.Context, arg AdminListReportsParams) ([]AdminListReportsRow, error)
+	AdminRejectAccount(ctx context.Context, accountID int64) error
+	AdminResolveReport(ctx context.Context, arg AdminResolveReportParams) error
+	AdminSensitizeAccount(ctx context.Context, id int64) error
+	AdminSilenceAccount(ctx context.Context, id int64) error
+	AdminSuspendAccount(ctx context.Context, id int64) error
+	AdminUnsensitizeAccount(ctx context.Context, id int64) error
+	AdminUnsilenceAccount(ctx context.Context, id int64) error
+	AdminUnsuspendAccount(ctx context.Context, id int64) error
+	AdminUpdateDomainBlock(ctx context.Context, arg AdminUpdateDomainBlockParams) (DomainBlock, error)
 	AttachMediaToStatus(ctx context.Context, arg AttachMediaToStatusParams) error
 	ClearNotifications(ctx context.Context, accountID int64) error
 	ClearResetPasswordToken(ctx context.Context, id int64) error
@@ -41,6 +70,7 @@ type Querier interface {
 	CreateOAuthApplication(ctx context.Context, arg CreateOAuthApplicationParams) (OauthApplication, error)
 	CreatePoll(ctx context.Context, arg CreatePollParams) (Poll, error)
 	CreatePushSubscription(ctx context.Context, arg CreatePushSubscriptionParams) (WebPushSubscription, error)
+	CreateReport(ctx context.Context, arg CreateReportParams) (Report, error)
 	CreateScheduledStatus(ctx context.Context, arg CreateScheduledStatusParams) (ScheduledStatus, error)
 	CreateStatus(ctx context.Context, arg CreateStatusParams) (Status, error)
 	CreateStatusStats(ctx context.Context, statusID int64) (StatusStat, error)

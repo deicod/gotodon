@@ -213,15 +213,22 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	federationHandler.RegisterRoutes(e)
 
 	// Admin API
-	adminGroup := e.Group("/api/v1/admin")
-	adminAccountsHandler := admin.NewAccountsHandler()
-	adminAccountsHandler.RegisterRoutes(adminGroup)
+	// Admin Handlers
+	adminAccountsHandler := admin.NewAccountsHandler(queries)
+	adminDomainBlocksHandler := admin.NewDomainBlocksHandler(queries)
+	adminReportsHandler := admin.NewReportsHandler(queries)
 
-	adminReportsHandler := admin.NewReportsHandler()
+	// V1 Handlers
+	v1ReportsHandler := v1.NewReportsHandler(queries)
+
+	// Admin Routes
+	adminGroup := v1Group.Group("/admin")
+	adminAccountsHandler.RegisterRoutes(adminGroup)
+	adminDomainBlocksHandler.RegisterRoutes(adminGroup)
 	adminReportsHandler.RegisterRoutes(adminGroup)
 
-	adminDomainBlocksHandler := admin.NewDomainBlocksHandler()
-	adminDomainBlocksHandler.RegisterRoutes(adminGroup)
+	// Report Routes (User API)
+	v1Group.POST("/reports", v1ReportsHandler.Create)
 
 	adminInstanceHandler := admin.NewInstanceHandler()
 	adminInstanceHandler.RegisterRoutes(adminGroup)
