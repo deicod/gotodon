@@ -63,20 +63,24 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	}))
 	slog.SetDefault(logger)
 
-	// Connect to PostgreSQL
-	var queries *db.Queries
-	if cfg.Database.Host != "" {
-		pool, err := pgxpool.New(ctx, cfg.Database.DSN())
-		if err != nil {
-			logger.Warn("Failed to connect to database, running in memory-only mode", "error", err)
-		} else {
-			defer pool.Close()
-			queries = db.New(pool)
-			logger.Info("Connected to PostgreSQL database")
-		}
-	} else {
-		logger.Warn("No database configured, running in memory-only mode")
+	// Connect to PostgreSQL (required)
+	if cfg.Database.Host == "" {
+		return fmt.Errorf("database configuration required: set DB_HOST or database.host")
 	}
+
+	pool, err := pgxpool.New(ctx, cfg.Database.DSN())
+	if err != nil {
+		return fmt.Errorf("connecting to database: %w", err)
+	}
+	defer pool.Close()
+
+	// Verify connection
+	if err := pool.Ping(ctx); err != nil {
+		return fmt.Errorf("database ping failed: %w", err)
+	}
+
+	queries := db.New(pool)
+	logger.Info("Connected to PostgreSQL database")
 
 	// Create Echo instance
 	e := echo.New()
