@@ -1,12 +1,13 @@
 module github.com/deicod/gotodon
 
-go 1.23
+go 1.25
 
 require (
 	github.com/jackc/pgx/v5 v5.7.2
 	github.com/labstack/echo/v4 v4.13.3
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.19.0
+	golang.org/x/crypto v0.31.0
 )
 
 require (
@@ -32,7 +33,6 @@ require (
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/crypto v0.31.0 // indirect
 	golang.org/x/exp v0.0.0-20241217172543-b2144cdd0a67 // indirect
 	golang.org/x/net v0.33.0 // indirect
 	golang.org/x/sync v0.10.0 // indirect
