@@ -65,7 +65,7 @@ WHERE status_id = $1;
 SELECT s.* FROM statuses s
 WHERE s.deleted_at IS NULL
   AND s.account_id IN (
-    SELECT target_account_id FROM follows WHERE account_id = @account_id
+    SELECT f.target_account_id FROM follows f WHERE f.account_id = @account_id
     UNION ALL
     SELECT @account_id
   )
@@ -94,19 +94,16 @@ WHERE account_id = $1
 ORDER BY id DESC
 LIMIT $2 OFFSET $3;
 
--- name: GetStatusContext :many
+-- name: GetStatusAncestors :many
+WITH RECURSIVE ancestors AS (
+  SELECT id, in_reply_to_id FROM statuses WHERE id = @status_id AND deleted_at IS NULL
+  UNION ALL
+  SELECT s.id, s.in_reply_to_id FROM statuses s JOIN ancestors a ON s.id = a.in_reply_to_id WHERE s.deleted_at IS NULL
+)
+SELECT s.* FROM statuses s JOIN ancestors a ON s.id = a.id WHERE s.id != @status_id ORDER BY s.id;
+
+-- name: GetStatusDescendants :many
 SELECT * FROM statuses
-WHERE deleted_at IS NULL
-  AND (
-    id = @status_id
-    OR in_reply_to_id = @status_id
-    OR id IN (
-      WITH RECURSIVE ancestors AS (
-        SELECT in_reply_to_id AS id FROM statuses WHERE id = @status_id AND in_reply_to_id IS NOT NULL
-        UNION ALL
-        SELECT s.in_reply_to_id FROM statuses s JOIN ancestors a ON s.id = a.id WHERE s.in_reply_to_id IS NOT NULL
-      )
-      SELECT id FROM ancestors
-    )
-  )
+WHERE in_reply_to_id = @status_id AND deleted_at IS NULL
 ORDER BY id;
+
