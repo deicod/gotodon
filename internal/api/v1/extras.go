@@ -446,7 +446,7 @@ func dbAccountToBasicAPI(a db.Account) Account {
 		Note:         a.Note,
 		Locked:       a.Locked,
 		Discoverable: &discoverable,
-		Emojis:       []any{},
+		Emojis:       []CustomEmoji{},
 		Fields:       []Field{},
 	}
 }

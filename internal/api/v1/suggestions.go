@@ -67,7 +67,7 @@ func (h *SuggestionsHandler) Get(w http.ResponseWriter, r *http.Request) {
 			Note:         a.Note,
 			Locked:       a.Locked,
 			Discoverable: &discoverable,
-			Emojis:       []any{},
+			Emojis:       []CustomEmoji{},
 			Fields:       []Field{},
 		})
 	}
@@ -110,7 +110,7 @@ func (h *SuggestionsHandler) generateSuggestions(limit int) []Suggestion {
 				Note:         "<p>A user you might want to follow</p>",
 				Discoverable: &discoverable,
 				CreatedAt:    now.Add(-time.Duration(i*30) * 24 * time.Hour),
-				Emojis:       []any{},
+				Emojis:       []CustomEmoji{},
 				Fields:       []Field{},
 			},
 		})

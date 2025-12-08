@@ -68,7 +68,7 @@ func (h *NotificationsHandler) dbNotificationToAPI(ctx context.Context, dbNotif 
 				Acct:         dbAcc.Username,
 				DisplayName:  dbAcc.DisplayName,
 				Discoverable: &discoverable,
-				Emojis:       []any{},
+				Emojis:       []CustomEmoji{},
 				Fields:       []Field{},
 			}
 			if dbAcc.CreatedAt.Valid {
@@ -167,7 +167,7 @@ func (h *NotificationsHandler) Get(w http.ResponseWriter, r *http.Request) {
 			DisplayName:  "Another User",
 			Discoverable: &discoverable,
 			CreatedAt:    now.Add(-48 * time.Hour),
-			Emojis:       []any{},
+			Emojis:       []CustomEmoji{},
 			Fields:       []Field{},
 		},
 	})

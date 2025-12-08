@@ -94,8 +94,9 @@ func (h *SuggestionsHandler) generateSuggestions(limit int) []SuggestionV2 {
 				Note:         "<p>A user you might want to follow</p>",
 				Discoverable: &discoverable,
 				CreatedAt:    now.Add(-time.Duration(i*30) * 24 * time.Hour),
-				Emojis:       []any{},
-				Fields:       []v1.Field{},
+				Emojis:       []v1.CustomEmoji{},
+
+				Fields: []v1.Field{},
 			},
 		})
 	}

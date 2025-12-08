@@ -374,7 +374,7 @@ func (h *ListsHandler) GetAccounts(w http.ResponseWriter, r *http.Request) {
 				DisplayName:  dbAcc.DisplayName,
 				Discoverable: &discoverable,
 				CreatedAt:    createdAt,
-				Emojis:       []any{},
+				Emojis:       []CustomEmoji{},
 				Fields:       []Field{},
 			})
 		}
@@ -400,7 +400,7 @@ func (h *ListsHandler) GetAccounts(w http.ResponseWriter, r *http.Request) {
 			DisplayName:  "User " + strconv.FormatInt(memberID, 10),
 			Discoverable: &discoverable,
 			CreatedAt:    now.Add(-24 * time.Hour),
-			Emojis:       []any{},
+			Emojis:       []CustomEmoji{},
 			Fields:       []Field{},
 		})
 	}

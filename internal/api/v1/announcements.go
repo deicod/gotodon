@@ -38,7 +38,7 @@ type Announcement struct {
 	Mentions    []Mention              `json:"mentions"`
 	Statuses    []AnnouncementStatus   `json:"statuses"`
 	Tags        []Tag                  `json:"tags"`
-	Emojis      []any                  `json:"emojis"`
+	Emojis      []CustomEmoji          `json:"emojis"`
 }
 
 // AnnouncementReaction represents a reaction to an announcement
@@ -126,7 +126,7 @@ func (h *AnnouncementsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
 			Reactions:   apiReactions,
 			Statuses:    []AnnouncementStatus{},
 			Tags:        []Tag{},
-			Emojis:      []any{},
+			Emojis:      []CustomEmoji{},
 			Mentions:    []Mention{},
 		}
 	}

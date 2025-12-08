@@ -82,7 +82,7 @@ func (h *TimelinesHandler) dbStatusToAPI(ctx context.Context, dbStatus db.Status
 				Acct:         dbAcc.Username,
 				DisplayName:  dbAcc.DisplayName,
 				Discoverable: &discoverable,
-				Emojis:       []any{},
+				Emojis:       []CustomEmoji{},
 				Fields:       []Field{},
 			}
 			if dbAcc.CreatedAt.Valid {

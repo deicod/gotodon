@@ -107,8 +107,9 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 					Note:         a.Note,
 					Locked:       a.Locked,
 					Discoverable: &discoverable,
-					Emojis:       []any{},
-					Fields:       []v1.Field{},
+					Emojis:       []v1.CustomEmoji{},
+
+					Fields: []v1.Field{},
 				})
 			}
 		}

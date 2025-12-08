@@ -139,7 +139,7 @@ func (h *AccountsHandler) dbAccountToAPI(dbAcc db.Account) Account {
 		FollowingCount: 0,
 		StatusesCount:  0,
 		LastStatusAt:   nil,
-		Emojis:         []any{},
+		Emojis:         []CustomEmoji{},
 		Fields:         []Field{},
 	}
 }
@@ -217,7 +217,7 @@ func (h *AccountsHandler) VerifyCredentials(w http.ResponseWriter, r *http.Reque
 			FollowingCount: 0,
 			StatusesCount:  0,
 			LastStatusAt:   nil,
-			Emojis:         []any{},
+			Emojis:         []CustomEmoji{},
 			Fields:         []Field{},
 		},
 		Source: AccountSource{
@@ -354,7 +354,7 @@ func (h *AccountsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		FollowingCount: 0,
 		StatusesCount:  0,
 		LastStatusAt:   nil,
-		Emojis:         []any{},
+		Emojis:         []CustomEmoji{},
 		Fields:         []Field{},
 	})
 }

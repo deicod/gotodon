@@ -54,16 +54,16 @@ func (h *PollsHandler) useDB() bool {
 
 // PollResponse is the API response for a poll
 type PollResponse struct {
-	ID          string       `json:"id"`
-	ExpiresAt   *time.Time   `json:"expires_at"`
-	Expired     bool         `json:"expired"`
-	Multiple    bool         `json:"multiple"`
-	VotesCount  int          `json:"votes_count"`
-	VotersCount *int         `json:"voters_count,omitempty"`
-	Voted       bool         `json:"voted"`
-	OwnVotes    []int        `json:"own_votes"`
-	Options     []PollOption `json:"options"`
-	Emojis      []any        `json:"emojis"`
+	ID          string        `json:"id"`
+	ExpiresAt   *time.Time    `json:"expires_at"`
+	Expired     bool          `json:"expired"`
+	Multiple    bool          `json:"multiple"`
+	VotesCount  int           `json:"votes_count"`
+	VotersCount *int          `json:"voters_count,omitempty"`
+	Voted       bool          `json:"voted"`
+	OwnVotes    []int         `json:"own_votes"`
+	Options     []PollOption  `json:"options"`
+	Emojis      []CustomEmoji `json:"emojis"`
 }
 
 // PollOption is a poll option in the response
@@ -133,7 +133,7 @@ func (h *PollsHandler) dbPollToAPI(ctx context.Context, dbPoll db.Poll, accountI
 		Voted:       voted,
 		OwnVotes:    ownVotes,
 		Options:     options,
-		Emojis:      []any{},
+		Emojis:      []CustomEmoji{},
 	}
 }
 
@@ -378,7 +378,7 @@ func (h *PollsHandler) buildMemPollResponse(poll *PollData, voted bool, ownVotes
 		Voted:       voted,
 		OwnVotes:    ownVotes,
 		Options:     options,
-		Emojis:      []any{},
+		Emojis:      []CustomEmoji{},
 	}
 
 	if ownVotes == nil {

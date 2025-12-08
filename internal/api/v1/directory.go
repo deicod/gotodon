@@ -64,7 +64,7 @@ func (h *DirectoryHandler) Get(w http.ResponseWriter, r *http.Request) {
 				Locked:       acc.Locked,
 				Bot:          false,
 				Discoverable: &discoverable,
-				Emojis:       []any{},
+				Emojis:       []CustomEmoji{},
 				Fields:       []Field{},
 			}
 			if acc.CreatedAt.Valid {
@@ -95,7 +95,7 @@ func (h *DirectoryHandler) Get(w http.ResponseWriter, r *http.Request) {
 			Bot:          false,
 			Discoverable: &discoverable,
 			CreatedAt:    now.Add(-365 * 24 * time.Hour),
-			Emojis:       []any{},
+			Emojis:       []CustomEmoji{},
 			Fields:       []Field{},
 		},
 	})
