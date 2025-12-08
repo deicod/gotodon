@@ -3,6 +3,7 @@ module github.com/deicod/gotodon
 go 1.25
 
 require (
+	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.7.2
 	github.com/labstack/echo/v4 v4.13.3
 	github.com/spf13/cobra v1.10.2
