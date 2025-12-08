@@ -9,19 +9,22 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/pkg/snowflake"
 )
 
 // FiltersHandler handles filter endpoints
 type FiltersHandler struct {
-	idGen *snowflake.Generator
-	// In-memory storage for now (would be db in production)
+	queries *db.Queries
+	idGen   *snowflake.Generator
+	// In-memory storage for fallback when queries is nil
 	filters map[int64]map[int64]*FilterV2 // account_id -> filter_id -> filter
 }
 
 // NewFiltersHandler creates a new filters handler
-func NewFiltersHandler() *FiltersHandler {
+func NewFiltersHandler(queries *db.Queries) *FiltersHandler {
 	return &FiltersHandler{
+		queries: queries,
 		idGen:   snowflake.NewGenerator(),
 		filters: make(map[int64]map[int64]*FilterV2),
 	}

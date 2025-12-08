@@ -22,7 +22,7 @@ func mockListContext(e *echo.Echo, method, path string, body string) (echo.Conte
 
 func TestListsHandler_Create(t *testing.T) {
 	e := echo.New()
-	h := NewListsHandler()
+	h := NewListsHandler(nil)
 
 	body := `{"title":"My List","replies_policy":"followed"}`
 	c, rec := mockListContext(e, http.MethodPost, "/api/v1/lists", body)
@@ -52,7 +52,7 @@ func TestListsHandler_Create(t *testing.T) {
 
 func TestListsHandler_GetAll(t *testing.T) {
 	e := echo.New()
-	h := NewListsHandler()
+	h := NewListsHandler(nil)
 
 	// Create lists
 	c1, _ := mockListContext(e, http.MethodPost, "/api/v1/lists", `{"title":"List 1"}`)
@@ -77,7 +77,7 @@ func TestListsHandler_GetAll(t *testing.T) {
 
 func TestListsHandler_Delete(t *testing.T) {
 	e := echo.New()
-	h := NewListsHandler()
+	h := NewListsHandler(nil)
 
 	// Create
 	c1, rec1 := mockListContext(e, http.MethodPost, "/api/v1/lists", `{"title":"ToDelete"}`)
@@ -103,7 +103,7 @@ func TestListsHandler_Delete(t *testing.T) {
 
 func TestListsHandler_Validation(t *testing.T) {
 	e := echo.New()
-	h := NewListsHandler()
+	h := NewListsHandler(nil)
 
 	tests := []struct {
 		name    string

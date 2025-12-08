@@ -23,7 +23,7 @@ func mockAccountContext(e *echo.Echo, method, path string, body string) (echo.Co
 
 func TestFiltersHandler_Create(t *testing.T) {
 	e := echo.New()
-	h := NewFiltersHandler()
+	h := NewFiltersHandler(nil)
 
 	body := `{"title":"Test Filter","context":["home","public"],"filter_action":"warn","keywords_attributes":[{"keyword":"badword","whole_word":true}]}`
 	c, rec := mockAccountContext(e, http.MethodPost, "/api/v2/filters", body)
@@ -65,7 +65,7 @@ func TestFiltersHandler_Create(t *testing.T) {
 
 func TestFiltersHandler_List(t *testing.T) {
 	e := echo.New()
-	h := NewFiltersHandler()
+	h := NewFiltersHandler(nil)
 
 	// Create a filter first
 	body := `{"title":"Test","context":["home"]}`
@@ -96,7 +96,7 @@ func TestFiltersHandler_List(t *testing.T) {
 
 func TestFiltersHandler_Validation(t *testing.T) {
 	e := echo.New()
-	h := NewFiltersHandler()
+	h := NewFiltersHandler(nil)
 
 	tests := []struct {
 		name    string
@@ -130,7 +130,7 @@ func TestFiltersHandler_Validation(t *testing.T) {
 
 func TestFiltersHandler_Delete(t *testing.T) {
 	e := echo.New()
-	h := NewFiltersHandler()
+	h := NewFiltersHandler(nil)
 
 	// Create a filter
 	body := `{"title":"ToDelete","context":["home"]}`

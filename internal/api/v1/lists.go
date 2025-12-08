@@ -2,34 +2,58 @@
 package v1
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/labstack/echo/v4"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/pkg/snowflake"
 )
 
-// ListsHandler handles list endpoints
-type ListsHandler struct {
-	idGen *snowflake.Generator
-	// In-memory storage
-	lists       map[int64]map[int64]*List // account_id -> list_id -> list
-	listMembers map[int64][]int64         // list_id -> account_ids
+// RepliesPolicy constants matching database enum
+const (
+	RepliesPolicyFollowed = 0
+	RepliesPolicyList     = 1
+	RepliesPolicyNone     = 2
+)
+
+var repliesPolicyToString = map[int32]string{
+	RepliesPolicyFollowed: "followed",
+	RepliesPolicyList:     "list",
+	RepliesPolicyNone:     "none",
 }
 
-// NewListsHandler creates a new lists handler
-func NewListsHandler() *ListsHandler {
+var stringToRepliesPolicy = map[string]int32{
+	"followed": RepliesPolicyFollowed,
+	"list":     RepliesPolicyList,
+	"none":     RepliesPolicyNone,
+}
+
+// ListsHandler handles list endpoints
+type ListsHandler struct {
+	queries *db.Queries
+	idGen   *snowflake.Generator
+	// In-memory fallback for tests when queries is nil
+	memLists       map[int64]map[int64]*List
+	memListMembers map[int64][]int64
+}
+
+// NewListsHandler creates a new lists handler with database
+func NewListsHandler(queries *db.Queries) *ListsHandler {
 	return &ListsHandler{
-		idGen:       snowflake.NewGenerator(),
-		lists:       make(map[int64]map[int64]*List),
-		listMembers: make(map[int64][]int64),
+		queries:        queries,
+		idGen:          snowflake.NewGenerator(),
+		memLists:       make(map[int64]map[int64]*List),
+		memListMembers: make(map[int64][]int64),
 	}
 }
 
-// List represents a list
+// List represents a list response
 type List struct {
 	ID            string `json:"id"`
 	Title         string `json:"title"`
@@ -37,18 +61,28 @@ type List struct {
 	Exclusive     bool   `json:"exclusive"`
 }
 
-// Reply policy values
-var validRepliesPolicies = map[string]bool{
-	"followed": true,
-	"list":     true,
-	"none":     true,
-}
-
 // CreateListRequest is the request for POST /api/v1/lists
 type CreateListRequest struct {
 	Title         string `json:"title" form:"title"`
 	RepliesPolicy string `json:"replies_policy" form:"replies_policy"`
 	Exclusive     *bool  `json:"exclusive" form:"exclusive"`
+}
+
+func (h *ListsHandler) dbListToAPI(dbList db.List) List {
+	policy := repliesPolicyToString[dbList.RepliesPolicy]
+	if policy == "" {
+		policy = "list"
+	}
+	return List{
+		ID:            strconv.FormatInt(dbList.ID, 10),
+		Title:         dbList.Title,
+		RepliesPolicy: policy,
+		Exclusive:     dbList.Exclusive,
+	}
+}
+
+func (h *ListsHandler) useDB() bool {
+	return h.queries != nil
 }
 
 // GetAll handles GET /api/v1/lists
@@ -60,12 +94,26 @@ func (h *ListsHandler) GetAll(c echo.Context) error {
 		})
 	}
 
-	accountLists := h.lists[accountID]
+	if h.useDB() {
+		lists, err := h.queries.ListLists(context.Background(), accountID)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, map[string]string{
+				"error": "Database error",
+			})
+		}
+		result := make([]List, 0, len(lists))
+		for _, dbList := range lists {
+			result = append(result, h.dbListToAPI(dbList))
+		}
+		return c.JSON(http.StatusOK, result)
+	}
+
+	// In-memory fallback
+	accountLists := h.memLists[accountID]
 	result := make([]List, 0, len(accountLists))
 	for _, list := range accountLists {
 		result = append(result, *list)
 	}
-
 	return c.JSON(http.StatusOK, result)
 }
 
@@ -85,21 +133,27 @@ func (h *ListsHandler) Get(c echo.Context) error {
 		})
 	}
 
-	accountLists := h.lists[accountID]
-	if accountLists == nil {
+	if h.useDB() {
+		dbList, err := h.queries.GetList(context.Background(), db.GetListParams{
+			ID:        listID,
+			AccountID: accountID,
+		})
+		if err != nil {
+			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+				"error": "Record not found",
+			})
+		}
+		return c.JSON(http.StatusOK, h.dbListToAPI(dbList))
+	}
+
+	// In-memory fallback
+	accountLists := h.memLists[accountID]
+	if accountLists == nil || accountLists[listID] == nil {
 		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
 			"error": "Record not found",
 		})
 	}
-
-	list, exists := accountLists[listID]
-	if !exists {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
-	}
-
-	return c.JSON(http.StatusOK, list)
+	return c.JSON(http.StatusOK, accountLists[listID])
 }
 
 // Create handles POST /api/v1/lists
@@ -124,14 +178,17 @@ func (h *ListsHandler) Create(c echo.Context) error {
 		})
 	}
 
-	policy := "list"
+	policyInt := int32(RepliesPolicyList)
+	policyStr := "list"
 	if req.RepliesPolicy != "" {
-		if !validRepliesPolicies[req.RepliesPolicy] {
+		p, valid := stringToRepliesPolicy[req.RepliesPolicy]
+		if !valid {
 			return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
 				"error": "Validation failed: Replies policy is invalid",
 			})
 		}
-		policy = req.RepliesPolicy
+		policyInt = p
+		policyStr = req.RepliesPolicy
 	}
 
 	exclusive := false
@@ -139,19 +196,33 @@ func (h *ListsHandler) Create(c echo.Context) error {
 		exclusive = *req.Exclusive
 	}
 
+	if h.useDB() {
+		dbList, err := h.queries.CreateList(context.Background(), db.CreateListParams{
+			AccountID:     accountID,
+			Title:         req.Title,
+			RepliesPolicy: policyInt,
+			Exclusive:     exclusive,
+		})
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, map[string]string{
+				"error": "Failed to create list",
+			})
+		}
+		return c.JSON(http.StatusOK, h.dbListToAPI(dbList))
+	}
+
+	// In-memory fallback
 	listID := h.idGen.Generate()
 	list := &List{
 		ID:            strconv.FormatInt(listID, 10),
 		Title:         req.Title,
-		RepliesPolicy: policy,
+		RepliesPolicy: policyStr,
 		Exclusive:     exclusive,
 	}
-
-	if h.lists[accountID] == nil {
-		h.lists[accountID] = make(map[int64]*List)
+	if h.memLists[accountID] == nil {
+		h.memLists[accountID] = make(map[int64]*List)
 	}
-	h.lists[accountID][listID] = list
-
+	h.memLists[accountID][listID] = list
 	return c.JSON(http.StatusOK, list)
 }
 
@@ -171,20 +242,6 @@ func (h *ListsHandler) Update(c echo.Context) error {
 		})
 	}
 
-	accountLists := h.lists[accountID]
-	if accountLists == nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
-	}
-
-	list, exists := accountLists[listID]
-	if !exists {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
-	}
-
 	var req CreateListRequest
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, map[string]string{
@@ -192,11 +249,48 @@ func (h *ListsHandler) Update(c echo.Context) error {
 		})
 	}
 
+	if h.useDB() {
+		params := db.UpdateListParams{
+			ID:        listID,
+			AccountID: accountID,
+		}
+		if req.Title != "" {
+			params.Title = pgtype.Text{String: req.Title, Valid: true}
+		}
+		if req.RepliesPolicy != "" {
+			p, valid := stringToRepliesPolicy[req.RepliesPolicy]
+			if !valid {
+				return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
+					"error": "Validation failed: Replies policy is invalid",
+				})
+			}
+			params.RepliesPolicy = pgtype.Int4{Int32: p, Valid: true}
+		}
+		if req.Exclusive != nil {
+			params.Exclusive = pgtype.Bool{Bool: *req.Exclusive, Valid: true}
+		}
+		dbList, err := h.queries.UpdateList(context.Background(), params)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+				"error": "Record not found",
+			})
+		}
+		return c.JSON(http.StatusOK, h.dbListToAPI(dbList))
+	}
+
+	// In-memory fallback
+	accountLists := h.memLists[accountID]
+	if accountLists == nil || accountLists[listID] == nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+			"error": "Record not found",
+		})
+	}
+	list := accountLists[listID]
 	if req.Title != "" {
 		list.Title = req.Title
 	}
 	if req.RepliesPolicy != "" {
-		if !validRepliesPolicies[req.RepliesPolicy] {
+		if _, valid := stringToRepliesPolicy[req.RepliesPolicy]; !valid {
 			return echo.NewHTTPError(http.StatusUnprocessableEntity, map[string]string{
 				"error": "Validation failed: Replies policy is invalid",
 			})
@@ -206,7 +300,6 @@ func (h *ListsHandler) Update(c echo.Context) error {
 	if req.Exclusive != nil {
 		list.Exclusive = *req.Exclusive
 	}
-
 	return c.JSON(http.StatusOK, list)
 }
 
@@ -226,16 +319,27 @@ func (h *ListsHandler) Delete(c echo.Context) error {
 		})
 	}
 
-	accountLists := h.lists[accountID]
+	if h.useDB() {
+		if err := h.queries.DeleteList(context.Background(), db.DeleteListParams{
+			ID:        listID,
+			AccountID: accountID,
+		}); err != nil {
+			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+				"error": "Record not found",
+			})
+		}
+		return c.JSON(http.StatusOK, map[string]any{})
+	}
+
+	// In-memory fallback
+	accountLists := h.memLists[accountID]
 	if accountLists == nil || accountLists[listID] == nil {
 		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
 			"error": "Record not found",
 		})
 	}
-
 	delete(accountLists, listID)
-	delete(h.listMembers, listID)
-
+	delete(h.memListMembers, listID)
 	return c.JSON(http.StatusOK, map[string]any{})
 }
 
@@ -255,19 +359,60 @@ func (h *ListsHandler) GetAccounts(c echo.Context) error {
 		})
 	}
 
-	accountLists := h.lists[accountID]
+	if h.useDB() {
+		_, err = h.queries.GetList(context.Background(), db.GetListParams{
+			ID:        listID,
+			AccountID: accountID,
+		})
+		if err != nil {
+			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+				"error": "Record not found",
+			})
+		}
+
+		memberAccounts, err := h.queries.ListAccountsInList(context.Background(), db.ListAccountsInListParams{
+			ListID: listID,
+			Limit:  100,
+			Offset: 0,
+		})
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, map[string]string{
+				"error": "Database error",
+			})
+		}
+
+		accounts := make([]Account, 0, len(memberAccounts))
+		discoverable := true
+		for _, dbAcc := range memberAccounts {
+			createdAt := time.Now().Add(-24 * time.Hour)
+			if dbAcc.CreatedAt.Valid {
+				createdAt = dbAcc.CreatedAt.Time
+			}
+			accounts = append(accounts, Account{
+				ID:           strconv.FormatInt(dbAcc.ID, 10),
+				Username:     dbAcc.Username,
+				Acct:         dbAcc.Username,
+				DisplayName:  dbAcc.DisplayName,
+				Discoverable: &discoverable,
+				CreatedAt:    createdAt,
+				Emojis:       []any{},
+				Fields:       []Field{},
+			})
+		}
+		return c.JSON(http.StatusOK, accounts)
+	}
+
+	// In-memory fallback
+	accountLists := h.memLists[accountID]
 	if accountLists == nil || accountLists[listID] == nil {
 		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
 			"error": "Record not found",
 		})
 	}
-
-	// Return mock accounts
-	members := h.listMembers[listID]
+	members := h.memListMembers[listID]
 	accounts := make([]Account, 0, len(members))
 	now := time.Now()
 	discoverable := true
-
 	for _, memberID := range members {
 		accounts = append(accounts, Account{
 			ID:           strconv.FormatInt(memberID, 10),
@@ -280,7 +425,6 @@ func (h *ListsHandler) GetAccounts(c echo.Context) error {
 			Fields:       []Field{},
 		})
 	}
-
 	return c.JSON(http.StatusOK, accounts)
 }
 
@@ -300,13 +444,6 @@ func (h *ListsHandler) AddAccounts(c echo.Context) error {
 		})
 	}
 
-	accountLists := h.lists[accountID]
-	if accountLists == nil || accountLists[listID] == nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
-	}
-
 	var req struct {
 		AccountIDs []string `json:"account_ids" form:"account_ids[]"`
 	}
@@ -316,14 +453,43 @@ func (h *ListsHandler) AddAccounts(c echo.Context) error {
 		})
 	}
 
+	if h.useDB() {
+		_, err = h.queries.GetList(context.Background(), db.GetListParams{
+			ID:        listID,
+			AccountID: accountID,
+		})
+		if err != nil {
+			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+				"error": "Record not found",
+			})
+		}
+		for _, idStr := range req.AccountIDs {
+			id, err := strconv.ParseInt(idStr, 10, 64)
+			if err != nil {
+				continue
+			}
+			_ = h.queries.AddAccountToList(context.Background(), db.AddAccountToListParams{
+				ListID:    listID,
+				AccountID: id,
+			})
+		}
+		return c.JSON(http.StatusOK, map[string]any{})
+	}
+
+	// In-memory fallback
+	accountLists := h.memLists[accountID]
+	if accountLists == nil || accountLists[listID] == nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+			"error": "Record not found",
+		})
+	}
 	for _, idStr := range req.AccountIDs {
 		id, err := strconv.ParseInt(idStr, 10, 64)
 		if err != nil {
 			continue
 		}
-		h.listMembers[listID] = append(h.listMembers[listID], id)
+		h.memListMembers[listID] = append(h.memListMembers[listID], id)
 	}
-
 	return c.JSON(http.StatusOK, map[string]any{})
 }
 
@@ -343,13 +509,6 @@ func (h *ListsHandler) RemoveAccounts(c echo.Context) error {
 		})
 	}
 
-	accountLists := h.lists[accountID]
-	if accountLists == nil || accountLists[listID] == nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
-			"error": "Record not found",
-		})
-	}
-
 	var req struct {
 		AccountIDs []string `json:"account_ids" form:"account_ids[]"`
 	}
@@ -359,20 +518,48 @@ func (h *ListsHandler) RemoveAccounts(c echo.Context) error {
 		})
 	}
 
+	if h.useDB() {
+		_, err = h.queries.GetList(context.Background(), db.GetListParams{
+			ID:        listID,
+			AccountID: accountID,
+		})
+		if err != nil {
+			return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+				"error": "Record not found",
+			})
+		}
+		for _, idStr := range req.AccountIDs {
+			id, err := strconv.ParseInt(idStr, 10, 64)
+			if err != nil {
+				continue
+			}
+			_ = h.queries.RemoveAccountFromList(context.Background(), db.RemoveAccountFromListParams{
+				ListID:    listID,
+				AccountID: id,
+			})
+		}
+		return c.JSON(http.StatusOK, map[string]any{})
+	}
+
+	// In-memory fallback
+	accountLists := h.memLists[accountID]
+	if accountLists == nil || accountLists[listID] == nil {
+		return echo.NewHTTPError(http.StatusNotFound, map[string]string{
+			"error": "Record not found",
+		})
+	}
 	toRemove := make(map[int64]bool)
 	for _, idStr := range req.AccountIDs {
 		id, _ := strconv.ParseInt(idStr, 10, 64)
 		toRemove[id] = true
 	}
-
 	newMembers := make([]int64, 0)
-	for _, memberID := range h.listMembers[listID] {
+	for _, memberID := range h.memListMembers[listID] {
 		if !toRemove[memberID] {
 			newMembers = append(newMembers, memberID)
 		}
 	}
-	h.listMembers[listID] = newMembers
-
+	h.memListMembers[listID] = newMembers
 	return c.JSON(http.StatusOK, map[string]any{})
 }
 

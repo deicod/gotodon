@@ -9,13 +9,15 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/pkg/snowflake"
 )
 
 // PollsHandler handles poll endpoints
 type PollsHandler struct {
-	idGen *snowflake.Generator
-	// In-memory storage
+	queries *db.Queries
+	idGen   *snowflake.Generator
+	// In-memory storage fallback
 	polls     map[int64]*PollData
 	pollVotes map[int64]map[int64][]int // poll_id -> account_id -> choices
 }
@@ -34,8 +36,9 @@ type PollData struct {
 }
 
 // NewPollsHandler creates a new polls handler
-func NewPollsHandler() *PollsHandler {
+func NewPollsHandler(queries *db.Queries) *PollsHandler {
 	return &PollsHandler{
+		queries:   queries,
 		idGen:     snowflake.NewGenerator(),
 		polls:     make(map[int64]*PollData),
 		pollVotes: make(map[int64]map[int64][]int),

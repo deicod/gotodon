@@ -24,7 +24,7 @@ func mockPollContext(e *echo.Echo, method, path string, body string) (echo.Conte
 
 func TestPollsHandler_CreateAndGet(t *testing.T) {
 	e := echo.New()
-	h := NewPollsHandler()
+	h := NewPollsHandler(nil)
 
 	// Create a poll
 	poll := h.CreatePoll(12345, []string{"Option A", "Option B", "Option C"}, 86400, false, false)
@@ -59,7 +59,7 @@ func TestPollsHandler_CreateAndGet(t *testing.T) {
 
 func TestPollsHandler_Vote(t *testing.T) {
 	e := echo.New()
-	h := NewPollsHandler()
+	h := NewPollsHandler(nil)
 
 	// Create a poll
 	poll := h.CreatePoll(12345, []string{"Yes", "No"}, 86400, false, false)
@@ -92,7 +92,7 @@ func TestPollsHandler_Vote(t *testing.T) {
 
 func TestPollsHandler_VoteValidation(t *testing.T) {
 	e := echo.New()
-	h := NewPollsHandler()
+	h := NewPollsHandler(nil)
 
 	// Single choice poll
 	poll := h.CreatePoll(12345, []string{"A", "B"}, 86400, false, false)
@@ -111,7 +111,7 @@ func TestPollsHandler_VoteValidation(t *testing.T) {
 
 func TestPollsHandler_ExpiredPoll(t *testing.T) {
 	e := echo.New()
-	h := NewPollsHandler()
+	h := NewPollsHandler(nil)
 
 	// Create an expired poll
 	pollID := h.idGen.Generate()
@@ -137,7 +137,7 @@ func TestPollsHandler_ExpiredPoll(t *testing.T) {
 
 func TestPollsHandler_MultipleChoice(t *testing.T) {
 	e := echo.New()
-	h := NewPollsHandler()
+	h := NewPollsHandler(nil)
 
 	// Create multiple choice poll
 	poll := h.CreatePoll(12345, []string{"A", "B", "C"}, 86400, true, false)
