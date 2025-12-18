@@ -58,13 +58,13 @@
   - [x] Define columns: account_id, acct, followers_count, target_account_id
 
 ### Task 1.5: Admin & Moderation Tables
-- [ ] Add `rules` table (server rules)
-  - [ ] Define columns: priority, text, hint, deleted_at
-  - [ ] Add `rule_translations` table
-- [ ] Add `domain_allows` table
-  - [ ] Define columns: domain
-- [ ] Add `tombstones` table
-  - [ ] Define columns: account_id, uri, by_moderator
+- [x] Add `rules` table (server rules)
+  - [x] Define columns: priority, text, hint, deleted_at
+  - [x] Add `rule_translations` table
+- [x] Add `domain_allows` table
+  - [x] Define columns: domain
+- [x] Add `tombstones` table
+  - [x] Define columns: account_id, uri, by_moderator
 
 ### Task 1.6: Session & Security Tables
 - [ ] Add `session_activations` table

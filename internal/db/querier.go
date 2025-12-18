@@ -56,6 +56,7 @@ type Querier interface {
 	ClearStatusTrends(ctx context.Context) error
 	ClearTagTrends(ctx context.Context) error
 	CountAccountPins(ctx context.Context, accountID int64) (int64, error)
+	CountDomainAllows(ctx context.Context) (int64, error)
 	CountFeaturedTags(ctx context.Context, accountID int64) (int64, error)
 	CountFollowedTags(ctx context.Context, accountID int64) (int64, error)
 	CountFollowers(ctx context.Context, targetAccountID int64) (int64, error)
@@ -75,6 +76,7 @@ type Querier interface {
 	CreateBookmark(ctx context.Context, arg CreateBookmarkParams) error
 	CreateConversation(ctx context.Context, arg CreateConversationParams) (Conversation, error)
 	CreateCustomEmoji(ctx context.Context, arg CreateCustomEmojiParams) (CustomEmoji, error)
+	CreateDomainAllow(ctx context.Context, domain string) (DomainAllow, error)
 	CreateDomainBlock(ctx context.Context, arg CreateDomainBlockParams) (AccountDomainBlock, error)
 	CreateFavourite(ctx context.Context, arg CreateFavouriteParams) (Favourite, error)
 	CreateFeaturedTag(ctx context.Context, arg CreateFeaturedTagParams) (FeaturedTag, error)
@@ -101,12 +103,14 @@ type Querier interface {
 	CreatePushSubscription(ctx context.Context, arg CreatePushSubscriptionParams) (WebPushSubscription, error)
 	CreateQuote(ctx context.Context, arg CreateQuoteParams) (Quote, error)
 	CreateReport(ctx context.Context, arg CreateReportParams) (Report, error)
+	CreateRule(ctx context.Context, arg CreateRuleParams) (Rule, error)
 	CreateScheduledStatus(ctx context.Context, arg CreateScheduledStatusParams) (ScheduledStatus, error)
 	CreateStatus(ctx context.Context, arg CreateStatusParams) (Status, error)
 	CreateStatusEdit(ctx context.Context, arg CreateStatusEditParams) (StatusEdit, error)
 	CreateStatusStats(ctx context.Context, statusID int64) (StatusStat, error)
 	CreateTag(ctx context.Context, name string) (Tag, error)
 	CreateTagFollow(ctx context.Context, arg CreateTagFollowParams) (TagFollow, error)
+	CreateTombstone(ctx context.Context, arg CreateTombstoneParams) (Tombstone, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	DecrementStatusFavourites(ctx context.Context, statusID int64) error
 	DecrementStatusReblogs(ctx context.Context, statusID int64) error
@@ -119,6 +123,8 @@ type Querier interface {
 	DeleteBookmark(ctx context.Context, arg DeleteBookmarkParams) error
 	DeleteConversation(ctx context.Context, id int64) error
 	DeleteCustomEmoji(ctx context.Context, id int64) error
+	DeleteDomainAllow(ctx context.Context, id int64) error
+	DeleteDomainAllowByDomain(ctx context.Context, domain string) error
 	DeleteDomainBlock(ctx context.Context, arg DeleteDomainBlockParams) error
 	DeleteFavourite(ctx context.Context, arg DeleteFavouriteParams) error
 	DeleteFeaturedTag(ctx context.Context, arg DeleteFeaturedTagParams) error
@@ -139,16 +145,21 @@ type Querier interface {
 	DeletePreviewCard(ctx context.Context, id int64) error
 	DeletePushSubscription(ctx context.Context, accessTokenID pgtype.Int8) error
 	DeleteQuote(ctx context.Context, id int64) error
+	DeleteRule(ctx context.Context, id int64) error
+	DeleteRuleTranslation(ctx context.Context, arg DeleteRuleTranslationParams) error
 	DeleteScheduledStatus(ctx context.Context, arg DeleteScheduledStatusParams) error
 	DeleteStatus(ctx context.Context, id int64) error
 	DeleteStatusEditsForStatus(ctx context.Context, statusID int64) error
 	DeleteStatusTrend(ctx context.Context, statusID int64) error
 	DeleteTagFollow(ctx context.Context, arg DeleteTagFollowParams) error
 	DeleteTagTrend(ctx context.Context, arg DeleteTagTrendParams) error
+	DeleteTombstone(ctx context.Context, id int64) error
+	DeleteTombstoneByURI(ctx context.Context, uri string) error
 	DetachMediaFromStatus(ctx context.Context, arg DetachMediaFromStatusParams) (int64, error)
 	DetachPreviewCardFromStatus(ctx context.Context, arg DetachPreviewCardFromStatusParams) error
 	DismissAnnouncement(ctx context.Context, arg DismissAnnouncementParams) error
 	DismissNotificationRequest(ctx context.Context, id int64) error
+	ExistsTombstone(ctx context.Context, uri string) (bool, error)
 	GetAccountAliasByURI(ctx context.Context, arg GetAccountAliasByURIParams) (AccountAlias, error)
 	// Account Aliases queries (for account migration)
 	GetAccountAliases(ctx context.Context, accountID int64) ([]AccountAlias, error)
@@ -174,6 +185,9 @@ type Querier interface {
 	GetBookmark(ctx context.Context, arg GetBookmarkParams) (Bookmark, error)
 	GetConversation(ctx context.Context, id int64) (Conversation, error)
 	GetCustomEmoji(ctx context.Context, arg GetCustomEmojiParams) (CustomEmoji, error)
+	// Domain Allows queries
+	GetDomainAllow(ctx context.Context, id int64) (DomainAllow, error)
+	GetDomainAllowByDomain(ctx context.Context, domain string) (DomainAllow, error)
 	GetDomainBlock(ctx context.Context, arg GetDomainBlockParams) (AccountDomainBlock, error)
 	GetFavourite(ctx context.Context, arg GetFavouriteParams) (Favourite, error)
 	GetFavouritedBy(ctx context.Context, arg GetFavouritedByParams) ([]Account, error)
@@ -236,6 +250,10 @@ type Querier interface {
 	GetQuotesByQuotedStatusID(ctx context.Context, arg GetQuotesByQuotedStatusIDParams) ([]Quote, error)
 	GetRebloggers(ctx context.Context, arg GetRebloggersParams) ([]Account, error)
 	GetRelationship(ctx context.Context, arg GetRelationshipParams) (GetRelationshipRow, error)
+	// Rules queries
+	GetRule(ctx context.Context, id int64) (Rule, error)
+	// Rule Translations queries
+	GetRuleTranslation(ctx context.Context, arg GetRuleTranslationParams) (RuleTranslation, error)
 	GetScheduledStatus(ctx context.Context, arg GetScheduledStatusParams) (ScheduledStatus, error)
 	GetStatusAncestors(ctx context.Context, statusID int64) ([]Status, error)
 	GetStatusByID(ctx context.Context, id int64) (Status, error)
@@ -257,6 +275,9 @@ type Querier interface {
 	GetTagTrend(ctx context.Context, arg GetTagTrendParams) (TagTrend, error)
 	GetTagsByNames(ctx context.Context, dollar_1 []string) ([]Tag, error)
 	GetTagsByStatusIDs(ctx context.Context, statusIds []int64) ([]GetTagsByStatusIDsRow, error)
+	// Tombstones queries
+	GetTombstone(ctx context.Context, id int64) (Tombstone, error)
+	GetTombstoneByURI(ctx context.Context, uri string) (Tombstone, error)
 	// Placeholder: In future, use preview_cards table
 	GetTrendingLinks(ctx context.Context) ([]int32, error)
 	GetTrendingPreviewCards(ctx context.Context, arg GetTrendingPreviewCardsParams) ([]GetTrendingPreviewCardsRow, error)
@@ -268,6 +289,7 @@ type Querier interface {
 	GetUserByResetPasswordToken(ctx context.Context, resetPasswordToken pgtype.Text) (User, error)
 	GetUserRole(ctx context.Context, id int64) (UserRole, error)
 	GetVotes(ctx context.Context, arg GetVotesParams) ([]PollVote, error)
+	HardDeleteRule(ctx context.Context, id int64) error
 	HasNotificationPermission(ctx context.Context, arg HasNotificationPermissionParams) (bool, error)
 	IncrementNotificationRequestCount(ctx context.Context, arg IncrementNotificationRequestCountParams) (NotificationRequest, error)
 	IncrementStatusFavourites(ctx context.Context, statusID int64) error
@@ -276,6 +298,7 @@ type Querier interface {
 	IncrementVoteCount(ctx context.Context, arg IncrementVoteCountParams) error
 	IncrementVotersCount(ctx context.Context, id int64) error
 	IsBookmarked(ctx context.Context, arg IsBookmarkedParams) (bool, error)
+	IsDomainAllowed(ctx context.Context, domain string) (bool, error)
 	IsFollowingTag(ctx context.Context, arg IsFollowingTagParams) (bool, error)
 	ListAccountPins(ctx context.Context, accountID int64) ([]ListAccountPinsRow, error)
 	ListAccountsInList(ctx context.Context, arg ListAccountsInListParams) ([]Account, error)
@@ -287,6 +310,7 @@ type Querier interface {
 	ListConversations(ctx context.Context, arg ListConversationsParams) ([]ListConversationsRow, error)
 	ListCustomEmojis(ctx context.Context) ([]CustomEmoji, error)
 	ListDeepDirectory(ctx context.Context, arg ListDeepDirectoryParams) ([]Account, error)
+	ListDomainAllows(ctx context.Context, arg ListDomainAllowsParams) ([]DomainAllow, error)
 	ListDomainBlocks(ctx context.Context, arg ListDomainBlocksParams) ([]AccountDomainBlock, error)
 	ListDueScheduledStatuses(ctx context.Context) ([]ScheduledStatus, error)
 	ListFavourites(ctx context.Context, arg ListFavouritesParams) ([]Status, error)
@@ -305,7 +329,10 @@ type Querier interface {
 	ListNotifications(ctx context.Context, arg ListNotificationsParams) ([]Notification, error)
 	ListOAuthApplicationsByOwner(ctx context.Context, arg ListOAuthApplicationsByOwnerParams) ([]OauthApplication, error)
 	ListPendingTrendingStatuses(ctx context.Context, arg ListPendingTrendingStatusesParams) ([]Status, error)
+	ListRuleTranslations(ctx context.Context, ruleID int64) ([]RuleTranslation, error)
+	ListRules(ctx context.Context) ([]Rule, error)
 	ListScheduledStatuses(ctx context.Context, arg ListScheduledStatusesParams) ([]ScheduledStatus, error)
+	ListTombstonesByAccount(ctx context.Context, arg ListTombstonesByAccountParams) ([]Tombstone, error)
 	ListTrendingStatuses(ctx context.Context, arg ListTrendingStatusesParams) ([]Status, error)
 	ListTrendingTags(ctx context.Context, arg ListTrendingTagsParams) ([]ListTrendingTagsRow, error)
 	ListUnattachedMedia(ctx context.Context, arg ListUnattachedMediaParams) ([]MediaAttachment, error)
@@ -344,6 +371,7 @@ type Querier interface {
 	UpdatePreviewCard(ctx context.Context, arg UpdatePreviewCardParams) (PreviewCard, error)
 	UpdatePreviewCardProviderTrendable(ctx context.Context, arg UpdatePreviewCardProviderTrendableParams) (PreviewCardProvider, error)
 	UpdateQuoteState(ctx context.Context, arg UpdateQuoteStateParams) (Quote, error)
+	UpdateRule(ctx context.Context, arg UpdateRuleParams) (Rule, error)
 	UpdateScheduledStatus(ctx context.Context, arg UpdateScheduledStatusParams) (ScheduledStatus, error)
 	UpdateStatus(ctx context.Context, arg UpdateStatusParams) (Status, error)
 	UpdateStatusTrendAllowed(ctx context.Context, arg UpdateStatusTrendAllowedParams) (StatusTrend, error)
@@ -357,6 +385,7 @@ type Querier interface {
 	UpsertPreferences(ctx context.Context, arg UpsertPreferencesParams) (Preference, error)
 	// Preview Card Trends
 	UpsertPreviewCardTrend(ctx context.Context, arg UpsertPreviewCardTrendParams) (PreviewCardTrend, error)
+	UpsertRuleTranslation(ctx context.Context, arg UpsertRuleTranslationParams) (RuleTranslation, error)
 	UpsertStatusTrend(ctx context.Context, arg UpsertStatusTrendParams) (StatusTrend, error)
 	UpsertTagTrend(ctx context.Context, arg UpsertTagTrendParams) (TagTrend, error)
 	UpsertTags(ctx context.Context, dollar_1 []string) error

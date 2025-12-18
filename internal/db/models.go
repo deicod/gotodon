@@ -200,6 +200,13 @@ type CustomEmoji struct {
 	ImageStorageSchemaVersion pgtype.Int4        `db:"image_storage_schema_version" json:"image_storage_schema_version"`
 }
 
+type DomainAllow struct {
+	ID        int64              `db:"id" json:"id"`
+	Domain    string             `db:"domain" json:"domain"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
 type DomainBlock struct {
 	ID             int64              `db:"id" json:"id"`
 	Domain         string             `db:"domain" json:"domain"`
@@ -562,6 +569,26 @@ type Report struct {
 	Uri                    pgtype.Text        `db:"uri" json:"uri"`
 }
 
+type Rule struct {
+	ID        int64              `db:"id" json:"id"`
+	Priority  int32              `db:"priority" json:"priority"`
+	DeletedAt pgtype.Timestamptz `db:"deleted_at" json:"deleted_at"`
+	Text      string             `db:"text" json:"text"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	Hint      string             `db:"hint" json:"hint"`
+}
+
+type RuleTranslation struct {
+	ID        int64              `db:"id" json:"id"`
+	Text      string             `db:"text" json:"text"`
+	Hint      string             `db:"hint" json:"hint"`
+	Language  string             `db:"language" json:"language"`
+	RuleID    int64              `db:"rule_id" json:"rule_id"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
 type ScheduledStatus struct {
 	ID          int64              `db:"id" json:"id"`
 	AccountID   int64              `db:"account_id" json:"account_id"`
@@ -688,6 +715,15 @@ type TagTrend struct {
 	Rank     int32   `db:"rank" json:"rank"`
 	Allowed  bool    `db:"allowed" json:"allowed"`
 	Language string  `db:"language" json:"language"`
+}
+
+type Tombstone struct {
+	ID          int64              `db:"id" json:"id"`
+	AccountID   int64              `db:"account_id" json:"account_id"`
+	Uri         string             `db:"uri" json:"uri"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ByModerator pgtype.Bool        `db:"by_moderator" json:"by_moderator"`
 }
 
 type User struct {
