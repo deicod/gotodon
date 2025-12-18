@@ -170,10 +170,11 @@
 - [x] Add tests in `profile_test.go`
 
 ### Task 2.10: Annual Reports
-- [ ] Create `internal/api/v1/annual_reports.go`
-- [ ] Implement `GET /api/v1/annual_reports`
-- [ ] Implement `GET /api/v1/annual_reports/{id}`
-- [ ] Implement `POST /api/v1/annual_reports/{id}/read`
+- [x] Create `internal/api/v1/annual_reports.go`
+- [x] Implement `GET /api/v1/annual_reports`
+- [x] Implement `GET /api/v1/annual_reports/{id}`
+- [x] Implement `POST /api/v1/annual_reports/{id}/read`
+- [x] Add tests in `annual_reports_test.go`
 
 ### Task 2.11: Email Confirmations
 - [ ] Implement `POST /api/v1/emails/confirmations`
