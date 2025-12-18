@@ -95,13 +95,13 @@
 **Goal:** Implement all missing v1 API endpoints
 
 ### Task 2.1: Status Edit History
-- [ ] Create `internal/api/v1/status_edits.go`
-- [ ] Implement `GET /api/v1/statuses/{id}/history`
-  - [ ] Query status_edits table
-  - [ ] Serialize to Mastodon format
-- [ ] Implement `GET /api/v1/statuses/{id}/source`
-  - [ ] Return raw text and spoiler_text
-- [ ] Add tests in `status_edits_test.go`
+- [x] Create `internal/api/v1/status_edits.go`
+- [x] Implement `GET /api/v1/statuses/{id}/history`
+  - [x] Query status_edits table
+  - [x] Serialize to Mastodon format
+- [x] Implement `GET /api/v1/statuses/{id}/source`
+  - [x] Return raw text and spoiler_text
+- [x] Add tests in `status_edits_test.go`
 
 ### Task 2.2: Status Translation
 - [ ] Implement `POST /api/v1/statuses/{id}/translate`

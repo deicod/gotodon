@@ -1746,6 +1746,365 @@ func (h *StatusesHandler) dbAccountToAPI(dbAcc db.Account) Account {
 	}
 }
 
+// getMediaAttachmentsForStatus fetches and serializes media attachments for a status
+func (h *StatusesHandler) getMediaAttachmentsForStatus(ctx context.Context, statusID int64) []MediaAttach {
+	if h.queries == nil {
+		return []MediaAttach{}
+	}
+
+	dbMedias, err := h.queries.GetMediaAttachmentsByStatusIDs(ctx, []int64{statusID})
+	if err != nil || len(dbMedias) == 0 {
+		return []MediaAttach{}
+	}
+
+	result := make([]MediaAttach, 0, len(dbMedias))
+	for _, m := range dbMedias {
+		if !m.StatusID.Valid || m.StatusID.Int64 != statusID {
+			continue
+		}
+		result = append(result, h.serializeMedia(m))
+	}
+	return result
+}
+
+// getMediaAttachmentsByIDs fetches and serializes media by their IDs
+func (h *StatusesHandler) getMediaAttachmentsByIDs(ctx context.Context, ids []int64) []MediaAttach {
+	if h.queries == nil || len(ids) == 0 {
+		return []MediaAttach{}
+	}
+
+	dbMedias, err := h.queries.GetMediaAttachmentsByIDs(ctx, ids)
+	if err != nil || len(dbMedias) == 0 {
+		return []MediaAttach{}
+	}
+
+	// Preserve order based on input IDs
+	idToMedia := make(map[int64]db.MediaAttachment)
+	for _, m := range dbMedias {
+		idToMedia[m.ID] = m
+	}
+
+	result := make([]MediaAttach, 0, len(ids))
+	for _, id := range ids {
+		if m, ok := idToMedia[id]; ok {
+			result = append(result, h.serializeMedia(m))
+		}
+	}
+	return result
+}
+
+// serializeMedia converts a db.MediaAttachment to API MediaAttach
+func (h *StatusesHandler) serializeMedia(m db.MediaAttachment) MediaAttach {
+	mediaType := "image"
+	if m.Type == MediaTypeVideo {
+		mediaType = "video"
+	}
+
+	var remoteURL *string
+	if m.RemoteUrl != "" {
+		s := m.RemoteUrl
+		remoteURL = &s
+	}
+
+	var description *string
+	if m.Description.Valid {
+		s := m.Description.String
+		description = &s
+	}
+
+	var blurhash *string
+	if m.Blurhash.Valid {
+		s := m.Blurhash.String
+		blurhash = &s
+	}
+
+	return MediaAttach{
+		ID:          strconv.FormatInt(m.ID, 10),
+		Type:        mediaType,
+		URL:         m.RemoteUrl,
+		PreviewURL:  m.ThumbnailRemoteUrl.String,
+		RemoteURL:   remoteURL,
+		Description: description,
+		Blurhash:    blurhash,
+	}
+}
+
+// getPollForStatus fetches and serializes a poll for display
+func (h *StatusesHandler) getPollForStatus(ctx context.Context, pollID int64, accountID int64) *Poll {
+	if h.queries == nil {
+		return nil
+	}
+
+	dbPoll, err := h.queries.GetPoll(ctx, pollID)
+	if err != nil {
+		return nil
+	}
+
+	// Get poll options
+	dbOptions, err := h.queries.GetPollOptions(ctx, pollID)
+	if err != nil {
+		return nil
+	}
+
+	options := make([]PollOption, len(dbOptions))
+	totalVotes := 0
+	for i, opt := range dbOptions {
+		// Type assertions for interface{} fields from sqlc
+		title := ""
+		if t, ok := opt.Title.(string); ok {
+			title = t
+		}
+		votesCount := 0
+		if vc, ok := opt.VotesCount.(int64); ok {
+			votesCount = int(vc)
+		}
+		vc := votesCount // Create local copy for pointer
+		options[i] = PollOption{
+			Title:      title,
+			VotesCount: &vc,
+		}
+		totalVotes += votesCount
+	}
+
+	var expiresAt *time.Time
+	if dbPoll.ExpiresAt.Valid {
+		expiresAt = &dbPoll.ExpiresAt.Time
+	}
+
+	expired := false
+	if expiresAt != nil && time.Now().After(*expiresAt) {
+		expired = true
+	}
+
+	// Check if user voted (if authenticated)
+	voted := false
+	var ownVotes []int
+	if accountID > 0 {
+		votes, err := h.queries.GetPollVotesByAccountID(ctx, db.GetPollVotesByAccountIDParams{
+			PollID:    pollID,
+			AccountID: pgtype.Int8{Int64: accountID, Valid: true},
+		})
+		if err == nil && len(votes) > 0 {
+			voted = true
+			ownVotes = make([]int, len(votes))
+			for i, v := range votes {
+				ownVotes[i] = int(v.Choice)
+			}
+		}
+	}
+	if ownVotes == nil {
+		ownVotes = []int{}
+	}
+
+	votersCount := 0
+	if dbPoll.VotersCount.Valid {
+		votersCount = int(dbPoll.VotersCount.Int64)
+	}
+
+	return &Poll{
+		ID:          strconv.FormatInt(pollID, 10),
+		ExpiresAt:   expiresAt,
+		Expired:     expired,
+		Multiple:    dbPoll.Multiple,
+		VotesCount:  totalVotes,
+		VotersCount: &votersCount,
+		Voted:       voted,
+		OwnVotes:    ownVotes,
+		Options:     options,
+		Emojis:      []CustomEmoji{},
+	}
+}
+
+type StatusEdit struct {
+	Content          string        `json:"content"`
+	SpoilerText      string        `json:"spoiler_text"`
+	Sensitive        bool          `json:"sensitive"`
+	CreatedAt        time.Time     `json:"created_at"`
+	Account          Account       `json:"account"`
+	Poll             *Poll         `json:"poll"`
+	MediaAttachments []MediaAttach `json:"media_attachments"`
+	Emojis           []CustomEmoji `json:"emojis"`
+}
+
+// StatusSource represents the raw source of a status
+type StatusSource struct {
+	ID          string `json:"id"`
+	Text        string `json:"text"`
+	SpoilerText string `json:"spoiler_text"`
+}
+
+// History handles GET /api/v1/statuses/:id/history
+func (h *StatusesHandler) History(w http.ResponseWriter, r *http.Request) {
+	idStr := web.Param(r, "id")
+	if idStr == "" {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	ctx := r.Context()
+
+	if h.useDB() {
+		// Get the current status
+		dbStatus, err := h.queries.GetStatusByID(ctx, id)
+		if err != nil {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+
+		// Get the status author
+		dbAccount, err := h.queries.GetAccountByID(ctx, dbStatus.AccountID)
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to fetch account")
+			return
+		}
+
+		account := h.dbAccountToAPI(dbAccount)
+
+		// Get all edits for this status
+		edits, err := h.queries.GetStatusEditsByStatusID(ctx, id)
+		if err != nil {
+			// No edits is not an error - return original as only version
+			edits = nil
+		}
+
+		// Get media attachments for current status
+		currentMedia := h.getMediaAttachmentsForStatus(ctx, id)
+
+		// Get poll for current status if exists
+		var currentPoll *Poll
+		if dbStatus.PollID.Valid {
+			currentPoll = h.getPollForStatus(ctx, dbStatus.PollID.Int64, 0)
+		}
+
+		var history []StatusEdit
+
+		// Add all historical edits
+		for _, edit := range edits {
+			// Reconstruct poll from edit's poll_options if available
+			var editPoll *Poll
+			if len(edit.PollOptions) > 0 {
+				editPoll = &Poll{
+					Options: make([]PollOption, len(edit.PollOptions)),
+					Emojis:  []CustomEmoji{},
+				}
+				for i, opt := range edit.PollOptions {
+					editPoll.Options[i] = PollOption{Title: opt}
+				}
+			}
+
+			// Reconstruct media from edit's ordered_media_attachment_ids
+			var editMedia []MediaAttach
+			if len(edit.OrderedMediaAttachmentIds) > 0 {
+				editMedia = h.getMediaAttachmentsByIDs(ctx, edit.OrderedMediaAttachmentIds)
+				// Apply descriptions from edit if available
+				for i := range editMedia {
+					if i < len(edit.MediaDescriptions) {
+						editMedia[i].Description = &edit.MediaDescriptions[i]
+					}
+				}
+			} else {
+				editMedia = []MediaAttach{}
+			}
+
+			history = append(history, StatusEdit{
+				Content:          formatContent(edit.Text),
+				SpoilerText:      edit.SpoilerText,
+				Sensitive:        edit.Sensitive.Valid && edit.Sensitive.Bool,
+				CreatedAt:        edit.CreatedAt.Time,
+				Account:          account,
+				Poll:             editPoll,
+				MediaAttachments: editMedia,
+				Emojis:           []CustomEmoji{},
+			})
+		}
+
+		// Add current version as the latest entry
+		history = append(history, StatusEdit{
+			Content:          formatContent(dbStatus.Text),
+			SpoilerText:      dbStatus.SpoilerText,
+			Sensitive:        dbStatus.Sensitive,
+			CreatedAt:        dbStatus.CreatedAt.Time,
+			Account:          account,
+			Poll:             currentPoll,
+			MediaAttachments: currentMedia,
+			Emojis:           []CustomEmoji{},
+		})
+
+		web.JSON(w, http.StatusOK, history)
+		return
+	}
+
+	// Mock fallback - return empty array
+	web.JSON(w, http.StatusOK, []StatusEdit{})
+}
+
+// Source handles GET /api/v1/statuses/:id/source
+func (h *StatusesHandler) Source(w http.ResponseWriter, r *http.Request) {
+	idStr := web.Param(r, "id")
+	if idStr == "" {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	// Require authentication - only author can see source
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	ctx := r.Context()
+
+	if h.useDB() {
+		dbStatus, err := h.queries.GetStatusByID(ctx, id)
+		if err != nil {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+
+		// Only the author can view the source
+		if dbStatus.AccountID != accountID {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+
+		web.JSON(w, http.StatusOK, StatusSource{
+			ID:          idStr,
+			Text:        dbStatus.Text,
+			SpoilerText: dbStatus.SpoilerText,
+		})
+		return
+	}
+
+	// Mock fallback
+	web.JSON(w, http.StatusOK, StatusSource{
+		ID:          idStr,
+		Text:        "Hello, world!",
+		SpoilerText: "",
+	})
+}
+
+// formatContent converts plain text to HTML content
+func formatContent(text string) string {
+	if text == "" {
+		return ""
+	}
+	// Simple HTML wrapping - real implementation would linkify mentions/hashtags/URLs
+	return "<p>" + text + "</p>"
+}
+
 // RegisterRoutes registers the statuses routes
 func (h *StatusesHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/statuses", h.Create)
@@ -1753,6 +2112,8 @@ func (h *StatusesHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/v1/statuses/{id}", h.Edit)
 	mux.HandleFunc("DELETE /api/v1/statuses/{id}", h.Delete)
 	mux.HandleFunc("GET /api/v1/statuses/{id}/context", h.Context)
+	mux.HandleFunc("GET /api/v1/statuses/{id}/history", h.History)
+	mux.HandleFunc("GET /api/v1/statuses/{id}/source", h.Source)
 	mux.HandleFunc("POST /api/v1/statuses/{id}/favourite", h.Favourite)
 	mux.HandleFunc("POST /api/v1/statuses/{id}/unfavourite", h.Unfavourite)
 	mux.HandleFunc("POST /api/v1/statuses/{id}/reblog", h.Reblog)

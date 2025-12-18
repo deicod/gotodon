@@ -203,6 +203,54 @@ func (q *Queries) GetMediaAttachmentByAccount(ctx context.Context, arg GetMediaA
 	return i, err
 }
 
+const getMediaAttachmentsByIDs = `-- name: GetMediaAttachmentsByIDs :many
+SELECT id, status_id, file_file_name, file_content_type, file_file_size, file_updated_at, remote_url, created_at, updated_at, shortcode, type, file_meta, account_id, description, scheduled_status_id, blurhash, processing, file_storage_schema_version, thumbnail_file_name, thumbnail_content_type, thumbnail_file_size, thumbnail_updated_at, thumbnail_remote_url FROM media_attachments WHERE id = ANY($1::bigint[])
+`
+
+func (q *Queries) GetMediaAttachmentsByIDs(ctx context.Context, dollar_1 []int64) ([]MediaAttachment, error) {
+	rows, err := q.db.Query(ctx, getMediaAttachmentsByIDs, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MediaAttachment{}
+	for rows.Next() {
+		var i MediaAttachment
+		if err := rows.Scan(
+			&i.ID,
+			&i.StatusID,
+			&i.FileFileName,
+			&i.FileContentType,
+			&i.FileFileSize,
+			&i.FileUpdatedAt,
+			&i.RemoteUrl,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Shortcode,
+			&i.Type,
+			&i.FileMeta,
+			&i.AccountID,
+			&i.Description,
+			&i.ScheduledStatusID,
+			&i.Blurhash,
+			&i.Processing,
+			&i.FileStorageSchemaVersion,
+			&i.ThumbnailFileName,
+			&i.ThumbnailContentType,
+			&i.ThumbnailFileSize,
+			&i.ThumbnailUpdatedAt,
+			&i.ThumbnailRemoteUrl,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMediaAttachmentsByStatus = `-- name: ListMediaAttachmentsByStatus :many
 SELECT id, status_id, file_file_name, file_content_type, file_file_size, file_updated_at, remote_url, created_at, updated_at, shortcode, type, file_meta, account_id, description, scheduled_status_id, blurhash, processing, file_storage_schema_version, thumbnail_file_name, thumbnail_content_type, thumbnail_file_size, thumbnail_updated_at, thumbnail_remote_url FROM media_attachments WHERE status_id = $1 ORDER BY id
 `

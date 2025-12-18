@@ -9,6 +9,9 @@ INSERT INTO media_attachments (
 -- name: GetMediaAttachment :one
 SELECT * FROM media_attachments WHERE id = $1;
 
+-- name: GetMediaAttachmentsByIDs :many
+SELECT * FROM media_attachments WHERE id = ANY($1::bigint[]);
+
 -- name: GetMediaAttachmentByAccount :one
 SELECT * FROM media_attachments WHERE id = $1 AND account_id = $2;
 

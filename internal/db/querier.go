@@ -226,6 +226,7 @@ type Querier interface {
 	GetMarker(ctx context.Context, arg GetMarkerParams) (Marker, error)
 	GetMediaAttachment(ctx context.Context, id int64) (MediaAttachment, error)
 	GetMediaAttachmentByAccount(ctx context.Context, arg GetMediaAttachmentByAccountParams) (MediaAttachment, error)
+	GetMediaAttachmentsByIDs(ctx context.Context, dollar_1 []int64) ([]MediaAttachment, error)
 	GetMediaAttachmentsByStatusIDs(ctx context.Context, statusIds []int64) ([]MediaAttachment, error)
 	GetMentionsByAccountID(ctx context.Context, arg GetMentionsByAccountIDParams) ([]Mention, error)
 	GetMentionsByStatusID(ctx context.Context, statusID int64) ([]Mention, error)
@@ -249,6 +250,8 @@ type Querier interface {
 	GetPinnedStatuses(ctx context.Context, accountID int64) ([]Status, error)
 	GetPoll(ctx context.Context, id int64) (Poll, error)
 	GetPollByStatusId(ctx context.Context, statusID pgtype.Int8) (Poll, error)
+	GetPollOptions(ctx context.Context, id int64) ([]GetPollOptionsRow, error)
+	GetPollVotesByAccountID(ctx context.Context, arg GetPollVotesByAccountIDParams) ([]PollVote, error)
 	GetPreferences(ctx context.Context, accountID int64) (Preference, error)
 	// Preview Cards queries
 	GetPreviewCard(ctx context.Context, id int64) (PreviewCard, error)

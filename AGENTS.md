@@ -6,6 +6,16 @@
 - Database SQL lives in `db/migrations` (goose-numbered files) and `db/queries` (sqlc inputs) that generate the typed client in `internal/db`.
 - `mastodon/` contains the upstream Mastodon reference/frontend; change it only when syncing UI assets. Runtime uploads default to `./uploads`.
 
+## Implementation Quality
+**Critical: No MVP or deferred implementations.** When implementing a feature:
+- **Complete the full implementation** - no TODO comments, no stub functions, no "defer to later" patterns
+- **Every feature must be production-ready** - if you can't do it properly, don't start it
+- **No partial implementations** - either a feature works completely or it shouldn't exist
+- **Tests are mandatory** - every handler needs corresponding test coverage
+- **Handle all edge cases** - error states, empty inputs, invalid data, auth boundaries
+
+This applies to all code: API handlers, database queries, tests, and documentation.
+
 ## Build, Test, and Development Commands
 - `go build ./...` (or `go run . serve --config ./gotodon.yaml --port 3000`) builds/runs the API; requires PostgreSQL and Redis reachable via `GOTODON_*` or `DB_*`/`REDIS_*` env vars.
 - `go run . migrate up` / `... down|status|reset` runs goose migrations from `db/migrations`.
@@ -24,3 +34,4 @@
 ## Commit & Pull Request Guidelines
 - Commit history follows conventional commits (`feat:`, `docs:`, `fix:`). Use imperative scope-aware messages.
 - PRs should list the change summary, config/env/migration impacts, and tests run (`go test ./...`, migration commands). Link related issues; add screenshots or sample requests when altering API responses or UI assets under `mastodon/`.
+

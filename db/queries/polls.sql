@@ -34,3 +34,18 @@ WHERE id = $1;
 -- name: IncrementVotersCount :exec
 UPDATE polls SET voters_count = voters_count + 1, updated_at = now()
 WHERE id = $1;
+
+-- name: GetPollOptions :many
+SELECT 
+    ordinality - 1 AS option_index,
+    option_text AS title,
+    COALESCE((p.cached_tallies->>((ordinality - 1)::text))::bigint, 0) AS votes_count
+FROM polls p,
+LATERAL unnest(p.options) WITH ORDINALITY AS opt(option_text, ordinality)
+WHERE p.id = $1
+ORDER BY ordinality;
+
+-- name: GetPollVotesByAccountID :many
+SELECT * FROM poll_votes 
+WHERE poll_id = $1 AND account_id = $2;
+

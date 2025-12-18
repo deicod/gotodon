@@ -141,6 +141,81 @@ func (q *Queries) GetPollByStatusId(ctx context.Context, statusID pgtype.Int8) (
 	return i, err
 }
 
+const getPollOptions = `-- name: GetPollOptions :many
+SELECT 
+    ordinality - 1 AS option_index,
+    option_text AS title,
+    COALESCE((p.cached_tallies->>((ordinality - 1)::text))::bigint, 0) AS votes_count
+FROM polls p,
+LATERAL unnest(p.options) WITH ORDINALITY AS opt(option_text, ordinality)
+WHERE p.id = $1
+ORDER BY ordinality
+`
+
+type GetPollOptionsRow struct {
+	OptionIndex int32       `db:"option_index" json:"option_index"`
+	Title       interface{} `db:"title" json:"title"`
+	VotesCount  interface{} `db:"votes_count" json:"votes_count"`
+}
+
+func (q *Queries) GetPollOptions(ctx context.Context, id int64) ([]GetPollOptionsRow, error) {
+	rows, err := q.db.Query(ctx, getPollOptions, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetPollOptionsRow{}
+	for rows.Next() {
+		var i GetPollOptionsRow
+		if err := rows.Scan(&i.OptionIndex, &i.Title, &i.VotesCount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getPollVotesByAccountID = `-- name: GetPollVotesByAccountID :many
+SELECT id, account_id, poll_id, choice, created_at, updated_at, uri FROM poll_votes 
+WHERE poll_id = $1 AND account_id = $2
+`
+
+type GetPollVotesByAccountIDParams struct {
+	PollID    int64       `db:"poll_id" json:"poll_id"`
+	AccountID pgtype.Int8 `db:"account_id" json:"account_id"`
+}
+
+func (q *Queries) GetPollVotesByAccountID(ctx context.Context, arg GetPollVotesByAccountIDParams) ([]PollVote, error) {
+	rows, err := q.db.Query(ctx, getPollVotesByAccountID, arg.PollID, arg.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PollVote{}
+	for rows.Next() {
+		var i PollVote
+		if err := rows.Scan(
+			&i.ID,
+			&i.AccountID,
+			&i.PollID,
+			&i.Choice,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Uri,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getVotes = `-- name: GetVotes :many
 SELECT id, account_id, poll_id, choice, created_at, updated_at, uri FROM poll_votes WHERE poll_id = $1 AND account_id = $2
 `
