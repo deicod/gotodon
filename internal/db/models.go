@@ -343,6 +343,36 @@ type Notification struct {
 	GroupKey      pgtype.Text        `db:"group_key" json:"group_key"`
 }
 
+type NotificationPermission struct {
+	ID            int64              `db:"id" json:"id"`
+	AccountID     int64              `db:"account_id" json:"account_id"`
+	FromAccountID int64              `db:"from_account_id" json:"from_account_id"`
+	CreatedAt     pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type NotificationPolicy struct {
+	ID                 int64              `db:"id" json:"id"`
+	AccountID          int64              `db:"account_id" json:"account_id"`
+	CreatedAt          pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ForNotFollowing    int32              `db:"for_not_following" json:"for_not_following"`
+	ForNotFollowers    int32              `db:"for_not_followers" json:"for_not_followers"`
+	ForNewAccounts     int32              `db:"for_new_accounts" json:"for_new_accounts"`
+	ForPrivateMentions int32              `db:"for_private_mentions" json:"for_private_mentions"`
+	ForLimitedAccounts int32              `db:"for_limited_accounts" json:"for_limited_accounts"`
+}
+
+type NotificationRequest struct {
+	ID                 int64              `db:"id" json:"id"`
+	AccountID          int64              `db:"account_id" json:"account_id"`
+	FromAccountID      int64              `db:"from_account_id" json:"from_account_id"`
+	LastStatusID       pgtype.Int8        `db:"last_status_id" json:"last_status_id"`
+	NotificationsCount int64              `db:"notifications_count" json:"notifications_count"`
+	CreatedAt          pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
 type OauthAccessToken struct {
 	ID              int64              `db:"id" json:"id"`
 	Token           string             `db:"token" json:"token"`
@@ -412,6 +442,81 @@ type Preference struct {
 	UpdatedAt                pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
+type PreviewCard struct {
+	ID                        int64              `db:"id" json:"id"`
+	Url                       string             `db:"url" json:"url"`
+	Title                     string             `db:"title" json:"title"`
+	Description               string             `db:"description" json:"description"`
+	ImageFileName             pgtype.Text        `db:"image_file_name" json:"image_file_name"`
+	ImageContentType          pgtype.Text        `db:"image_content_type" json:"image_content_type"`
+	ImageFileSize             pgtype.Int4        `db:"image_file_size" json:"image_file_size"`
+	ImageUpdatedAt            pgtype.Timestamptz `db:"image_updated_at" json:"image_updated_at"`
+	Type                      int32              `db:"type" json:"type"`
+	Html                      string             `db:"html" json:"html"`
+	AuthorName                string             `db:"author_name" json:"author_name"`
+	AuthorUrl                 string             `db:"author_url" json:"author_url"`
+	ProviderName              string             `db:"provider_name" json:"provider_name"`
+	ProviderUrl               string             `db:"provider_url" json:"provider_url"`
+	Width                     int32              `db:"width" json:"width"`
+	Height                    int32              `db:"height" json:"height"`
+	CreatedAt                 pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt                 pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	EmbedUrl                  string             `db:"embed_url" json:"embed_url"`
+	ImageStorageSchemaVersion pgtype.Int4        `db:"image_storage_schema_version" json:"image_storage_schema_version"`
+	Blurhash                  pgtype.Text        `db:"blurhash" json:"blurhash"`
+	Language                  pgtype.Text        `db:"language" json:"language"`
+	MaxScore                  pgtype.Float8      `db:"max_score" json:"max_score"`
+	MaxScoreAt                pgtype.Timestamptz `db:"max_score_at" json:"max_score_at"`
+	Trendable                 pgtype.Bool        `db:"trendable" json:"trendable"`
+	LinkType                  pgtype.Int4        `db:"link_type" json:"link_type"`
+	PublishedAt               pgtype.Timestamptz `db:"published_at" json:"published_at"`
+	ImageDescription          string             `db:"image_description" json:"image_description"`
+	AuthorAccountID           pgtype.Int8        `db:"author_account_id" json:"author_account_id"`
+}
+
+type PreviewCardProvider struct {
+	ID                int64              `db:"id" json:"id"`
+	Domain            string             `db:"domain" json:"domain"`
+	IconFileName      pgtype.Text        `db:"icon_file_name" json:"icon_file_name"`
+	IconContentType   pgtype.Text        `db:"icon_content_type" json:"icon_content_type"`
+	IconFileSize      pgtype.Int8        `db:"icon_file_size" json:"icon_file_size"`
+	IconUpdatedAt     pgtype.Timestamptz `db:"icon_updated_at" json:"icon_updated_at"`
+	Trendable         pgtype.Bool        `db:"trendable" json:"trendable"`
+	ReviewedAt        pgtype.Timestamptz `db:"reviewed_at" json:"reviewed_at"`
+	RequestedReviewAt pgtype.Timestamptz `db:"requested_review_at" json:"requested_review_at"`
+	CreatedAt         pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type PreviewCardTrend struct {
+	ID            int64       `db:"id" json:"id"`
+	PreviewCardID int64       `db:"preview_card_id" json:"preview_card_id"`
+	Score         float64     `db:"score" json:"score"`
+	Rank          int32       `db:"rank" json:"rank"`
+	Allowed       bool        `db:"allowed" json:"allowed"`
+	Language      pgtype.Text `db:"language" json:"language"`
+}
+
+type PreviewCardsStatus struct {
+	PreviewCardID int64       `db:"preview_card_id" json:"preview_card_id"`
+	StatusID      int64       `db:"status_id" json:"status_id"`
+	Url           pgtype.Text `db:"url" json:"url"`
+}
+
+type Quote struct {
+	ID              int64              `db:"id" json:"id"`
+	AccountID       int64              `db:"account_id" json:"account_id"`
+	StatusID        int64              `db:"status_id" json:"status_id"`
+	QuotedStatusID  pgtype.Int8        `db:"quoted_status_id" json:"quoted_status_id"`
+	QuotedAccountID pgtype.Int8        `db:"quoted_account_id" json:"quoted_account_id"`
+	State           int32              `db:"state" json:"state"`
+	ApprovalUri     pgtype.Text        `db:"approval_uri" json:"approval_uri"`
+	ActivityUri     pgtype.Text        `db:"activity_uri" json:"activity_uri"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	Legacy          bool               `db:"legacy" json:"legacy"`
+}
+
 type Report struct {
 	ID                     int64              `db:"id" json:"id"`
 	StatusIds              []int64            `db:"status_ids" json:"status_ids"`
@@ -473,6 +578,21 @@ type Status struct {
 	FetchedRepliesAt          pgtype.Timestamptz `db:"fetched_replies_at" json:"fetched_replies_at"`
 }
 
+type StatusEdit struct {
+	ID                        int64              `db:"id" json:"id"`
+	StatusID                  int64              `db:"status_id" json:"status_id"`
+	AccountID                 pgtype.Int8        `db:"account_id" json:"account_id"`
+	Text                      string             `db:"text" json:"text"`
+	SpoilerText               string             `db:"spoiler_text" json:"spoiler_text"`
+	CreatedAt                 pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt                 pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	OrderedMediaAttachmentIds []int64            `db:"ordered_media_attachment_ids" json:"ordered_media_attachment_ids"`
+	MediaDescriptions         []string           `db:"media_descriptions" json:"media_descriptions"`
+	PollOptions               []string           `db:"poll_options" json:"poll_options"`
+	Sensitive                 pgtype.Bool        `db:"sensitive" json:"sensitive"`
+	QuoteID                   pgtype.Int8        `db:"quote_id" json:"quote_id"`
+}
+
 type StatusPin struct {
 	ID        int64              `db:"id" json:"id"`
 	AccountID int64              `db:"account_id" json:"account_id"`
@@ -482,13 +602,16 @@ type StatusPin struct {
 }
 
 type StatusStat struct {
-	ID              int64              `db:"id" json:"id"`
-	StatusID        int64              `db:"status_id" json:"status_id"`
-	RepliesCount    int64              `db:"replies_count" json:"replies_count"`
-	ReblogsCount    int64              `db:"reblogs_count" json:"reblogs_count"`
-	FavouritesCount int64              `db:"favourites_count" json:"favourites_count"`
-	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID                       int64              `db:"id" json:"id"`
+	StatusID                 int64              `db:"status_id" json:"status_id"`
+	RepliesCount             int64              `db:"replies_count" json:"replies_count"`
+	ReblogsCount             int64              `db:"reblogs_count" json:"reblogs_count"`
+	FavouritesCount          int64              `db:"favourites_count" json:"favourites_count"`
+	CreatedAt                pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt                pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	QuotesCount              int64              `db:"quotes_count" json:"quotes_count"`
+	UntrustedFavouritesCount pgtype.Int8        `db:"untrusted_favourites_count" json:"untrusted_favourites_count"`
+	UntrustedReblogsCount    pgtype.Int8        `db:"untrusted_reblogs_count" json:"untrusted_reblogs_count"`
 }
 
 type StatusesTag struct {

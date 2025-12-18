@@ -86,7 +86,7 @@ func (q *Queries) CreateStatus(ctx context.Context, arg CreateStatusParams) (Sta
 }
 
 const createStatusStats = `-- name: CreateStatusStats :one
-INSERT INTO status_stats (status_id) VALUES ($1) RETURNING id, status_id, replies_count, reblogs_count, favourites_count, created_at, updated_at
+INSERT INTO status_stats (status_id) VALUES ($1) RETURNING id, status_id, replies_count, reblogs_count, favourites_count, created_at, updated_at, quotes_count, untrusted_favourites_count, untrusted_reblogs_count
 `
 
 func (q *Queries) CreateStatusStats(ctx context.Context, statusID int64) (StatusStat, error) {
@@ -100,6 +100,9 @@ func (q *Queries) CreateStatusStats(ctx context.Context, statusID int64) (Status
 		&i.FavouritesCount,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.QuotesCount,
+		&i.UntrustedFavouritesCount,
+		&i.UntrustedReblogsCount,
 	)
 	return i, err
 }
@@ -703,7 +706,7 @@ func (q *Queries) GetStatusDescendants(ctx context.Context, statusID pgtype.Int8
 }
 
 const getStatusStats = `-- name: GetStatusStats :one
-SELECT id, status_id, replies_count, reblogs_count, favourites_count, created_at, updated_at FROM status_stats WHERE status_id = $1
+SELECT id, status_id, replies_count, reblogs_count, favourites_count, created_at, updated_at, quotes_count, untrusted_favourites_count, untrusted_reblogs_count FROM status_stats WHERE status_id = $1
 `
 
 func (q *Queries) GetStatusStats(ctx context.Context, statusID int64) (StatusStat, error) {
@@ -717,6 +720,9 @@ func (q *Queries) GetStatusStats(ctx context.Context, statusID int64) (StatusSta
 		&i.FavouritesCount,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.QuotesCount,
+		&i.UntrustedFavouritesCount,
+		&i.UntrustedReblogsCount,
 	)
 	return i, err
 }

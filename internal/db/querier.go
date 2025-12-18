@@ -11,6 +11,8 @@ import (
 )
 
 type Querier interface {
+	// Converts a notification request to a permission
+	AcceptNotificationRequest(ctx context.Context, id int64) error
 	AddAccountToList(ctx context.Context, arg AddAccountToListParams) error
 	AddAnnouncementReaction(ctx context.Context, arg AddAnnouncementReactionParams) (AnnouncementReaction, error)
 	AddStatusTags(ctx context.Context, arg AddStatusTagsParams) error
@@ -46,12 +48,18 @@ type Querier interface {
 	AdminUnsuspendAccount(ctx context.Context, id int64) error
 	AdminUpdateDomainBlock(ctx context.Context, arg AdminUpdateDomainBlockParams) (DomainBlock, error)
 	AttachMediaToStatus(ctx context.Context, arg AttachMediaToStatusParams) (int64, error)
+	AttachPreviewCardToStatus(ctx context.Context, arg AttachPreviewCardToStatusParams) error
+	BulkAcceptNotificationRequests(ctx context.Context, arg BulkAcceptNotificationRequestsParams) error
+	BulkDismissNotificationRequests(ctx context.Context, arg BulkDismissNotificationRequestsParams) error
 	ClearNotifications(ctx context.Context, accountID int64) error
 	ClearStatusTags(ctx context.Context, statusID int64) error
 	CountAccountPins(ctx context.Context, accountID int64) (int64, error)
 	CountFeaturedTags(ctx context.Context, accountID int64) (int64, error)
 	CountFollowers(ctx context.Context, targetAccountID int64) (int64, error)
 	CountFollowing(ctx context.Context, accountID int64) (int64, error)
+	CountNotificationRequests(ctx context.Context, accountID int64) (int64, error)
+	CountQuotesByQuotedStatus(ctx context.Context, quotedStatusID pgtype.Int8) (int64, error)
+	CountStatusEdits(ctx context.Context, statusID int64) (int64, error)
 	CountUnreadNotifications(ctx context.Context, accountID int64) (int64, error)
 	CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error)
 	CreateAccountPin(ctx context.Context, arg CreateAccountPinParams) (AccountPin, error)
@@ -74,14 +82,21 @@ type Querier interface {
 	CreateMentions(ctx context.Context, arg CreateMentionsParams) error
 	CreateMute(ctx context.Context, arg CreateMuteParams) (Mute, error)
 	CreateNotification(ctx context.Context, arg CreateNotificationParams) (Notification, error)
+	CreateNotificationPermission(ctx context.Context, arg CreateNotificationPermissionParams) (NotificationPermission, error)
+	CreateNotificationPolicy(ctx context.Context, arg CreateNotificationPolicyParams) (NotificationPolicy, error)
+	CreateNotificationRequest(ctx context.Context, arg CreateNotificationRequestParams) (NotificationRequest, error)
 	CreateNotifications(ctx context.Context, arg CreateNotificationsParams) ([]Notification, error)
 	CreateOAuthAccessToken(ctx context.Context, arg CreateOAuthAccessTokenParams) (OauthAccessToken, error)
 	CreateOAuthApplication(ctx context.Context, arg CreateOAuthApplicationParams) (OauthApplication, error)
 	CreatePoll(ctx context.Context, arg CreatePollParams) (Poll, error)
+	CreatePreviewCard(ctx context.Context, arg CreatePreviewCardParams) (PreviewCard, error)
+	CreatePreviewCardProvider(ctx context.Context, arg CreatePreviewCardProviderParams) (PreviewCardProvider, error)
 	CreatePushSubscription(ctx context.Context, arg CreatePushSubscriptionParams) (WebPushSubscription, error)
+	CreateQuote(ctx context.Context, arg CreateQuoteParams) (Quote, error)
 	CreateReport(ctx context.Context, arg CreateReportParams) (Report, error)
 	CreateScheduledStatus(ctx context.Context, arg CreateScheduledStatusParams) (ScheduledStatus, error)
 	CreateStatus(ctx context.Context, arg CreateStatusParams) (Status, error)
+	CreateStatusEdit(ctx context.Context, arg CreateStatusEditParams) (StatusEdit, error)
 	CreateStatusStats(ctx context.Context, statusID int64) (StatusStat, error)
 	CreateTag(ctx context.Context, name string) (Tag, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
@@ -105,12 +120,21 @@ type Querier interface {
 	DeleteMediaAttachment(ctx context.Context, arg DeleteMediaAttachmentParams) error
 	DeleteMute(ctx context.Context, arg DeleteMuteParams) error
 	DeleteNotification(ctx context.Context, arg DeleteNotificationParams) error
+	DeleteNotificationPermission(ctx context.Context, arg DeleteNotificationPermissionParams) error
+	DeleteNotificationPolicy(ctx context.Context, accountID int64) error
+	DeleteNotificationRequest(ctx context.Context, id int64) error
+	DeleteNotificationRequestByAccounts(ctx context.Context, arg DeleteNotificationRequestByAccountsParams) error
 	DeleteOAuthApplication(ctx context.Context, id int64) error
+	DeletePreviewCard(ctx context.Context, id int64) error
 	DeletePushSubscription(ctx context.Context, accessTokenID pgtype.Int8) error
+	DeleteQuote(ctx context.Context, id int64) error
 	DeleteScheduledStatus(ctx context.Context, arg DeleteScheduledStatusParams) error
 	DeleteStatus(ctx context.Context, id int64) error
+	DeleteStatusEditsForStatus(ctx context.Context, statusID int64) error
 	DetachMediaFromStatus(ctx context.Context, arg DetachMediaFromStatusParams) (int64, error)
+	DetachPreviewCardFromStatus(ctx context.Context, arg DetachPreviewCardFromStatusParams) error
 	DismissAnnouncement(ctx context.Context, arg DismissAnnouncementParams) error
+	DismissNotificationRequest(ctx context.Context, id int64) error
 	GetAccountByID(ctx context.Context, id int64) (Account, error)
 	GetAccountByURI(ctx context.Context, uri string) (Account, error)
 	GetAccountByUsername(ctx context.Context, username string) (Account, error)
@@ -155,6 +179,13 @@ type Querier interface {
 	GetMutesByAccountIDs(ctx context.Context, arg GetMutesByAccountIDsParams) ([]Mute, error)
 	GetMutesFromAccounts(ctx context.Context, arg GetMutesFromAccountsParams) ([]Mute, error)
 	GetNotification(ctx context.Context, arg GetNotificationParams) (Notification, error)
+	// Notification Permissions queries
+	GetNotificationPermission(ctx context.Context, arg GetNotificationPermissionParams) (NotificationPermission, error)
+	// Notification Policies queries
+	GetNotificationPolicy(ctx context.Context, accountID int64) (NotificationPolicy, error)
+	// Notification Requests queries
+	GetNotificationRequest(ctx context.Context, id int64) (NotificationRequest, error)
+	GetNotificationRequestByAccounts(ctx context.Context, arg GetNotificationRequestByAccountsParams) (NotificationRequest, error)
 	GetOAuthAccessToken(ctx context.Context, token string) (OauthAccessToken, error)
 	GetOAuthAccessTokenByRefresh(ctx context.Context, refreshToken pgtype.Text) (OauthAccessToken, error)
 	GetOAuthApplication(ctx context.Context, id int64) (OauthApplication, error)
@@ -163,9 +194,22 @@ type Querier interface {
 	GetPoll(ctx context.Context, id int64) (Poll, error)
 	GetPollByStatusId(ctx context.Context, statusID pgtype.Int8) (Poll, error)
 	GetPreferences(ctx context.Context, accountID int64) (Preference, error)
+	// Preview Cards queries
+	GetPreviewCard(ctx context.Context, id int64) (PreviewCard, error)
+	GetPreviewCardByURL(ctx context.Context, url string) (PreviewCard, error)
+	// Preview Card Providers
+	GetPreviewCardProvider(ctx context.Context, id int64) (PreviewCardProvider, error)
+	GetPreviewCardProviderByDomain(ctx context.Context, domain string) (PreviewCardProvider, error)
+	GetPreviewCardTrend(ctx context.Context, previewCardID int64) (PreviewCardTrend, error)
+	GetPreviewCardsForStatus(ctx context.Context, statusID int64) ([]PreviewCard, error)
 	GetPublicTimeline(ctx context.Context, arg GetPublicTimelineParams) ([]Status, error)
 	GetPushSubscription(ctx context.Context, arg GetPushSubscriptionParams) (WebPushSubscription, error)
 	GetPushSubscriptionByEndpoint(ctx context.Context, endpoint string) (WebPushSubscription, error)
+	// Quotes queries
+	GetQuote(ctx context.Context, id int64) (Quote, error)
+	GetQuoteByActivityURI(ctx context.Context, activityUri pgtype.Text) (Quote, error)
+	GetQuoteByStatusID(ctx context.Context, statusID int64) (Quote, error)
+	GetQuotesByQuotedStatusID(ctx context.Context, arg GetQuotesByQuotedStatusIDParams) ([]Quote, error)
 	GetRebloggers(ctx context.Context, arg GetRebloggersParams) ([]Account, error)
 	GetRelationship(ctx context.Context, arg GetRelationshipParams) (GetRelationshipRow, error)
 	GetScheduledStatus(ctx context.Context, arg GetScheduledStatusParams) (ScheduledStatus, error)
@@ -173,6 +217,9 @@ type Querier interface {
 	GetStatusByID(ctx context.Context, id int64) (Status, error)
 	GetStatusByURI(ctx context.Context, uri pgtype.Text) (Status, error)
 	GetStatusDescendants(ctx context.Context, statusID pgtype.Int8) ([]Status, error)
+	GetStatusEdit(ctx context.Context, id int64) (StatusEdit, error)
+	// Status Edits queries
+	GetStatusEditsByStatusID(ctx context.Context, statusID int64) ([]StatusEdit, error)
 	GetStatusStats(ctx context.Context, statusID int64) (StatusStat, error)
 	GetStatusStatsByIDs(ctx context.Context, statusIds []int64) ([]StatusStat, error)
 	GetStatusesByIDs(ctx context.Context, ids []int64) ([]Status, error)
@@ -181,6 +228,7 @@ type Querier interface {
 	GetTagsByStatusIDs(ctx context.Context, statusIds []int64) ([]GetTagsByStatusIDsRow, error)
 	// Placeholder: In future, use preview_cards table
 	GetTrendingLinks(ctx context.Context) ([]int32, error)
+	GetTrendingPreviewCards(ctx context.Context, arg GetTrendingPreviewCardsParams) ([]GetTrendingPreviewCardsRow, error)
 	GetTrendingStatuses(ctx context.Context, limit int32) ([]GetTrendingStatusesRow, error)
 	GetTrendingTags(ctx context.Context, limit int32) ([]GetTrendingTagsRow, error)
 	GetUserByAccountID(ctx context.Context, accountID int64) (User, error)
@@ -189,6 +237,8 @@ type Querier interface {
 	GetUserByResetPasswordToken(ctx context.Context, resetPasswordToken pgtype.Text) (User, error)
 	GetUserRole(ctx context.Context, id int64) (UserRole, error)
 	GetVotes(ctx context.Context, arg GetVotesParams) ([]PollVote, error)
+	HasNotificationPermission(ctx context.Context, arg HasNotificationPermissionParams) (bool, error)
+	IncrementNotificationRequestCount(ctx context.Context, arg IncrementNotificationRequestCountParams) (NotificationRequest, error)
 	IncrementStatusFavourites(ctx context.Context, statusID int64) error
 	IncrementStatusReblogs(ctx context.Context, statusID int64) error
 	IncrementStatusReplies(ctx context.Context, statusID int64) error
@@ -216,6 +266,8 @@ type Querier interface {
 	ListLocalAccounts(ctx context.Context, arg ListLocalAccountsParams) ([]Account, error)
 	ListMediaAttachmentsByStatus(ctx context.Context, statusID pgtype.Int8) ([]MediaAttachment, error)
 	ListMutes(ctx context.Context, arg ListMutesParams) ([]Account, error)
+	ListNotificationPermissions(ctx context.Context, arg ListNotificationPermissionsParams) ([]NotificationPermission, error)
+	ListNotificationRequests(ctx context.Context, arg ListNotificationRequestsParams) ([]NotificationRequest, error)
 	ListNotifications(ctx context.Context, arg ListNotificationsParams) ([]Notification, error)
 	ListOAuthApplicationsByOwner(ctx context.Context, arg ListOAuthApplicationsByOwnerParams) ([]OauthApplication, error)
 	ListScheduledStatuses(ctx context.Context, arg ListScheduledStatusesParams) ([]ScheduledStatus, error)
@@ -247,14 +299,23 @@ type Querier interface {
 	UpdateFilterKeyword(ctx context.Context, arg UpdateFilterKeywordParams) (FilterKeyword, error)
 	UpdateList(ctx context.Context, arg UpdateListParams) (List, error)
 	UpdateMediaAttachment(ctx context.Context, arg UpdateMediaAttachmentParams) (MediaAttachment, error)
+	UpdateNotificationPolicy(ctx context.Context, arg UpdateNotificationPolicyParams) (NotificationPolicy, error)
+	UpdateNotificationRequest(ctx context.Context, arg UpdateNotificationRequestParams) (NotificationRequest, error)
 	UpdateOAuthApplication(ctx context.Context, arg UpdateOAuthApplicationParams) (OauthApplication, error)
 	UpdateOAuthTokenLastUsed(ctx context.Context, arg UpdateOAuthTokenLastUsedParams) error
+	UpdatePreviewCard(ctx context.Context, arg UpdatePreviewCardParams) (PreviewCard, error)
+	UpdatePreviewCardProviderTrendable(ctx context.Context, arg UpdatePreviewCardProviderTrendableParams) (PreviewCardProvider, error)
+	UpdateQuoteState(ctx context.Context, arg UpdateQuoteStateParams) (Quote, error)
 	UpdateScheduledStatus(ctx context.Context, arg UpdateScheduledStatusParams) (ScheduledStatus, error)
 	UpdateStatus(ctx context.Context, arg UpdateStatusParams) (Status, error)
 	UpdateStatusURI(ctx context.Context, arg UpdateStatusURIParams) error
 	UpdateUserSettings(ctx context.Context, arg UpdateUserSettingsParams) error
 	UpsertMarker(ctx context.Context, arg UpsertMarkerParams) (Marker, error)
+	UpsertNotificationPolicy(ctx context.Context, arg UpsertNotificationPolicyParams) (NotificationPolicy, error)
+	UpsertNotificationRequest(ctx context.Context, arg UpsertNotificationRequestParams) (NotificationRequest, error)
 	UpsertPreferences(ctx context.Context, arg UpsertPreferencesParams) (Preference, error)
+	// Preview Card Trends
+	UpsertPreviewCardTrend(ctx context.Context, arg UpsertPreviewCardTrendParams) (PreviewCardTrend, error)
 	UpsertTags(ctx context.Context, dollar_1 []string) error
 	Vote(ctx context.Context, arg VoteParams) error
 }

@@ -193,7 +193,7 @@ func (q *Queries) GetMentionsByStatusIDs(ctx context.Context, statusIds []int64)
 }
 
 const getStatusStatsByIDs = `-- name: GetStatusStatsByIDs :many
-SELECT id, status_id, replies_count, reblogs_count, favourites_count, created_at, updated_at FROM status_stats WHERE status_id = ANY($1::bigint[])
+SELECT id, status_id, replies_count, reblogs_count, favourites_count, created_at, updated_at, quotes_count, untrusted_favourites_count, untrusted_reblogs_count FROM status_stats WHERE status_id = ANY($1::bigint[])
 `
 
 func (q *Queries) GetStatusStatsByIDs(ctx context.Context, statusIds []int64) ([]StatusStat, error) {
@@ -213,6 +213,9 @@ func (q *Queries) GetStatusStatsByIDs(ctx context.Context, statusIds []int64) ([
 			&i.FavouritesCount,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.QuotesCount,
+			&i.UntrustedFavouritesCount,
+			&i.UntrustedReblogsCount,
 		); err != nil {
 			return nil, err
 		}
