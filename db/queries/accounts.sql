@@ -77,3 +77,16 @@ ORDER BY
     lower(username) = lower(@query) DESC,
     id DESC
 LIMIT $1 OFFSET $2;
+
+-- name: GetAccountsByUsernames :many
+SELECT * FROM accounts 
+WHERE lower(username) = ANY(@usernames::text[]) 
+  AND domain IS NULL 
+  AND suspended_at IS NULL;
+
+-- name: GetAccountsByUsernamesAndDomains :many
+SELECT * FROM accounts
+WHERE (lower(username), lower(domain)) IN (
+    SELECT lower(unnest(@usernames::text[])), lower(unnest(@domains::text[]))
+)
+AND suspended_at IS NULL;

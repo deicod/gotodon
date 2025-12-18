@@ -25,14 +25,14 @@ func (q *Queries) CountFeaturedTags(ctx context.Context, accountID int64) (int64
 const createFeaturedTag = `-- name: CreateFeaturedTag :one
 INSERT INTO featured_tags (account_id, tag_id, name, statuses_count, last_status_at)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, account_id, tag_id, statuses_count, last_status_at, created_at, updated_at, name
+RETURNING id, account_id, tag_id, name, statuses_count, last_status_at, created_at, updated_at
 `
 
 type CreateFeaturedTagParams struct {
 	AccountID     int64              `db:"account_id" json:"account_id"`
-	TagID         int64              `db:"tag_id" json:"tag_id"`
-	Name          pgtype.Text        `db:"name" json:"name"`
-	StatusesCount int64              `db:"statuses_count" json:"statuses_count"`
+	TagID         pgtype.Int8        `db:"tag_id" json:"tag_id"`
+	Name          string             `db:"name" json:"name"`
+	StatusesCount pgtype.Int8        `db:"statuses_count" json:"statuses_count"`
 	LastStatusAt  pgtype.Timestamptz `db:"last_status_at" json:"last_status_at"`
 }
 
@@ -49,11 +49,11 @@ func (q *Queries) CreateFeaturedTag(ctx context.Context, arg CreateFeaturedTagPa
 		&i.ID,
 		&i.AccountID,
 		&i.TagID,
+		&i.Name,
 		&i.StatusesCount,
 		&i.LastStatusAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.Name,
 	)
 	return i, err
 }
@@ -74,13 +74,13 @@ func (q *Queries) DeleteFeaturedTag(ctx context.Context, arg DeleteFeaturedTagPa
 }
 
 const getFeaturedTagByTagID = `-- name: GetFeaturedTagByTagID :one
-SELECT id, account_id, tag_id, statuses_count, last_status_at, created_at, updated_at, name FROM featured_tags
+SELECT id, account_id, tag_id, name, statuses_count, last_status_at, created_at, updated_at FROM featured_tags
 WHERE account_id = $1 AND tag_id = $2
 `
 
 type GetFeaturedTagByTagIDParams struct {
-	AccountID int64 `db:"account_id" json:"account_id"`
-	TagID     int64 `db:"tag_id" json:"tag_id"`
+	AccountID int64       `db:"account_id" json:"account_id"`
+	TagID     pgtype.Int8 `db:"tag_id" json:"tag_id"`
 }
 
 func (q *Queries) GetFeaturedTagByTagID(ctx context.Context, arg GetFeaturedTagByTagIDParams) (FeaturedTag, error) {
@@ -90,17 +90,17 @@ func (q *Queries) GetFeaturedTagByTagID(ctx context.Context, arg GetFeaturedTagB
 		&i.ID,
 		&i.AccountID,
 		&i.TagID,
+		&i.Name,
 		&i.StatusesCount,
 		&i.LastStatusAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.Name,
 	)
 	return i, err
 }
 
 const listFeaturedTags = `-- name: ListFeaturedTags :many
-SELECT id, account_id, tag_id, statuses_count, last_status_at, created_at, updated_at, name FROM featured_tags
+SELECT id, account_id, tag_id, name, statuses_count, last_status_at, created_at, updated_at FROM featured_tags
 WHERE account_id = $1
 ORDER BY id DESC
 `
@@ -118,11 +118,11 @@ func (q *Queries) ListFeaturedTags(ctx context.Context, accountID int64) ([]Feat
 			&i.ID,
 			&i.AccountID,
 			&i.TagID,
+			&i.Name,
 			&i.StatusesCount,
 			&i.LastStatusAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.Name,
 		); err != nil {
 			return nil, err
 		}

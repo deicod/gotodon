@@ -952,6 +952,39 @@ CREATE TABLE preferences (
         REFERENCES accounts(id) ON DELETE CASCADE
 );
 
+-- Featured Tags
+CREATE TABLE featured_tags (
+    id bigserial PRIMARY KEY,
+    account_id bigint NOT NULL,
+    tag_id bigint,
+    name varchar(255) NOT NULL,
+    statuses_count bigint DEFAULT 0,
+    last_status_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    
+    CONSTRAINT fk_featured_tags_account FOREIGN KEY (account_id) 
+        REFERENCES accounts(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX index_featured_tags_on_account_id_and_name ON featured_tags (account_id, name);
+
+-- Account Pins (Endorsements)
+CREATE TABLE account_pins (
+    id bigserial PRIMARY KEY,
+    account_id bigint NOT NULL,
+    target_account_id bigint NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    
+    CONSTRAINT fk_account_pins_account FOREIGN KEY (account_id) 
+        REFERENCES accounts(id) ON DELETE CASCADE,
+    CONSTRAINT fk_account_pins_target_account FOREIGN KEY (target_account_id) 
+        REFERENCES accounts(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX index_account_pins_on_account_and_target ON account_pins (account_id, target_account_id);
+
 -- Markers (reading positions)
 CREATE TABLE markers (
     id bigserial PRIMARY KEY,

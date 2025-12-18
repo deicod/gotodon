@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const attachMediaToStatus = `-- name: AttachMediaToStatus :exec
+const attachMediaToStatus = `-- name: AttachMediaToStatus :execrows
 UPDATE media_attachments SET status_id = $2, updated_at = now()
 WHERE id = $1 AND account_id = $3 AND status_id IS NULL
 `
@@ -22,9 +22,12 @@ type AttachMediaToStatusParams struct {
 	AccountID pgtype.Int8 `db:"account_id" json:"account_id"`
 }
 
-func (q *Queries) AttachMediaToStatus(ctx context.Context, arg AttachMediaToStatusParams) error {
-	_, err := q.db.Exec(ctx, attachMediaToStatus, arg.ID, arg.StatusID, arg.AccountID)
-	return err
+func (q *Queries) AttachMediaToStatus(ctx context.Context, arg AttachMediaToStatusParams) (int64, error) {
+	result, err := q.db.Exec(ctx, attachMediaToStatus, arg.ID, arg.StatusID, arg.AccountID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const createMediaAttachment = `-- name: CreateMediaAttachment :one
@@ -105,6 +108,24 @@ type DeleteMediaAttachmentParams struct {
 func (q *Queries) DeleteMediaAttachment(ctx context.Context, arg DeleteMediaAttachmentParams) error {
 	_, err := q.db.Exec(ctx, deleteMediaAttachment, arg.ID, arg.AccountID)
 	return err
+}
+
+const detachMediaFromStatus = `-- name: DetachMediaFromStatus :execrows
+UPDATE media_attachments SET status_id = NULL, updated_at = now()
+WHERE id = $1 AND account_id = $2 AND status_id IS NOT NULL
+`
+
+type DetachMediaFromStatusParams struct {
+	ID        int64       `db:"id" json:"id"`
+	AccountID pgtype.Int8 `db:"account_id" json:"account_id"`
+}
+
+func (q *Queries) DetachMediaFromStatus(ctx context.Context, arg DetachMediaFromStatusParams) (int64, error) {
+	result, err := q.db.Exec(ctx, detachMediaFromStatus, arg.ID, arg.AccountID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getMediaAttachment = `-- name: GetMediaAttachment :one

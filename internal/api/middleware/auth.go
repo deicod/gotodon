@@ -145,6 +145,12 @@ func GetScopes(ctx context.Context) string {
 	return scopes
 }
 
+// GetAppID gets the app ID from the context
+func GetAppID(ctx context.Context) (int64, bool) {
+	id, ok := ctx.Value(ContextKeyAppID).(int64)
+	return id, ok
+}
+
 func extractBearerToken(r *http.Request) string {
 	auth := r.Header.Get("Authorization")
 	if auth == "" {

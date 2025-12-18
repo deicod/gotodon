@@ -3,10 +3,15 @@ package v1
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
+	"sync"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
@@ -41,6 +46,7 @@ type ListsHandler struct {
 	// In-memory fallback for tests when queries is nil
 	memLists       map[int64]map[int64]*List
 	memListMembers map[int64][]int64
+	mu             sync.RWMutex
 }
 
 // NewListsHandler creates a new lists handler with database
@@ -108,11 +114,13 @@ func (h *ListsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// In-memory fallback
+	h.mu.RLock()
 	accountLists := h.memLists[accountID]
 	result := make([]List, 0, len(accountLists))
 	for _, list := range accountLists {
 		result = append(result, *list)
 	}
+	h.mu.RUnlock()
 	web.JSON(w, http.StatusOK, result)
 }
 
@@ -144,12 +152,23 @@ func (h *ListsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// In-memory fallback
+	h.mu.RLock()
 	accountLists := h.memLists[accountID]
-	if accountLists == nil || accountLists[listID] == nil {
+	var list *List
+	if accountLists != nil {
+		list = accountLists[listID]
+	}
+
+	if list == nil {
+		h.mu.RUnlock()
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
-	web.JSON(w, http.StatusOK, accountLists[listID])
+	// Return a copy to avoid data races
+	safeList := *list
+	h.mu.RUnlock()
+
+	web.JSON(w, http.StatusOK, safeList)
 }
 
 // Create handles POST /api/v1/lists
@@ -211,10 +230,14 @@ func (h *ListsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		RepliesPolicy: policyStr,
 		Exclusive:     exclusive,
 	}
+
+	h.mu.Lock()
 	if h.memLists[accountID] == nil {
 		h.memLists[accountID] = make(map[int64]*List)
 	}
 	h.memLists[accountID][listID] = list
+	h.mu.Unlock()
+
 	web.JSON(w, http.StatusOK, list)
 }
 
@@ -267,6 +290,9 @@ func (h *ListsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// In-memory fallback
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	accountLists := h.memLists[accountID]
 	if accountLists == nil || accountLists[listID] == nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
@@ -316,13 +342,16 @@ func (h *ListsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// In-memory fallback
+	h.mu.Lock()
 	accountLists := h.memLists[accountID]
 	if accountLists == nil || accountLists[listID] == nil {
+		h.mu.Unlock()
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
 	delete(accountLists, listID)
 	delete(h.memListMembers, listID)
+	h.mu.Unlock()
 	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -350,10 +379,15 @@ func (h *ListsHandler) GetAccounts(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		limit, offset := web.ParsePagination(r)
+		if limit == 0 {
+			limit = 40
+		}
+
 		memberAccounts, err := h.queries.ListAccountsInList(context.Background(), db.ListAccountsInListParams{
 			ListID: listID,
-			Limit:  100,
-			Offset: 0,
+			Limit:  int32(limit),
+			Offset: int32(offset),
 		})
 		if err != nil {
 			web.JSONError(w, http.StatusInternalServerError, "Database error")
@@ -363,7 +397,7 @@ func (h *ListsHandler) GetAccounts(w http.ResponseWriter, r *http.Request) {
 		accounts := make([]Account, 0, len(memberAccounts))
 		discoverable := true
 		for _, dbAcc := range memberAccounts {
-			createdAt := time.Now().Add(-24 * time.Hour)
+			var createdAt time.Time
 			if dbAcc.CreatedAt.Valid {
 				createdAt = dbAcc.CreatedAt.Time
 			}
@@ -383,12 +417,15 @@ func (h *ListsHandler) GetAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// In-memory fallback
+	h.mu.RLock()
 	accountLists := h.memLists[accountID]
 	if accountLists == nil || accountLists[listID] == nil {
+		h.mu.RUnlock()
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
 	members := h.memListMembers[listID]
+	h.mu.RUnlock()
 	accounts := make([]Account, 0, len(members))
 	now := time.Now()
 	discoverable := true
@@ -450,20 +487,34 @@ func (h *ListsHandler) AddAccounts(w http.ResponseWriter, r *http.Request) {
 				TargetAccountID: id,
 			})
 			if err != nil {
-				continue // Must follow account to add to list
+				if err == pgx.ErrNoRows {
+					continue // Must follow account to add to list
+				}
+				web.JSONError(w, http.StatusInternalServerError, "Database error")
+				return
 			}
 
-			_ = h.queries.AddAccountToList(context.Background(), db.AddAccountToListParams{
+			err = h.queries.AddAccountToList(context.Background(), db.AddAccountToListParams{
 				ListID:    listID,
 				AccountID: id,
 				FollowID:  pgtype.Int8{Int64: follow.ID, Valid: true},
 			})
+			if err != nil {
+				if pgErr, ok := err.(*pgconn.PgError); ok && pgErr.Code == "23505" {
+					continue // Already in list
+				}
+				web.JSONError(w, http.StatusInternalServerError, "Database error")
+				return
+			}
 		}
 		web.JSON(w, http.StatusOK, map[string]any{})
 		return
 	}
 
 	// In-memory fallback
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	accountLists := h.memLists[accountID]
 	if accountLists == nil || accountLists[listID] == nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
@@ -474,7 +525,17 @@ func (h *ListsHandler) AddAccounts(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		h.memListMembers[listID] = append(h.memListMembers[listID], id)
+		// Check for duplicates
+		exists := false
+		for _, memberID := range h.memListMembers[listID] {
+			if memberID == id {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			h.memListMembers[listID] = append(h.memListMembers[listID], id)
+		}
 	}
 	web.JSON(w, http.StatusOK, map[string]any{})
 }
@@ -515,16 +576,23 @@ func (h *ListsHandler) RemoveAccounts(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				continue
 			}
-			_ = h.queries.RemoveAccountFromList(context.Background(), db.RemoveAccountFromListParams{
+			err = h.queries.RemoveAccountFromList(context.Background(), db.RemoveAccountFromListParams{
 				ListID:    listID,
 				AccountID: id,
 			})
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				web.JSONError(w, http.StatusInternalServerError, "Database error")
+				return
+			}
 		}
 		web.JSON(w, http.StatusOK, map[string]any{})
 		return
 	}
 
 	// In-memory fallback
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	accountLists := h.memLists[accountID]
 	if accountLists == nil || accountLists[listID] == nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")

@@ -38,7 +38,7 @@ func (q *Queries) GetTrendingLinks(ctx context.Context) ([]int32, error) {
 
 const getTrendingStatuses = `-- name: GetTrendingStatuses :many
 SELECT 
-    s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at, s.search_index,
+    s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at,
     ss.favourites_count,
     ss.reblogs_count,
     ss.replies_count,
@@ -79,7 +79,6 @@ type GetTrendingStatusesRow struct {
 	Trendable                 pgtype.Bool        `db:"trendable" json:"trendable"`
 	OrderedMediaAttachmentIds []int64            `db:"ordered_media_attachment_ids" json:"ordered_media_attachment_ids"`
 	FetchedRepliesAt          pgtype.Timestamptz `db:"fetched_replies_at" json:"fetched_replies_at"`
-	SearchIndex               interface{}        `db:"search_index" json:"search_index"`
 	FavouritesCount           int64              `db:"favourites_count" json:"favourites_count"`
 	ReblogsCount              int64              `db:"reblogs_count" json:"reblogs_count"`
 	RepliesCount              int64              `db:"replies_count" json:"replies_count"`
@@ -122,7 +121,6 @@ func (q *Queries) GetTrendingStatuses(ctx context.Context, limit int32) ([]GetTr
 			&i.Trendable,
 			&i.OrderedMediaAttachmentIds,
 			&i.FetchedRepliesAt,
-			&i.SearchIndex,
 			&i.FavouritesCount,
 			&i.ReblogsCount,
 			&i.RepliesCount,

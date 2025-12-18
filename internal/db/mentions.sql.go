@@ -37,6 +37,23 @@ func (q *Queries) CreateMention(ctx context.Context, arg CreateMentionParams) (M
 	return i, err
 }
 
+const createMentions = `-- name: CreateMentions :exec
+INSERT INTO mentions (status_id, account_id, created_at, updated_at, silent)
+SELECT $1, unnest($2::bigint[]), now(), now(), unnest($3::boolean[])
+ON CONFLICT DO NOTHING
+`
+
+type CreateMentionsParams struct {
+	StatusID int64   `db:"status_id" json:"status_id"`
+	Column2  []int64 `db:"column_2" json:"column_2"`
+	Column3  []bool  `db:"column_3" json:"column_3"`
+}
+
+func (q *Queries) CreateMentions(ctx context.Context, arg CreateMentionsParams) error {
+	_, err := q.db.Exec(ctx, createMentions, arg.StatusID, arg.Column2, arg.Column3)
+	return err
+}
+
 const getMentionsByAccountID = `-- name: GetMentionsByAccountID :many
 SELECT id, status_id, created_at, updated_at, account_id, silent FROM mentions WHERE account_id = $1 ORDER BY id DESC LIMIT $2 OFFSET $3
 `
@@ -103,4 +120,18 @@ func (q *Queries) GetMentionsByStatusID(ctx context.Context, statusID int64) ([]
 		return nil, err
 	}
 	return items, nil
+}
+
+const removeMentions = `-- name: RemoveMentions :exec
+DELETE FROM mentions WHERE status_id = $1 AND account_id = ANY($2::bigint[])
+`
+
+type RemoveMentionsParams struct {
+	StatusID int64   `db:"status_id" json:"status_id"`
+	Column2  []int64 `db:"column_2" json:"column_2"`
+}
+
+func (q *Queries) RemoveMentions(ctx context.Context, arg RemoveMentionsParams) error {
+	_, err := q.db.Exec(ctx, removeMentions, arg.StatusID, arg.Column2)
+	return err
 }

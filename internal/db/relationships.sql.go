@@ -321,6 +321,82 @@ func (q *Queries) GetBlock(ctx context.Context, arg GetBlockParams) (Block, erro
 	return i, err
 }
 
+const getBlocksByAccountIDs = `-- name: GetBlocksByAccountIDs :many
+SELECT id, created_at, updated_at, account_id, target_account_id, uri FROM blocks
+WHERE account_id = $1
+AND target_account_id = ANY($2::bigint[])
+`
+
+type GetBlocksByAccountIDsParams struct {
+	AccountID        int64   `db:"account_id" json:"account_id"`
+	TargetAccountIds []int64 `db:"target_account_ids" json:"target_account_ids"`
+}
+
+func (q *Queries) GetBlocksByAccountIDs(ctx context.Context, arg GetBlocksByAccountIDsParams) ([]Block, error) {
+	rows, err := q.db.Query(ctx, getBlocksByAccountIDs, arg.AccountID, arg.TargetAccountIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Block{}
+	for rows.Next() {
+		var i Block
+		if err := rows.Scan(
+			&i.ID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.AccountID,
+			&i.TargetAccountID,
+			&i.Uri,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getBlocksFromAccounts = `-- name: GetBlocksFromAccounts :many
+SELECT id, created_at, updated_at, account_id, target_account_id, uri FROM blocks
+WHERE target_account_id = $1
+AND account_id = ANY($2::bigint[])
+`
+
+type GetBlocksFromAccountsParams struct {
+	TargetAccountID int64   `db:"target_account_id" json:"target_account_id"`
+	AccountIds      []int64 `db:"account_ids" json:"account_ids"`
+}
+
+func (q *Queries) GetBlocksFromAccounts(ctx context.Context, arg GetBlocksFromAccountsParams) ([]Block, error) {
+	rows, err := q.db.Query(ctx, getBlocksFromAccounts, arg.TargetAccountID, arg.AccountIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Block{}
+	for rows.Next() {
+		var i Block
+		if err := rows.Scan(
+			&i.ID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.AccountID,
+			&i.TargetAccountID,
+			&i.Uri,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getDomainBlock = `-- name: GetDomainBlock :one
 SELECT id, domain, created_at, updated_at, account_id FROM account_domain_blocks WHERE account_id = $1 AND domain = $2
 `
@@ -366,7 +442,7 @@ func (q *Queries) GetFavourite(ctx context.Context, arg GetFavouriteParams) (Fav
 }
 
 const getFavouritedBy = `-- name: GetFavouritedBy :many
-SELECT a.id, a.username, a.domain, a.private_key, a.public_key, a.created_at, a.updated_at, a.note, a.display_name, a.uri, a.url, a.avatar_file_name, a.avatar_content_type, a.avatar_file_size, a.avatar_updated_at, a.header_file_name, a.header_content_type, a.header_file_size, a.header_updated_at, a.avatar_remote_url, a.locked, a.header_remote_url, a.last_webfingered_at, a.inbox_url, a.outbox_url, a.shared_inbox_url, a.followers_url, a.following_url, a.protocol, a.memorial, a.moved_to_account_id, a.featured_collection_url, a.fields, a.actor_type, a.discoverable, a.also_known_as, a.silenced_at, a.suspended_at, a.hide_collections, a.avatar_storage_schema_version, a.header_storage_schema_version, a.suspension_origin, a.sensitized_at, a.trendable, a.reviewed_at, a.requested_review_at, a.indexable, a.attribution_domains, a.search_index FROM accounts a
+SELECT a.id, a.username, a.domain, a.private_key, a.public_key, a.created_at, a.updated_at, a.note, a.display_name, a.uri, a.url, a.avatar_file_name, a.avatar_content_type, a.avatar_file_size, a.avatar_updated_at, a.header_file_name, a.header_content_type, a.header_file_size, a.header_updated_at, a.avatar_remote_url, a.locked, a.header_remote_url, a.last_webfingered_at, a.inbox_url, a.outbox_url, a.shared_inbox_url, a.followers_url, a.following_url, a.protocol, a.memorial, a.moved_to_account_id, a.featured_collection_url, a.fields, a.actor_type, a.discoverable, a.also_known_as, a.silenced_at, a.suspended_at, a.hide_collections, a.avatar_storage_schema_version, a.header_storage_schema_version, a.suspension_origin, a.sensitized_at, a.trendable, a.reviewed_at, a.requested_review_at, a.indexable, a.attribution_domains FROM accounts a
 JOIN favourites f ON f.account_id = a.id
 WHERE f.status_id = $1 AND a.suspended_at IS NULL
 ORDER BY f.id DESC
@@ -437,7 +513,6 @@ func (q *Queries) GetFavouritedBy(ctx context.Context, arg GetFavouritedByParams
 			&i.RequestedReviewAt,
 			&i.Indexable,
 			&i.AttributionDomains,
-			&i.SearchIndex,
 		); err != nil {
 			return nil, err
 		}
@@ -504,7 +579,7 @@ func (q *Queries) GetFollowRequest(ctx context.Context, arg GetFollowRequestPara
 }
 
 const getFollowers = `-- name: GetFollowers :many
-SELECT a.id, a.username, a.domain, a.private_key, a.public_key, a.created_at, a.updated_at, a.note, a.display_name, a.uri, a.url, a.avatar_file_name, a.avatar_content_type, a.avatar_file_size, a.avatar_updated_at, a.header_file_name, a.header_content_type, a.header_file_size, a.header_updated_at, a.avatar_remote_url, a.locked, a.header_remote_url, a.last_webfingered_at, a.inbox_url, a.outbox_url, a.shared_inbox_url, a.followers_url, a.following_url, a.protocol, a.memorial, a.moved_to_account_id, a.featured_collection_url, a.fields, a.actor_type, a.discoverable, a.also_known_as, a.silenced_at, a.suspended_at, a.hide_collections, a.avatar_storage_schema_version, a.header_storage_schema_version, a.suspension_origin, a.sensitized_at, a.trendable, a.reviewed_at, a.requested_review_at, a.indexable, a.attribution_domains, a.search_index FROM accounts a
+SELECT a.id, a.username, a.domain, a.private_key, a.public_key, a.created_at, a.updated_at, a.note, a.display_name, a.uri, a.url, a.avatar_file_name, a.avatar_content_type, a.avatar_file_size, a.avatar_updated_at, a.header_file_name, a.header_content_type, a.header_file_size, a.header_updated_at, a.avatar_remote_url, a.locked, a.header_remote_url, a.last_webfingered_at, a.inbox_url, a.outbox_url, a.shared_inbox_url, a.followers_url, a.following_url, a.protocol, a.memorial, a.moved_to_account_id, a.featured_collection_url, a.fields, a.actor_type, a.discoverable, a.also_known_as, a.silenced_at, a.suspended_at, a.hide_collections, a.avatar_storage_schema_version, a.header_storage_schema_version, a.suspension_origin, a.sensitized_at, a.trendable, a.reviewed_at, a.requested_review_at, a.indexable, a.attribution_domains FROM accounts a
 JOIN follows f ON f.account_id = a.id
 WHERE f.target_account_id = $1 AND a.suspended_at IS NULL
 ORDER BY f.id DESC
@@ -575,7 +650,6 @@ func (q *Queries) GetFollowers(ctx context.Context, arg GetFollowersParams) ([]A
 			&i.RequestedReviewAt,
 			&i.Indexable,
 			&i.AttributionDomains,
-			&i.SearchIndex,
 		); err != nil {
 			return nil, err
 		}
@@ -588,7 +662,7 @@ func (q *Queries) GetFollowers(ctx context.Context, arg GetFollowersParams) ([]A
 }
 
 const getFollowing = `-- name: GetFollowing :many
-SELECT a.id, a.username, a.domain, a.private_key, a.public_key, a.created_at, a.updated_at, a.note, a.display_name, a.uri, a.url, a.avatar_file_name, a.avatar_content_type, a.avatar_file_size, a.avatar_updated_at, a.header_file_name, a.header_content_type, a.header_file_size, a.header_updated_at, a.avatar_remote_url, a.locked, a.header_remote_url, a.last_webfingered_at, a.inbox_url, a.outbox_url, a.shared_inbox_url, a.followers_url, a.following_url, a.protocol, a.memorial, a.moved_to_account_id, a.featured_collection_url, a.fields, a.actor_type, a.discoverable, a.also_known_as, a.silenced_at, a.suspended_at, a.hide_collections, a.avatar_storage_schema_version, a.header_storage_schema_version, a.suspension_origin, a.sensitized_at, a.trendable, a.reviewed_at, a.requested_review_at, a.indexable, a.attribution_domains, a.search_index FROM accounts a
+SELECT a.id, a.username, a.domain, a.private_key, a.public_key, a.created_at, a.updated_at, a.note, a.display_name, a.uri, a.url, a.avatar_file_name, a.avatar_content_type, a.avatar_file_size, a.avatar_updated_at, a.header_file_name, a.header_content_type, a.header_file_size, a.header_updated_at, a.avatar_remote_url, a.locked, a.header_remote_url, a.last_webfingered_at, a.inbox_url, a.outbox_url, a.shared_inbox_url, a.followers_url, a.following_url, a.protocol, a.memorial, a.moved_to_account_id, a.featured_collection_url, a.fields, a.actor_type, a.discoverable, a.also_known_as, a.silenced_at, a.suspended_at, a.hide_collections, a.avatar_storage_schema_version, a.header_storage_schema_version, a.suspension_origin, a.sensitized_at, a.trendable, a.reviewed_at, a.requested_review_at, a.indexable, a.attribution_domains FROM accounts a
 JOIN follows f ON f.target_account_id = a.id
 WHERE f.account_id = $1 AND a.suspended_at IS NULL
 ORDER BY f.id DESC
@@ -659,7 +733,6 @@ func (q *Queries) GetFollowing(ctx context.Context, arg GetFollowingParams) ([]A
 			&i.RequestedReviewAt,
 			&i.Indexable,
 			&i.AttributionDomains,
-			&i.SearchIndex,
 		); err != nil {
 			return nil, err
 		}
@@ -695,8 +768,86 @@ func (q *Queries) GetMute(ctx context.Context, arg GetMuteParams) (Mute, error) 
 	return i, err
 }
 
+const getMutesByAccountIDs = `-- name: GetMutesByAccountIDs :many
+SELECT id, created_at, updated_at, hide_notifications, account_id, target_account_id, expires_at FROM mutes 
+WHERE account_id = $1 
+AND target_account_id = ANY($2::bigint[])
+`
+
+type GetMutesByAccountIDsParams struct {
+	AccountID        int64   `db:"account_id" json:"account_id"`
+	TargetAccountIds []int64 `db:"target_account_ids" json:"target_account_ids"`
+}
+
+func (q *Queries) GetMutesByAccountIDs(ctx context.Context, arg GetMutesByAccountIDsParams) ([]Mute, error) {
+	rows, err := q.db.Query(ctx, getMutesByAccountIDs, arg.AccountID, arg.TargetAccountIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Mute{}
+	for rows.Next() {
+		var i Mute
+		if err := rows.Scan(
+			&i.ID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.HideNotifications,
+			&i.AccountID,
+			&i.TargetAccountID,
+			&i.ExpiresAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getMutesFromAccounts = `-- name: GetMutesFromAccounts :many
+SELECT id, created_at, updated_at, hide_notifications, account_id, target_account_id, expires_at FROM mutes
+WHERE target_account_id = $1
+AND account_id = ANY($2::bigint[])
+`
+
+type GetMutesFromAccountsParams struct {
+	TargetAccountID int64   `db:"target_account_id" json:"target_account_id"`
+	AccountIds      []int64 `db:"account_ids" json:"account_ids"`
+}
+
+func (q *Queries) GetMutesFromAccounts(ctx context.Context, arg GetMutesFromAccountsParams) ([]Mute, error) {
+	rows, err := q.db.Query(ctx, getMutesFromAccounts, arg.TargetAccountID, arg.AccountIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Mute{}
+	for rows.Next() {
+		var i Mute
+		if err := rows.Scan(
+			&i.ID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.HideNotifications,
+			&i.AccountID,
+			&i.TargetAccountID,
+			&i.ExpiresAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getRebloggers = `-- name: GetRebloggers :many
-SELECT a.id, a.username, a.domain, a.private_key, a.public_key, a.created_at, a.updated_at, a.note, a.display_name, a.uri, a.url, a.avatar_file_name, a.avatar_content_type, a.avatar_file_size, a.avatar_updated_at, a.header_file_name, a.header_content_type, a.header_file_size, a.header_updated_at, a.avatar_remote_url, a.locked, a.header_remote_url, a.last_webfingered_at, a.inbox_url, a.outbox_url, a.shared_inbox_url, a.followers_url, a.following_url, a.protocol, a.memorial, a.moved_to_account_id, a.featured_collection_url, a.fields, a.actor_type, a.discoverable, a.also_known_as, a.silenced_at, a.suspended_at, a.hide_collections, a.avatar_storage_schema_version, a.header_storage_schema_version, a.suspension_origin, a.sensitized_at, a.trendable, a.reviewed_at, a.requested_review_at, a.indexable, a.attribution_domains, a.search_index FROM accounts a
+SELECT a.id, a.username, a.domain, a.private_key, a.public_key, a.created_at, a.updated_at, a.note, a.display_name, a.uri, a.url, a.avatar_file_name, a.avatar_content_type, a.avatar_file_size, a.avatar_updated_at, a.header_file_name, a.header_content_type, a.header_file_size, a.header_updated_at, a.avatar_remote_url, a.locked, a.header_remote_url, a.last_webfingered_at, a.inbox_url, a.outbox_url, a.shared_inbox_url, a.followers_url, a.following_url, a.protocol, a.memorial, a.moved_to_account_id, a.featured_collection_url, a.fields, a.actor_type, a.discoverable, a.also_known_as, a.silenced_at, a.suspended_at, a.hide_collections, a.avatar_storage_schema_version, a.header_storage_schema_version, a.suspension_origin, a.sensitized_at, a.trendable, a.reviewed_at, a.requested_review_at, a.indexable, a.attribution_domains FROM accounts a
 JOIN statuses s ON s.account_id = a.id AND s.reblog_of_id = $1
 WHERE a.suspended_at IS NULL AND s.deleted_at IS NULL
 ORDER BY s.id DESC
@@ -767,7 +918,6 @@ func (q *Queries) GetRebloggers(ctx context.Context, arg GetRebloggersParams) ([
 			&i.RequestedReviewAt,
 			&i.Indexable,
 			&i.AttributionDomains,
-			&i.SearchIndex,
 		); err != nil {
 			return nil, err
 		}
@@ -848,7 +998,7 @@ func (q *Queries) GetRelationship(ctx context.Context, arg GetRelationshipParams
 }
 
 const listBlocks = `-- name: ListBlocks :many
-SELECT a.id, a.username, a.domain, a.private_key, a.public_key, a.created_at, a.updated_at, a.note, a.display_name, a.uri, a.url, a.avatar_file_name, a.avatar_content_type, a.avatar_file_size, a.avatar_updated_at, a.header_file_name, a.header_content_type, a.header_file_size, a.header_updated_at, a.avatar_remote_url, a.locked, a.header_remote_url, a.last_webfingered_at, a.inbox_url, a.outbox_url, a.shared_inbox_url, a.followers_url, a.following_url, a.protocol, a.memorial, a.moved_to_account_id, a.featured_collection_url, a.fields, a.actor_type, a.discoverable, a.also_known_as, a.silenced_at, a.suspended_at, a.hide_collections, a.avatar_storage_schema_version, a.header_storage_schema_version, a.suspension_origin, a.sensitized_at, a.trendable, a.reviewed_at, a.requested_review_at, a.indexable, a.attribution_domains, a.search_index FROM accounts a
+SELECT a.id, a.username, a.domain, a.private_key, a.public_key, a.created_at, a.updated_at, a.note, a.display_name, a.uri, a.url, a.avatar_file_name, a.avatar_content_type, a.avatar_file_size, a.avatar_updated_at, a.header_file_name, a.header_content_type, a.header_file_size, a.header_updated_at, a.avatar_remote_url, a.locked, a.header_remote_url, a.last_webfingered_at, a.inbox_url, a.outbox_url, a.shared_inbox_url, a.followers_url, a.following_url, a.protocol, a.memorial, a.moved_to_account_id, a.featured_collection_url, a.fields, a.actor_type, a.discoverable, a.also_known_as, a.silenced_at, a.suspended_at, a.hide_collections, a.avatar_storage_schema_version, a.header_storage_schema_version, a.suspension_origin, a.sensitized_at, a.trendable, a.reviewed_at, a.requested_review_at, a.indexable, a.attribution_domains FROM accounts a
 JOIN blocks b ON b.target_account_id = a.id
 WHERE b.account_id = $1
 ORDER BY b.id DESC
@@ -919,7 +1069,6 @@ func (q *Queries) ListBlocks(ctx context.Context, arg ListBlocksParams) ([]Accou
 			&i.RequestedReviewAt,
 			&i.Indexable,
 			&i.AttributionDomains,
-			&i.SearchIndex,
 		); err != nil {
 			return nil, err
 		}
@@ -971,7 +1120,7 @@ func (q *Queries) ListDomainBlocks(ctx context.Context, arg ListDomainBlocksPara
 }
 
 const listFavourites = `-- name: ListFavourites :many
-SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at, s.search_index FROM statuses s
+SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at FROM statuses s
 JOIN favourites f ON f.status_id = s.id
 WHERE f.account_id = $1 AND s.deleted_at IS NULL
 ORDER BY f.id DESC
@@ -1018,7 +1167,6 @@ func (q *Queries) ListFavourites(ctx context.Context, arg ListFavouritesParams) 
 			&i.Trendable,
 			&i.OrderedMediaAttachmentIds,
 			&i.FetchedRepliesAt,
-			&i.SearchIndex,
 		); err != nil {
 			return nil, err
 		}
@@ -1031,7 +1179,7 @@ func (q *Queries) ListFavourites(ctx context.Context, arg ListFavouritesParams) 
 }
 
 const listFollowRequests = `-- name: ListFollowRequests :many
-SELECT a.id, a.username, a.domain, a.private_key, a.public_key, a.created_at, a.updated_at, a.note, a.display_name, a.uri, a.url, a.avatar_file_name, a.avatar_content_type, a.avatar_file_size, a.avatar_updated_at, a.header_file_name, a.header_content_type, a.header_file_size, a.header_updated_at, a.avatar_remote_url, a.locked, a.header_remote_url, a.last_webfingered_at, a.inbox_url, a.outbox_url, a.shared_inbox_url, a.followers_url, a.following_url, a.protocol, a.memorial, a.moved_to_account_id, a.featured_collection_url, a.fields, a.actor_type, a.discoverable, a.also_known_as, a.silenced_at, a.suspended_at, a.hide_collections, a.avatar_storage_schema_version, a.header_storage_schema_version, a.suspension_origin, a.sensitized_at, a.trendable, a.reviewed_at, a.requested_review_at, a.indexable, a.attribution_domains, a.search_index FROM accounts a
+SELECT a.id, a.username, a.domain, a.private_key, a.public_key, a.created_at, a.updated_at, a.note, a.display_name, a.uri, a.url, a.avatar_file_name, a.avatar_content_type, a.avatar_file_size, a.avatar_updated_at, a.header_file_name, a.header_content_type, a.header_file_size, a.header_updated_at, a.avatar_remote_url, a.locked, a.header_remote_url, a.last_webfingered_at, a.inbox_url, a.outbox_url, a.shared_inbox_url, a.followers_url, a.following_url, a.protocol, a.memorial, a.moved_to_account_id, a.featured_collection_url, a.fields, a.actor_type, a.discoverable, a.also_known_as, a.silenced_at, a.suspended_at, a.hide_collections, a.avatar_storage_schema_version, a.header_storage_schema_version, a.suspension_origin, a.sensitized_at, a.trendable, a.reviewed_at, a.requested_review_at, a.indexable, a.attribution_domains FROM accounts a
 JOIN follow_requests fr ON fr.account_id = a.id
 WHERE fr.target_account_id = $1 AND a.suspended_at IS NULL
 ORDER BY fr.id DESC
@@ -1102,7 +1250,6 @@ func (q *Queries) ListFollowRequests(ctx context.Context, arg ListFollowRequests
 			&i.RequestedReviewAt,
 			&i.Indexable,
 			&i.AttributionDomains,
-			&i.SearchIndex,
 		); err != nil {
 			return nil, err
 		}
@@ -1115,7 +1262,7 @@ func (q *Queries) ListFollowRequests(ctx context.Context, arg ListFollowRequests
 }
 
 const listMutes = `-- name: ListMutes :many
-SELECT a.id, a.username, a.domain, a.private_key, a.public_key, a.created_at, a.updated_at, a.note, a.display_name, a.uri, a.url, a.avatar_file_name, a.avatar_content_type, a.avatar_file_size, a.avatar_updated_at, a.header_file_name, a.header_content_type, a.header_file_size, a.header_updated_at, a.avatar_remote_url, a.locked, a.header_remote_url, a.last_webfingered_at, a.inbox_url, a.outbox_url, a.shared_inbox_url, a.followers_url, a.following_url, a.protocol, a.memorial, a.moved_to_account_id, a.featured_collection_url, a.fields, a.actor_type, a.discoverable, a.also_known_as, a.silenced_at, a.suspended_at, a.hide_collections, a.avatar_storage_schema_version, a.header_storage_schema_version, a.suspension_origin, a.sensitized_at, a.trendable, a.reviewed_at, a.requested_review_at, a.indexable, a.attribution_domains, a.search_index FROM accounts a
+SELECT a.id, a.username, a.domain, a.private_key, a.public_key, a.created_at, a.updated_at, a.note, a.display_name, a.uri, a.url, a.avatar_file_name, a.avatar_content_type, a.avatar_file_size, a.avatar_updated_at, a.header_file_name, a.header_content_type, a.header_file_size, a.header_updated_at, a.avatar_remote_url, a.locked, a.header_remote_url, a.last_webfingered_at, a.inbox_url, a.outbox_url, a.shared_inbox_url, a.followers_url, a.following_url, a.protocol, a.memorial, a.moved_to_account_id, a.featured_collection_url, a.fields, a.actor_type, a.discoverable, a.also_known_as, a.silenced_at, a.suspended_at, a.hide_collections, a.avatar_storage_schema_version, a.header_storage_schema_version, a.suspension_origin, a.sensitized_at, a.trendable, a.reviewed_at, a.requested_review_at, a.indexable, a.attribution_domains FROM accounts a
 JOIN mutes m ON m.target_account_id = a.id
 WHERE m.account_id = $1 AND (m.expires_at IS NULL OR m.expires_at > now())
 ORDER BY m.id DESC
@@ -1186,7 +1333,6 @@ func (q *Queries) ListMutes(ctx context.Context, arg ListMutesParams) ([]Account
 			&i.RequestedReviewAt,
 			&i.Indexable,
 			&i.AttributionDomains,
-			&i.SearchIndex,
 		); err != nil {
 			return nil, err
 		}

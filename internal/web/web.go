@@ -41,3 +41,19 @@ func Int64Param(r *http.Request, key string) (int64, error) {
 	val := r.PathValue(key)
 	return strconv.ParseInt(val, 10, 64)
 }
+
+// ParsePagination returns limit and offset from query parameters.
+func ParsePagination(r *http.Request) (int, int) {
+	limitStr := QueryParam(r, "limit")
+	limit, _ := strconv.Atoi(limitStr)
+	if limit < 0 {
+		limit = 0
+	}
+
+	offsetStr := QueryParam(r, "offset")
+	offset, _ := strconv.Atoi(offsetStr)
+	if offset < 0 {
+		offset = 0
+	}
+	return limit, offset
+}

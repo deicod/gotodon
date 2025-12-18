@@ -140,3 +140,7 @@ WHERE la.list_id = @list_id
   AND s.reblog_of_id IS NULL
 ORDER BY s.id DESC
 LIMIT $1 OFFSET $2;
+
+-- name: UpdateStatusURI :exec
+UPDATE statuses SET uri = $1, updated_at = now()
+WHERE id = $2;

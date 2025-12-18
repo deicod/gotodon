@@ -27,3 +27,10 @@ UPDATE notifications SET read = true WHERE account_id = $1 AND read = false;
 
 -- name: CountUnreadNotifications :one
 SELECT COUNT(*) FROM notifications WHERE account_id = $1 AND read = false;
+
+-- name: CreateNotifications :many
+INSERT INTO notifications (
+    account_id, from_account_id, activity_type, activity_id, type, created_at, updated_at
+)
+SELECT unnest($1::bigint[]), $2, $3, $4, $5, now(), now()
+RETURNING *;

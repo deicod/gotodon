@@ -3,10 +3,13 @@ package v1
 
 import (
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/oauth"
@@ -58,8 +61,21 @@ func (h *AppsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.RedirectURIs == "" {
-		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Redirect URI can't be blank")
+		web.JSONError(w, http.StatusUnprocessableEntity, "Redirect URI is required")
 		return
+	}
+
+	// Validate Redirect URIs
+	redirectURIs := strings.Split(req.RedirectURIs, "\n")
+	for _, uri := range redirectURIs {
+		uri = strings.TrimSpace(uri)
+		if uri == "" {
+			continue
+		}
+		if _, err := url.ParseRequestURI(uri); err != nil {
+			web.JSONError(w, http.StatusUnprocessableEntity, "Invalid redirect URI: "+uri)
+			return
+		}
 	}
 
 	scopes := oauth.ParseScopes(req.Scopes)
@@ -94,6 +110,8 @@ func (h *AppsHandler) Create(w http.ResponseWriter, r *http.Request) {
 			RedirectUri:  req.RedirectURIs,
 			Scopes:       req.Scopes,
 			Website:      websitePG,
+			OwnerType:    pgtype.Text{Valid: false},
+			OwnerID:      pgtype.Int8{Valid: false},
 			Confidential: true,
 		})
 		if err != nil {
@@ -126,9 +144,31 @@ func (h *AppsHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 // VerifyCredentials handles GET /api/v1/apps/verify_credentials
 func (h *AppsHandler) VerifyCredentials(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	if h.useDB() {
+		appID, ok := middleware.GetAppID(ctx)
+		if ok {
+			app, err := h.queries.GetOAuthApplication(ctx, appID)
+			if err == nil {
+				website := ""
+				if app.Website.Valid {
+					website = app.Website.String
+				}
+				web.JSON(w, http.StatusOK, map[string]interface{}{
+					"name":      app.Name,
+					"website":   website,
+					"vapid_key": "", // TODO: Implement VAPID key support
+				})
+				return
+			}
+		}
+	}
+
 	web.JSON(w, http.StatusOK, map[string]interface{}{
-		"name":    "Test App",
-		"website": nil,
+		"name":      "Test App",
+		"website":   nil,
+		"vapid_key": "",
 	})
 }
 

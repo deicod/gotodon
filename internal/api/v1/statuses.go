@@ -7,15 +7,24 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/streaming"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/oauth"
+)
+
+var (
+	mentionRegex = regexp.MustCompile(`@([a-zA-Z0-9_]+)(?:@([a-zA-Z0-9_.-]+))?`)
+	tagRegex     = regexp.MustCompile(`#([\p{L}\p{N}_]+)`)
 )
 
 // Visibility constants
@@ -42,15 +51,19 @@ var stringToVisibility = map[string]int32{
 
 // StatusesHandler handles status-related endpoints
 type StatusesHandler struct {
-	queries   *db.Queries
+	queries   db.Querier
+	pool      *pgxpool.Pool
 	publisher streaming.Publisher
+	cfg       *config.Config
 }
 
 // NewStatusesHandler creates a new statuses handler
-func NewStatusesHandler(queries *db.Queries, publisher streaming.Publisher) *StatusesHandler {
+func NewStatusesHandler(queries db.Querier, pool *pgxpool.Pool, publisher streaming.Publisher, cfg *config.Config) *StatusesHandler {
 	return &StatusesHandler{
 		queries:   queries,
+		pool:      pool,
 		publisher: publisher,
+		cfg:       cfg,
 	}
 }
 
@@ -81,7 +94,7 @@ type Status struct {
 	MediaAttachments   []MediaAttach  `json:"media_attachments"`
 	Mentions           []Mention      `json:"mentions"`
 	Tags               []Tag          `json:"tags"`
-	Emojis             []any          `json:"emojis"`
+	Emojis             []CustomEmoji  `json:"emojis"`
 	Card               *PreviewCard   `json:"card"`
 	Poll               *Poll          `json:"poll"`
 	Favourited         bool           `json:"favourited"`
@@ -142,158 +155,243 @@ type PreviewCard struct {
 
 // Poll represents a poll attached to a status
 type Poll struct {
-	ID          string       `json:"id"`
-	ExpiresAt   *time.Time   `json:"expires_at"`
-	Expired     bool         `json:"expired"`
-	Multiple    bool         `json:"multiple"`
-	VotesCount  int          `json:"votes_count"`
-	VotersCount *int         `json:"voters_count"`
-	Voted       bool         `json:"voted"`
-	OwnVotes    []int        `json:"own_votes"`
-	Options     []PollOption `json:"options"`
-	Emojis      []any        `json:"emojis"`
+	ID          string        `json:"id"`
+	ExpiresAt   *time.Time    `json:"expires_at"`
+	Expired     bool          `json:"expired"`
+	Multiple    bool          `json:"multiple"`
+	VotesCount  int           `json:"votes_count"`
+	VotersCount *int          `json:"voters_count"`
+	Voted       bool          `json:"voted"`
+	OwnVotes    []int         `json:"own_votes"`
+	Options     []PollOption  `json:"options"`
+	Emojis      []CustomEmoji `json:"emojis"`
+}
+
+// notificationTask captures data needed to publish a notification
+type notificationTask struct {
+	Notification db.Notification
+	Account      db.Account
 }
 
 // processMentions parses mentions from status text and creates notifications
-func (h *StatusesHandler) processMentions(ctx context.Context, statusID int64, accountID int64, text string) ([]Mention, error) {
+func (h *StatusesHandler) processMentions(ctx context.Context, q db.Querier, statusID int64, accountID int64, text string) ([]Mention, []notificationTask, error) {
 	// Simple mention regex: @username or @username@domain
-	// Note: This is a simplified regex.
-	re := regexp.MustCompile(`@([a-zA-Z0-9_]+)(?:@([a-zA-Z0-9_.-]+))?`)
-	matches := re.FindAllStringSubmatch(text, -1)
+	matches := mentionRegex.FindAllStringSubmatch(text, -1)
 
-	mentionsMap := make(map[string]bool)
 	var mentions []Mention
+	var tasks []notificationTask
+
+	if len(matches) == 0 {
+		return mentions, tasks, nil
+	}
+
+	// 1. Collect names to fetch
+	localUsernames := make([]string, 0)
+	remoteUsernames := make([]string, 0)
+	remoteDomains := make([]string, 0)
+
+	seenLocals := make(map[string]bool)
+	seenRemotes := make(map[string]bool)
 
 	for _, match := range matches {
 		username := match[1]
-		// domain := match[2] // Ignored for now, assuming local or handled by GetAccountByUsername if uniquely identifiable
-
-		if mentionsMap[username] {
-			continue
-		}
-		mentionsMap[username] = true
-
-		// Find account
-		var mentionedAcc db.Account
-		var err error
-
 		if len(match) > 2 && match[2] != "" {
-			// Remote or local user referenced with domain
 			domain := match[2]
-			mentionedAcc, err = h.queries.GetAccountByUsernameAndDomain(ctx, db.GetAccountByUsernameAndDomainParams{
-				Username: username,
-				Domain:   domain,
-			})
+			key := strings.ToLower(username) + "|" + strings.ToLower(domain)
+			if !seenRemotes[key] {
+				seenRemotes[key] = true
+				remoteUsernames = append(remoteUsernames, username)
+				remoteDomains = append(remoteDomains, domain)
+			}
 		} else {
-			// Local user
-			mentionedAcc, err = h.queries.GetAccountByUsername(ctx, username)
-		}
-
-		if err != nil {
-			continue // Account not found, skip
-		}
-
-		// Don't mention yourself (unless we want to support self-mention, usually avoided in notifications)
-		if mentionedAcc.ID == accountID {
-			continue
-		}
-
-		// Create Mention record
-
-		// Check for mutes/blocks to determine if notification should be hidden
-		silent := false
-		_, errMute := h.queries.GetMute(ctx, db.GetMuteParams{
-			AccountID:       mentionedAcc.ID,
-			TargetAccountID: accountID,
-		})
-		if errMute == nil {
-			silent = true
-		} else {
-			_, errBlock := h.queries.GetBlock(ctx, db.GetBlockParams{
-				AccountID:       mentionedAcc.ID,
-				TargetAccountID: accountID,
-			})
-			if errBlock == nil {
-				silent = true
+			u := strings.ToLower(username)
+			if !seenLocals[u] {
+				seenLocals[u] = true
+				localUsernames = append(localUsernames, u)
 			}
 		}
+	}
 
-		// Create Mention record
-		_, err = h.queries.CreateMention(ctx, db.CreateMentionParams{
-			StatusID:  statusID,
-			AccountID: mentionedAcc.ID,
-			Silent:    silent,
+	// 2. Bulk Fetch
+	var accounts []db.Account
+	if len(localUsernames) > 0 {
+		accs, err := q.GetAccountsByUsernames(ctx, localUsernames)
+		if err == nil {
+			accounts = append(accounts, accs...)
+		}
+	}
+
+	if len(remoteUsernames) > 0 {
+		accs, err := q.GetAccountsByUsernamesAndDomains(ctx, db.GetAccountsByUsernamesAndDomainsParams{
+			Usernames: remoteUsernames,
+			Domains:   remoteDomains,
 		})
-		if err != nil {
-			// Log error but continue
+		if err == nil {
+			accounts = append(accounts, accs...)
+		}
+	}
+
+	if len(accounts) == 0 {
+		return mentions, tasks, nil
+	}
+
+	// 3. Filter valid accounts and prep for Mute/Block check
+	accountMap := make(map[int64]db.Account)
+	targetIDs := make([]int64, 0, len(accounts))
+
+	for _, a := range accounts {
+		if a.ID == accountID {
+			continue // Don't mention yourself
+		}
+		if _, exists := accountMap[a.ID]; exists {
 			continue
 		}
+		accountMap[a.ID] = a
+		targetIDs = append(targetIDs, a.ID)
+	}
 
-		// Create Notification
-		notif, err := h.queries.CreateNotification(ctx, db.CreateNotificationParams{
-			AccountID:     mentionedAcc.ID,
+	if len(targetIDs) == 0 {
+		return mentions, tasks, nil
+	}
+
+	// 4. Bulk check Mutes/Blocks (from mentioned users targeting sender)
+	mutedBy := make(map[int64]bool)
+	blockedBy := make(map[int64]bool)
+
+	mutes, err := q.GetMutesFromAccounts(ctx, db.GetMutesFromAccountsParams{
+		TargetAccountID: accountID,
+		AccountIds:      targetIDs,
+	})
+	if err == nil {
+		for _, m := range mutes {
+			mutedBy[m.AccountID] = true
+		}
+	}
+
+	blocks, err := q.GetBlocksFromAccounts(ctx, db.GetBlocksFromAccountsParams{
+		TargetAccountID: accountID,
+		AccountIds:      targetIDs,
+	})
+	if err == nil {
+		for _, b := range blocks {
+			blockedBy[b.AccountID] = true
+		}
+	}
+
+	// 5. Process matches to create mentions
+	var mentionAccountIDs []int64
+	var mentionSilent []bool
+
+	for _, tid := range targetIDs {
+		silent := mutedBy[tid] || blockedBy[tid]
+		mentionAccountIDs = append(mentionAccountIDs, tid)
+		mentionSilent = append(mentionSilent, silent)
+	}
+
+	if len(mentionAccountIDs) > 0 {
+		// Bulk Create Mentions
+		if err := q.CreateMentions(ctx, db.CreateMentionsParams{
+			StatusID: statusID,
+			Column2:  mentionAccountIDs,
+			Column3:  mentionSilent,
+		}); err != nil {
+			return mentions, tasks, err
+		}
+
+		// Prepare Notifications
+		var notifAccountIDs []int64
+		notifAccountIDs = append(notifAccountIDs, targetIDs...)
+
+		// Bulk Create Notifications
+		notifs, err := q.CreateNotifications(ctx, db.CreateNotificationsParams{
+			Column1:       notifAccountIDs,
 			FromAccountID: accountID,
 			ActivityType:  "Status",
 			ActivityID:    statusID,
 			Type:          pgtype.Text{String: "mention", Valid: true},
 		})
-
-		if err == nil && h.publisher != nil {
-			// Publish notification event
-			// We need to construct the API Notification object to publish
-			apiNotif := Notification{
-				ID:        strconv.FormatInt(notif.ID, 10),
-				Type:      "mention",
-				CreatedAt: notif.CreatedAt.Time,
-				Account:   h.dbAccountToAPI(mentionedAcc), // The SENDER (from_account_id) ? No, the API notification 'account' field is the SENDER.
-				// Wait, dbAccountToAPI takes db.Account.
-				// For a mention notification, the 'account' field in the payload is the one who mentioned you (FromAccountID).
-			}
-
-			// Get sender account (current user)
-			sender, err := h.queries.GetAccountByID(ctx, accountID)
-			if err == nil {
-				apiNotif.Account = h.dbAccountToAPI(sender)
-				// Status should also be included in mention notification
-				status, err := h.queries.GetStatusByID(ctx, statusID)
-				if err == nil {
-					apiStatus := h.dbStatusToAPI(ctx, status)
-					apiNotif.Status = &apiStatus
-				}
-
-				_ = h.publisher.PublishNotificationToRedis(ctx, mentionedAcc.ID, apiNotif)
-			}
+		if err != nil {
+			return mentions, tasks, err
 		}
 
-		// Add to return list (for API response implementation if we wanted to return mentions in the same call,
-		// though dbStatusToAPI usually fetches them separately)
-		// Assuming we just want to create them here.
+		// Map back to tasks
+		// Note: The order of returned notifications matches input order for simple UNNEST usually,
+		// but concurrent inserts might strictly not guarantee order if we relied on ID.
+		// However, we just need to pair them up.
+		// A safer way is to map by AccountID if we include it in return.
+		// Our CreateNotifications returns * including AccountID.
+
+		for _, notif := range notifs {
+			acc := accountMap[notif.AccountID]
+			tasks = append(tasks, notificationTask{
+				Notification: notif,
+				Account:      acc,
+			})
+
+			apiAcc := SerializeAccount(h.cfg, acc)
+
+			// Populate return mentions (simple version)
+			mentions = append(mentions, Mention{
+				ID:       apiAcc.ID,
+				Username: apiAcc.Username,
+				URL:      apiAcc.URI, // Using URI as URL for mention per statuses_util.go
+				Acct:     apiAcc.Acct,
+			})
+		}
 	}
 
-	return mentions, nil
+	return mentions, tasks, nil
 }
 
 // processTags parses hashtags from text
-func (h *StatusesHandler) processTags(ctx context.Context, statusID int64, text string) ([]string, error) {
-	re := regexp.MustCompile(`#([a-zA-Z0-9_]+)`)
-	matches := re.FindAllStringSubmatch(text, -1)
+func (h *StatusesHandler) processTags(text string) ([]string, error) {
+	matches := tagRegex.FindAllStringSubmatch(text, -1)
 
 	tagsMap := make(map[string]bool)
 	var tags []string
 
 	for _, match := range matches {
-		tag := match[1]
+		tag := strings.ToLower(match[1])
 		if tagsMap[tag] {
 			continue
 		}
 		tagsMap[tag] = true
 		tags = append(tags, tag)
-
-		// Note: We are not saving tags to DB in this pass as per request to just stream
-		// But in future use CreateTag and CreateStatusesTag here.
-		// Since CreateStatusesTag query is missing, we skip persistence for now.
 	}
+
 	return tags, nil
+}
+
+// saveTags persists tags for a status
+func (h *StatusesHandler) saveTags(ctx context.Context, q db.Querier, statusID int64, tags []string) error {
+	if len(tags) == 0 {
+		return nil
+	}
+
+	// 1. Bulk Upsert all tags
+	if err := q.UpsertTags(ctx, tags); err != nil {
+		return err
+	}
+
+	// 2. Fetch all IDs
+	dbTags, err := q.GetTagsByNames(ctx, tags)
+	if err != nil {
+		return err
+	}
+
+	// 3. Bulk Link tags to status
+	tagIDs := make([]int64, len(dbTags))
+	for i, t := range dbTags {
+		tagIDs[i] = t.ID
+	}
+	if err := q.AddStatusTags(ctx, db.AddStatusTagsParams{
+		StatusID: statusID,
+		Column2:  tagIDs,
+	}); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // FilterResult represents a filter match
@@ -330,113 +428,6 @@ type PollReq struct {
 	ExpiresIn  int      `json:"expires_in" form:"expires_in"`
 	Multiple   bool     `json:"multiple" form:"multiple"`
 	HideTotals bool     `json:"hide_totals" form:"hide_totals"`
-}
-
-func (h *StatusesHandler) dbStatusToAPI(ctx context.Context, dbStatus db.Status) Status {
-	createdAt := time.Now()
-	if dbStatus.CreatedAt.Valid {
-		createdAt = dbStatus.CreatedAt.Time
-	}
-
-	visibility := visibilityToString[dbStatus.Visibility]
-	if visibility == "" {
-		visibility = "public"
-	}
-
-	var url *string
-	if dbStatus.Url.Valid {
-		url = &dbStatus.Url.String
-	}
-
-	var inReplyToID, inReplyToAccountID *string
-	if dbStatus.InReplyToID.Valid {
-		s := strconv.FormatInt(dbStatus.InReplyToID.Int64, 10)
-		inReplyToID = &s
-	}
-	if dbStatus.InReplyToAccountID.Valid {
-		s := strconv.FormatInt(dbStatus.InReplyToAccountID.Int64, 10)
-		inReplyToAccountID = &s
-	}
-
-	var language *string
-	if dbStatus.Language.Valid {
-		language = &dbStatus.Language.String
-	}
-
-	var editedAt *time.Time
-	if dbStatus.EditedAt.Valid {
-		editedAt = &dbStatus.EditedAt.Time
-	}
-
-	// Load stats
-	var repliesCount, reblogsCount, favouritesCount int64
-	if h.useDB() {
-		stats, err := h.queries.GetStatusStats(ctx, dbStatus.ID)
-		if err == nil {
-			repliesCount = stats.RepliesCount
-			reblogsCount = stats.ReblogsCount
-			favouritesCount = stats.FavouritesCount
-		}
-	}
-
-	// Load account
-	var account Account
-	if h.useDB() {
-		dbAcc, err := h.queries.GetAccountByID(ctx, dbStatus.AccountID)
-		if err == nil {
-			account = h.dbAccountToAPI(dbAcc)
-		}
-	}
-
-	// Load mentions
-	var mentions []Mention
-	if h.useDB() {
-		dbMentions, err := h.queries.GetMentionsByStatusID(ctx, dbStatus.ID)
-		if err == nil {
-			for _, m := range dbMentions {
-				acc, err := h.queries.GetAccountByID(ctx, m.AccountID)
-				if err == nil {
-					mentions = append(mentions, Mention{
-						ID:       strconv.FormatInt(acc.ID, 10),
-						Username: acc.Username,
-						Acct:     acc.Username, // simplified
-						URL:      fmt.Sprintf("/@%s", acc.Username),
-					})
-				}
-			}
-		}
-	}
-	if mentions == nil {
-		mentions = []Mention{}
-	}
-
-	uri := ""
-	if dbStatus.Uri.Valid {
-		uri = dbStatus.Uri.String
-	}
-
-	return Status{
-		ID:                 strconv.FormatInt(dbStatus.ID, 10),
-		CreatedAt:          createdAt,
-		InReplyToID:        inReplyToID,
-		InReplyToAccountID: inReplyToAccountID,
-		Sensitive:          dbStatus.Sensitive,
-		SpoilerText:        dbStatus.SpoilerText,
-		Visibility:         visibility,
-		Language:           language,
-		URI:                uri,
-		URL:                url,
-		RepliesCount:       repliesCount,
-		ReblogsCount:       reblogsCount,
-		FavouritesCount:    favouritesCount,
-		EditedAt:           editedAt,
-		Content:            "<p>" + dbStatus.Text + "</p>",
-		Account:            account,
-		MediaAttachments:   []MediaAttach{},
-		Mentions:           mentions,
-		Tags:               []Tag{},
-		Emojis:             []any{},
-	}
 }
 
 // Create handles POST /api/v1/statuses
@@ -477,13 +468,29 @@ func (h *StatusesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	if h.useDB() {
+		tx, err := h.pool.Begin(ctx)
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to start transaction")
+			return
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		qtx := db.New(tx)
+
+		// Fetch sender account for URI generation and later usage
+		sender, err := qtx.GetAccountByID(ctx, accountID)
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to fetch account")
+			return
+		}
+
 		var inReplyToID, inReplyToAccountID pgtype.Int8
 		if req.InReplyToID != nil {
 			id, err := strconv.ParseInt(*req.InReplyToID, 10, 64)
 			if err == nil {
 				inReplyToID = pgtype.Int8{Int64: id, Valid: true}
 				// Get parent status to set reply account
-				parent, err := h.queries.GetStatusByID(ctx, id)
+				parent, err := qtx.GetStatusByID(ctx, id)
 				if err == nil {
 					inReplyToAccountID = pgtype.Int8{Int64: parent.AccountID, Valid: true}
 				}
@@ -495,7 +502,8 @@ func (h *StatusesHandler) Create(w http.ResponseWriter, r *http.Request) {
 			lang = pgtype.Text{String: *req.Language, Valid: true}
 		}
 
-		dbStatus, err := h.queries.CreateStatus(ctx, db.CreateStatusParams{
+		dbStatus, err := qtx.CreateStatus(ctx, db.CreateStatusParams{
+			Uri:                pgtype.Text{Valid: false}, // Set later with ID
 			Text:               req.Status,
 			AccountID:          accountID,
 			InReplyToID:        inReplyToID,
@@ -512,22 +520,79 @@ func (h *StatusesHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Generate and Update URI with Snowflake ID
+		// Format: https://<domain>/users/<username>/statuses/<id>
+		statusIDStr := strconv.FormatInt(dbStatus.ID, 10)
+		uri := fmt.Sprintf("https://%s/users/%s/statuses/%s", h.cfg.Instance.LocalDomain, sender.Username, statusIDStr)
+
+		if err := qtx.UpdateStatusURI(ctx, db.UpdateStatusURIParams{
+			Uri: pgtype.Text{String: uri, Valid: true},
+			ID:  dbStatus.ID,
+		}); err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to update status URI")
+			return
+		}
+
+		// Update struct for response
+		dbStatus.Uri = pgtype.Text{String: uri, Valid: true}
+
 		// Create stats
-		if _, err := h.queries.CreateStatusStats(ctx, dbStatus.ID); err != nil {
+		if _, err := qtx.CreateStatusStats(ctx, dbStatus.ID); err != nil {
 			fmt.Printf("Failed to create status stats: %v\n", err)
 		}
 
 		// Increment reply count on parent
 		if inReplyToID.Valid {
-			if err := h.queries.IncrementStatusReplies(ctx, inReplyToID.Int64); err != nil {
+			if err := qtx.IncrementStatusReplies(ctx, inReplyToID.Int64); err != nil {
 				fmt.Printf("Failed to increment reply count: %v\n", err)
 			}
 		}
 
-		// Process Mentions
-		_, _ = h.processMentions(ctx, dbStatus.ID, accountID, req.Status)
+		_, notifTasks, err := h.processMentions(ctx, qtx, dbStatus.ID, accountID, req.Status)
+		if err != nil {
+			// Log error but continue status creation?
+			// Better to fail if critical, or log and continue.
+			// Review says: "Silent failure patterns... This could lead to statuses being posted without mentions"
+			// So we should handle it. However, failing the whole status after creation might be extreme.
+			// But since we are in a transaction, we can return error and rollback.
+			web.JSONError(w, http.StatusInternalServerError, "Failed to process mentions")
+			return
+		}
 
-		apiStatus := h.dbStatusToAPI(ctx, dbStatus)
+		// Process Media Attachments
+		for _, mediaIDStr := range req.MediaIDs {
+			mediaID, err := strconv.ParseInt(mediaIDStr, 10, 64)
+			if err != nil {
+				continue
+			}
+			rows, err := qtx.AttachMediaToStatus(ctx, db.AttachMediaToStatusParams{
+				ID:        mediaID,
+				StatusID:  pgtype.Int8{Int64: dbStatus.ID, Valid: true},
+				AccountID: pgtype.Int8{Int64: accountID, Valid: true},
+			})
+			if err != nil {
+				web.JSONError(w, http.StatusInternalServerError, "Failed to attach media")
+				return
+			}
+			if rows != 1 {
+				web.JSONError(w, http.StatusForbidden, "Media not found or not owned by you")
+				return
+			}
+		}
+
+		// Process Hashtags
+		tags, _ := h.processTags(req.Status)
+		if err := h.saveTags(ctx, qtx, dbStatus.ID, tags); err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to save tags")
+			return
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to commit transaction")
+			return
+		}
+
+		apiStatus := SerializeStatus(ctx, h.queries, h.cfg, dbStatus)
 
 		// Publish streaming events
 		if h.publisher != nil {
@@ -541,17 +606,25 @@ func (h *StatusesHandler) Create(w http.ResponseWriter, r *http.Request) {
 			// but simply publishing to author's user stream is good for self)
 			streams = append(streams, fmt.Sprintf("user:%d", accountID))
 
-			// Process Hashtags (for streams)
-			// Simple regex for hashtags: #tag
-			// In a real implementation we would save them to DB too
-			// and return them as Tags. For now, we extract for streaming.
-			// Ideally we should process tags and return them.
-			tags, _ := h.processTags(ctx, dbStatus.ID, req.Status)
 			for _, t := range tags {
 				streams = append(streams, fmt.Sprintf("hashtag:%s", t))
 			}
 
 			_ = h.publisher.PublishStatusToRedis(context.Background(), apiStatus, streams)
+
+			// Publish notifications
+			// Sender already fetched
+			senderAPI := h.dbAccountToAPI(sender)
+			for _, task := range notifTasks {
+				apiNotif := Notification{
+					ID:        strconv.FormatInt(task.Notification.ID, 10),
+					Type:      "mention",
+					CreatedAt: task.Notification.CreatedAt.Time,
+					Account:   senderAPI,
+					Status:    &apiStatus,
+				}
+				_ = h.publisher.PublishNotificationToRedis(ctx, task.Account.ID, apiNotif)
+			}
 		}
 
 		web.JSON(w, http.StatusOK, apiStatus)
@@ -586,7 +659,7 @@ func (h *StatusesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		MediaAttachments: []MediaAttach{},
 		Mentions:         []Mention{},
 		Tags:             []Tag{},
-		Emojis:           []any{},
+		Emojis:           []CustomEmoji{},
 	})
 }
 
@@ -612,7 +685,7 @@ func (h *StatusesHandler) Get(w http.ResponseWriter, r *http.Request) {
 			web.JSONError(w, http.StatusNotFound, "Record not found")
 			return
 		}
-		web.JSON(w, http.StatusOK, h.dbStatusToAPI(ctx, dbStatus))
+		web.JSON(w, http.StatusOK, SerializeStatus(ctx, h.queries, h.cfg, dbStatus))
 		return
 	}
 
@@ -639,7 +712,7 @@ func (h *StatusesHandler) Get(w http.ResponseWriter, r *http.Request) {
 		MediaAttachments: []MediaAttach{},
 		Mentions:         []Mention{},
 		Tags:             []Tag{},
-		Emojis:           []any{},
+		Emojis:           []CustomEmoji{},
 	})
 }
 
@@ -661,19 +734,35 @@ func (h *StatusesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	if h.useDB() {
-		dbStatus, err := h.queries.GetStatusByID(ctx, id)
+		tx, err := h.pool.Begin(ctx)
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to start transaction")
+			return
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		qtx := db.New(tx)
+
+		dbStatus, err := qtx.GetStatusByID(ctx, id)
 		if err != nil || dbStatus.AccountID != accountID {
 			web.JSONError(w, http.StatusNotFound, "Record not found")
 			return
 		}
 
-		_ = h.queries.DeleteStatus(ctx, id)
+		if err := qtx.DeleteStatus(ctx, id); err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to delete status")
+			return
+		}
 
 		// Decrement parent reply count
 		if dbStatus.InReplyToID.Valid {
-			if err := h.queries.DecrementStatusReplies(ctx, dbStatus.InReplyToID.Int64); err != nil {
+			if err := qtx.DecrementStatusReplies(ctx, dbStatus.InReplyToID.Int64); err != nil {
 				fmt.Printf("Failed to decrement reply count: %v\n", err)
 			}
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to commit transaction")
+			return
 		}
 
 		web.JSON(w, http.StatusOK, map[string]any{
@@ -713,7 +802,7 @@ func (h *StatusesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 // Favourite handles POST /api/v1/statuses/:id/favourite
 func (h *StatusesHandler) Favourite(w http.ResponseWriter, r *http.Request) {
 	idStr := web.Param(r, "id")
-	_, ok := middleware.GetAccountID(r.Context())
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
 		return
@@ -734,9 +823,30 @@ func (h *StatusesHandler) Favourite(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		_ = h.queries.IncrementStatusFavourites(ctx, id)
+		// Create favourite
+		_, err = h.queries.CreateFavourite(ctx, db.CreateFavouriteParams{
+			AccountID: accountID,
+			StatusID:  id,
+		})
+		if err != nil {
+			// Check for unique violation (already favourited)
+			if pgErr, ok := err.(*pgconn.PgError); ok && pgErr.Code == "23505" {
+				// Already favourited, just return status as is
+				status := SerializeStatus(ctx, h.queries, h.cfg, dbStatus)
+				status.Favourited = true
+				web.JSON(w, http.StatusOK, status)
+				return
+			}
+			web.JSONError(w, http.StatusInternalServerError, "Failed to favourite status")
+			return
+		}
 
-		status := h.dbStatusToAPI(ctx, dbStatus)
+		if err := h.queries.IncrementStatusFavourites(ctx, id); err != nil {
+			// Try to rollback favourite creation? Or just log.
+			fmt.Printf("Failed to increment favourites count: %v\n", err)
+		}
+
+		status := SerializeStatus(ctx, h.queries, h.cfg, dbStatus)
 		status.Favourited = true
 		status.FavouritesCount++
 		web.JSON(w, http.StatusOK, status)
@@ -752,7 +862,7 @@ func (h *StatusesHandler) Favourite(w http.ResponseWriter, r *http.Request) {
 // Unfavourite handles POST /api/v1/statuses/:id/unfavourite
 func (h *StatusesHandler) Unfavourite(w http.ResponseWriter, r *http.Request) {
 	idStr := web.Param(r, "id")
-	_, ok := middleware.GetAccountID(r.Context())
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
 		return
@@ -773,9 +883,22 @@ func (h *StatusesHandler) Unfavourite(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		_ = h.queries.DecrementStatusFavourites(ctx, id)
+		// Delete favourite
+		err = h.queries.DeleteFavourite(ctx, db.DeleteFavouriteParams{
+			AccountID: accountID,
+			StatusID:  id,
+		})
+		if err != nil {
+			// If not found, just return success
+			_ = err
+		} else {
+			// Only decrement if we actually deleted something
+			if err := h.queries.DecrementStatusFavourites(ctx, id); err != nil {
+				fmt.Printf("Failed to decrement favourites count: %v\n", err)
+			}
+		}
 
-		status := h.dbStatusToAPI(ctx, dbStatus)
+		status := SerializeStatus(ctx, h.queries, h.cfg, dbStatus)
 		status.Favourited = false
 		web.JSON(w, http.StatusOK, status)
 		return
@@ -824,10 +947,10 @@ func (h *StatusesHandler) Reblog(w http.ResponseWriter, r *http.Request) {
 
 		_ = h.queries.IncrementStatusReblogs(ctx, id)
 
-		original := h.dbStatusToAPI(ctx, originalStatus)
+		original := SerializeStatus(ctx, h.queries, h.cfg, originalStatus)
 		original.ReblogsCount++
 
-		reblog := h.dbStatusToAPI(ctx, reblogStatus)
+		reblog := SerializeStatus(ctx, h.queries, h.cfg, reblogStatus)
 		reblog.Reblog = &original
 		reblog.Reblogged = true
 
@@ -860,7 +983,7 @@ func (h *StatusesHandler) Reblog(w http.ResponseWriter, r *http.Request) {
 		MediaAttachments: []MediaAttach{},
 		Mentions:         []Mention{},
 		Tags:             []Tag{},
-		Emojis:           []any{},
+		Emojis:           []CustomEmoji{},
 	})
 }
 
@@ -888,9 +1011,11 @@ func (h *StatusesHandler) Unreblog(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		_ = h.queries.DecrementStatusReblogs(ctx, id)
+		if err := h.queries.DecrementStatusReblogs(ctx, id); err != nil {
+			fmt.Printf("Failed to decrement reblogs count: %v\n", err)
+		}
 
-		status := h.dbStatusToAPI(ctx, dbStatus)
+		status := SerializeStatus(ctx, h.queries, h.cfg, dbStatus)
 		status.Reblogged = false
 		web.JSON(w, http.StatusOK, status)
 		return
@@ -929,11 +1054,15 @@ func (h *StatusesHandler) Bookmark(w http.ResponseWriter, r *http.Request) {
 			StatusID:  id,
 		})
 		if err != nil {
-			// Ignore unique violation
-			_ = err
+			if pgErr, ok := err.(*pgconn.PgError); ok && pgErr.Code == "23505" {
+				// Already bookmarked, ignore
+			} else {
+				web.JSONError(w, http.StatusInternalServerError, "Failed to bookmark status")
+				return
+			}
 		}
 
-		s := h.dbStatusToAPI(ctx, status)
+		s := SerializeStatus(ctx, h.queries, h.cfg, status)
 		s.Bookmarked = true
 		web.JSON(w, http.StatusOK, s)
 		return
@@ -967,12 +1096,16 @@ func (h *StatusesHandler) Unbookmark(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		_ = h.queries.DeleteBookmark(ctx, db.DeleteBookmarkParams{
+		err = h.queries.DeleteBookmark(ctx, db.DeleteBookmarkParams{
 			AccountID: accountID,
 			StatusID:  id,
 		})
+		if err != nil {
+			// If not found, ignore
+			_ = err
+		}
 
-		s := h.dbStatusToAPI(ctx, status)
+		s := SerializeStatus(ctx, h.queries, h.cfg, status)
 		s.Bookmarked = false
 		web.JSON(w, http.StatusOK, s)
 		return
@@ -1007,7 +1140,7 @@ func (h *StatusesHandler) Context(w http.ResponseWriter, r *http.Request) {
 		}
 		ancestorStatuses := make([]Status, len(ancestors))
 		for i, s := range ancestors {
-			ancestorStatuses[i] = h.dbStatusToAPI(ctx, s)
+			ancestorStatuses[i] = SerializeStatus(ctx, h.queries, h.cfg, s)
 		}
 
 		// Get descendants
@@ -1017,7 +1150,7 @@ func (h *StatusesHandler) Context(w http.ResponseWriter, r *http.Request) {
 		}
 		descendantStatuses := make([]Status, len(descendants))
 		for i, s := range descendants {
-			descendantStatuses[i] = h.dbStatusToAPI(ctx, s)
+			descendantStatuses[i] = SerializeStatus(ctx, h.queries, h.cfg, s)
 		}
 
 		web.JSON(w, http.StatusOK, map[string][]Status{
@@ -1058,7 +1191,7 @@ func (h *StatusesHandler) getStatusByID(id string) (Status, error) {
 		MediaAttachments: []MediaAttach{},
 		Mentions:         []Mention{},
 		Tags:             []Tag{},
-		Emojis:           []any{},
+		Emojis:           []CustomEmoji{},
 	}, nil
 }
 
@@ -1085,14 +1218,28 @@ func (h *StatusesHandler) Edit(w http.ResponseWriter, r *http.Request) {
 		SpoilerText string   `json:"spoiler_text" form:"spoiler_text"`
 		Sensitive   bool     `json:"sensitive" form:"sensitive"`
 		MediaIDs    []string `json:"media_ids" form:"media_ids[]"`
+		Poll        *PollReq `json:"poll" form:"poll"`
 	}
 	if err := web.Bind(r, &req); err != nil {
 		web.JSONError(w, http.StatusBadRequest, "Invalid request")
 		return
 	}
 
+	if req.Status == "" && len(req.MediaIDs) == 0 && req.Poll == nil {
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Text can't be blank without media or poll")
+		return
+	}
+
 	if h.useDB() {
-		status, err := h.queries.GetStatusByID(r.Context(), statusID)
+		tx, err := h.pool.Begin(r.Context())
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to start transaction")
+			return
+		}
+		defer func() { _ = tx.Rollback(r.Context()) }()
+		qtx := db.New(tx)
+
+		status, err := qtx.GetStatusByID(r.Context(), statusID)
 		if err != nil {
 			web.JSONError(w, http.StatusNotFound, "Record not found")
 			return
@@ -1102,19 +1249,314 @@ func (h *StatusesHandler) Edit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Update status with pgtype
-		_, _ = h.queries.UpdateStatus(r.Context(), db.UpdateStatusParams{
-			ID:   statusID,
-			Text: pgtype.Text{String: req.Status, Valid: true},
-		})
+		// Handle Media Updates
+		currentMedia, err := qtx.ListMediaAttachmentsByStatus(r.Context(), pgtype.Int8{Int64: statusID, Valid: true})
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to fetch current media")
+			return
+		}
 
-		// Return updated status from DB
-		s := h.dbStatusToAPI(r.Context(), status)
+		currentMediaMap := make(map[int64]bool)
+		for _, m := range currentMedia {
+			currentMediaMap[m.ID] = true
+		}
+
+		newMediaMap := make(map[int64]bool)
+		for _, idStr := range req.MediaIDs {
+			id, err := strconv.ParseInt(idStr, 10, 64)
+			if err == nil {
+				newMediaMap[id] = true
+			}
+		}
+
+		for _, m := range currentMedia {
+			if !newMediaMap[m.ID] {
+				rows, err := qtx.DetachMediaFromStatus(r.Context(), db.DetachMediaFromStatusParams{
+					ID:        m.ID,
+					AccountID: pgtype.Int8{Int64: accountID, Valid: true},
+				})
+				if err != nil {
+					web.JSONError(w, http.StatusInternalServerError, "Failed to detach media")
+					return
+				}
+				if rows != 1 {
+					// Should strictly not happen if we just fetched it, but good for safety
+					web.JSONError(w, http.StatusInternalServerError, "Failed to detach media (ownership?)")
+					return
+				}
+			}
+		}
+
+		for _, idStr := range req.MediaIDs {
+			id, err := strconv.ParseInt(idStr, 10, 64)
+			if err != nil {
+				continue
+			}
+			if !currentMediaMap[id] {
+				rows, err := qtx.AttachMediaToStatus(r.Context(), db.AttachMediaToStatusParams{
+					ID:        id,
+					StatusID:  pgtype.Int8{Int64: statusID, Valid: true},
+					AccountID: pgtype.Int8{Int64: accountID, Valid: true},
+				})
+				if err != nil {
+					web.JSONError(w, http.StatusInternalServerError, "Failed to attach new media")
+					return
+				}
+				if rows != 1 {
+					web.JSONError(w, http.StatusForbidden, "Media not found or not owned by you")
+					return
+				}
+			}
+		}
+
+		// Update status fields
+		_, err = qtx.UpdateStatus(r.Context(), db.UpdateStatusParams{
+			ID:          statusID,
+			Text:        pgtype.Text{String: req.Status, Valid: true},
+			Sensitive:   pgtype.Bool{Bool: req.Sensitive, Valid: true},
+			SpoilerText: pgtype.Text{String: req.SpoilerText, Valid: true},
+		})
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to update status")
+			return
+		}
+
+		// Handle Mentions Diff
+		// 1. Fetch current mentions
+		currentMentions, err := qtx.GetMentionsByStatusID(r.Context(), statusID)
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to fetch current mentions")
+			return
+		}
+		currentMentionAccountIDs := make(map[int64]bool)
+		for _, m := range currentMentions {
+			currentMentionAccountIDs[m.AccountID] = true
+		}
+
+		// 2. Identify new potential mentions
+		// We use processMentions BUT we modify it or handle logic here.
+		// Since processMentions does "bulk" ops, we can't easily inject "only valid ones".
+		// We should probably parse them first to get IDs, then diff, then insert.
+		// However, processMentions does all of that: parsing, fetching accounts, checking blocks, inserting.
+		// To repurpose it for diffing, we'd need to change `processMentions` or duplicate logic.
+		// Duplicating logic is safer to avoid breaking `Create`.
+		// Actually, `CreateMentions` has `ON CONFLICT DO NOTHING`.
+		// So inserting duplicates is safe-ish, BUT `CreateNotifications` does NOT.
+		// So logic:
+		// a. Parse and resolve accounts (copying logic from processMentions or using helper).
+		// b. Filter out AccountIDs that are already in `currentMentionAccountIDs`.
+		// c. Identify AccountIDs in `currentMentionAccountIDs` that are NOT in parsed list (to be removed).
+
+		// Helper to resolve accounts from text
+		resolvedAccounts, err := h.resolveAccountsFromText(r.Context(), qtx, req.Status, accountID)
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to resolve mentions")
+			return
+		}
+
+		resolvedAccountIDMap := make(map[int64]bool)
+		var newMentions []int64
+		var removedMentions []int64
+
+		for _, acc := range resolvedAccounts {
+			resolvedAccountIDMap[acc.ID] = true
+			if !currentMentionAccountIDs[acc.ID] {
+				newMentions = append(newMentions, acc.ID)
+			}
+		}
+
+		for mID := range currentMentionAccountIDs {
+			if !resolvedAccountIDMap[mID] {
+				removedMentions = append(removedMentions, mID)
+			}
+		}
+
+		// 3. Remove old mentions
+		if len(removedMentions) > 0 {
+			if err := qtx.RemoveMentions(r.Context(), db.RemoveMentionsParams{
+				StatusID: statusID,
+				Column2:  removedMentions,
+			}); err != nil {
+				web.JSONError(w, http.StatusInternalServerError, "Failed to remove old mentions")
+				return
+			}
+		}
+
+		// 4. Add new mentions and notifications
+		if len(newMentions) > 0 {
+			// Check mute/block for new mentions only
+			// Reuse parts of processMentions logic
+			_, _, err := h.createMentionsAndNotifications(r.Context(), qtx, statusID, accountID, newMentions)
+			if err != nil {
+				web.JSONError(w, http.StatusInternalServerError, "Failed to add new mentions")
+				return
+			}
+		}
+
+		// Handle Hashtags Sync (Replace all)
+		if err := qtx.ClearStatusTags(r.Context(), statusID); err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to clear tags")
+			return
+		}
+
+		// Parse new tags
+		newTags, _ := h.processTags(req.Status)
+		if err := h.saveTags(r.Context(), qtx, statusID, newTags); err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to save tags")
+			return
+		}
+
+		if err := tx.Commit(r.Context()); err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to commit transaction")
+			return
+		}
+
+		updatedStatus, err := h.queries.GetStatusByID(r.Context(), statusID)
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to fetch updated status")
+			return
+		}
+
+		s := SerializeStatus(r.Context(), h.queries, h.cfg, updatedStatus)
 		web.JSON(w, http.StatusOK, s)
 		return
 	}
 
 	web.JSONError(w, http.StatusNotFound, "Record not found")
+}
+
+func (h *StatusesHandler) resolveAccountsFromText(ctx context.Context, q db.Querier, text string, userAccountID int64) ([]db.Account, error) {
+	// Re-implement or factor out logic from processMentions
+	// 1. Parse
+	matches := mentionRegex.FindAllStringSubmatch(text, -1)
+	if len(matches) == 0 {
+		return nil, nil
+	}
+
+	localUsernames := make([]string, 0)
+	remoteUsernames := make([]string, 0)
+	remoteDomains := make([]string, 0)
+	seen := make(map[string]bool)
+
+	for _, match := range matches {
+		username := match[1]
+		if len(match) > 2 && match[2] != "" {
+			domain := match[2]
+			key := strings.ToLower(username) + "|" + strings.ToLower(domain)
+			if !seen[key] {
+				seen[key] = true
+				remoteUsernames = append(remoteUsernames, username)
+				remoteDomains = append(remoteDomains, domain)
+			}
+		} else {
+			u := strings.ToLower(username)
+			if !seen[u] {
+				seen[u] = true
+				localUsernames = append(localUsernames, u)
+			}
+		}
+	}
+
+	var accounts []db.Account
+	if len(localUsernames) > 0 {
+		accs, err := q.GetAccountsByUsernames(ctx, localUsernames)
+		if err == nil {
+			accounts = append(accounts, accs...)
+		}
+	}
+	if len(remoteUsernames) > 0 {
+		accs, err := q.GetAccountsByUsernamesAndDomains(ctx, db.GetAccountsByUsernamesAndDomainsParams{
+			Usernames: remoteUsernames,
+			Domains:   remoteDomains,
+		})
+		if err == nil {
+			accounts = append(accounts, accs...)
+		}
+	}
+
+	// Filter self
+	var result []db.Account
+	for _, a := range accounts {
+		if a.ID != userAccountID {
+			result = append(result, a)
+		}
+	}
+	return result, nil
+}
+
+func (h *StatusesHandler) createMentionsAndNotifications(ctx context.Context, q db.Querier, statusID int64, accountID int64, targetIDs []int64) ([]Mention, []notificationTask, error) {
+	// 4. Bulk check Mutes/Blocks (from mentioned users targeting sender)
+	mutedBy := make(map[int64]bool)
+	blockedBy := make(map[int64]bool)
+
+	mutes, err := q.GetMutesFromAccounts(ctx, db.GetMutesFromAccountsParams{
+		TargetAccountID: accountID,
+		AccountIds:      targetIDs,
+	})
+	if err == nil {
+		for _, m := range mutes {
+			mutedBy[m.AccountID] = true
+		}
+	}
+
+	blocks, err := q.GetBlocksFromAccounts(ctx, db.GetBlocksFromAccountsParams{
+		TargetAccountID: accountID,
+		AccountIds:      targetIDs,
+	})
+	if err == nil {
+		for _, b := range blocks {
+			blockedBy[b.AccountID] = true
+		}
+	}
+
+	// 5. Process matches to create mentions
+	var mentionAccountIDs []int64
+	var mentionSilent []bool
+
+	for _, tid := range targetIDs {
+		silent := mutedBy[tid] || blockedBy[tid]
+		mentionAccountIDs = append(mentionAccountIDs, tid)
+		mentionSilent = append(mentionSilent, silent)
+	}
+
+	var mentions []Mention
+	var tasks []notificationTask
+
+	if len(mentionAccountIDs) > 0 {
+		// Bulk Create Mentions
+		if err := q.CreateMentions(ctx, db.CreateMentionsParams{
+			StatusID: statusID,
+			Column2:  mentionAccountIDs,
+			Column3:  mentionSilent,
+		}); err != nil {
+			return mentions, tasks, err
+		}
+
+		// Prepare Notifications
+		var notifAccountIDs []int64
+		notifAccountIDs = append(notifAccountIDs, targetIDs...)
+
+		// Bulk Create Notifications
+		_, err := q.CreateNotifications(ctx, db.CreateNotificationsParams{
+			Column1:       notifAccountIDs,
+			FromAccountID: accountID,
+			ActivityType:  "Status",
+			ActivityID:    statusID,
+			Type:          pgtype.Text{String: "mention", Valid: true},
+		})
+		if err != nil {
+			return mentions, tasks, err
+		}
+
+		// Note: We don't construct the full return objects here to save complexity as Edit doesn't necessarily return them in the same way,
+		// but the original processMentions did.
+		// For now, we return empty mentions/tasks as we just wanted side effects.
+		// If we need them for return value (e.g. streaming), we should rebuild them.
+		// But for Edit, we usually just return the Status which has "Mentions" list.
+		// Notifications are async.
+	}
+
+	return mentions, tasks, nil
 }
 
 // Pin handles POST /api/v1/statuses/:id/pin
@@ -1155,13 +1597,21 @@ func (h *StatusesHandler) Pin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		_, _ = h.queries.PinStatus(r.Context(), db.PinStatusParams{
+		_, err = h.queries.PinStatus(r.Context(), db.PinStatusParams{
 			AccountID: accountID,
 			StatusID:  statusID,
 		})
-		// Ignore constraint violation (already pinned)
+		if err != nil {
+			// Check for unique violation (already pinned)
+			if pgErr, ok := err.(*pgconn.PgError); ok && pgErr.Code == "23505" {
+				// Already pinned, ignore
+			} else {
+				web.JSONError(w, http.StatusInternalServerError, "Failed to pin status")
+				return
+			}
+		}
 
-		s := h.dbStatusToAPI(r.Context(), status)
+		s := SerializeStatus(r.Context(), h.queries, h.cfg, status)
 		s.Pinned = true
 		web.JSON(w, http.StatusOK, s)
 		return
@@ -1184,7 +1634,7 @@ func (h *StatusesHandler) Unpin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = accountID // Will be used when unpin query exists
+	// _ = accountID // Removed redundant assignment
 
 	if h.useDB() {
 		status, err := h.queries.GetStatusByID(r.Context(), statusID)
@@ -1193,12 +1643,21 @@ func (h *StatusesHandler) Unpin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		_ = h.queries.UnpinStatus(r.Context(), db.UnpinStatusParams{
+		if err := h.queries.UnpinStatus(r.Context(), db.UnpinStatusParams{
 			AccountID: accountID,
 			StatusID:  statusID,
-		})
+		}); err != nil {
+			// If not found, ignore? UnpinStatus is delete.
+			// But if error is real DB error, we should probably report it or log it.
+			// Deletes usually return nil if nothing deleted unless Exec is checked for rows affected.
+			// sqlc Exec returns error on DB failure.
+			// Favour safety: Report invalid errors, ignore 'not found'-like semantics if implicit.
+			// But for Unpin, if it fails, client might get confused.
+			web.JSONError(w, http.StatusInternalServerError, "Failed to unpin status")
+			return
+		}
 
-		s := h.dbStatusToAPI(r.Context(), status)
+		s := SerializeStatus(r.Context(), h.queries, h.cfg, status)
 		s.Pinned = false
 		web.JSON(w, http.StatusOK, s)
 		return

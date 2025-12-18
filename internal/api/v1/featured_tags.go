@@ -21,6 +21,19 @@ func NewFeaturedTagsHandler(queries *db.Queries) *FeaturedTagsHandler {
 	return &FeaturedTagsHandler{queries: queries}
 }
 
+func (h *FeaturedTagsHandler) dbTagToAPI(t db.FeaturedTag) FeaturedTag {
+	count := int64(0)
+	if t.StatusesCount.Valid {
+		count = t.StatusesCount.Int64
+	}
+	return FeaturedTag{
+		ID:            strconv.FormatInt(t.ID, 10),
+		Name:          t.Name,
+		StatusesCount: count,
+		LastStatusAt:  t.LastStatusAt.Time,
+	}
+}
+
 type FeaturedTag struct {
 	ID            string    `json:"id"`
 	Name          string    `json:"name"`
@@ -44,12 +57,7 @@ func (h *FeaturedTagsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]FeaturedTag, len(tags))
 	for i, t := range tags {
-		resp[i] = FeaturedTag{
-			ID:            strconv.FormatInt(t.ID, 10),
-			Name:          t.Name.String,
-			StatusesCount: t.StatusesCount,
-			LastStatusAt:  t.LastStatusAt.Time,
-		}
+		resp[i] = h.dbTagToAPI(t) // Use the new helper function
 	}
 
 	web.JSON(w, http.StatusOK, resp)
@@ -89,26 +97,28 @@ func (h *FeaturedTagsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create featured tag
+	// For now, pass null if possible or 0 if dummy.
+	// The schema says tag_id is bigint, nullable. So pgtype.Int8{Valid: false} is correct.
+
+	// Check if tag exists in normal tags table?
+	// Simplified: Just insert into featured_tags with Name and no tag_id for now if logic allows,
+	// BUT the query expects tag_id.
+	// Let's use 0 or NULL.
+	// The previous error said: cannot use tag.ID (int64) as pgtype.Int8
+
 	featured, err := h.queries.CreateFeaturedTag(r.Context(), db.CreateFeaturedTagParams{
 		AccountID:     accountID,
-		TagID:         tag.ID,
-		Name:          pgtype.Text{String: tag.Name, Valid: true},
-		StatusesCount: 0, // Todo: calculate
-		LastStatusAt:  pgtype.Timestamptz{Valid: false},
+		Name:          tag.Name, // It is string now
+		TagID:         pgtype.Int8{Int64: tag.ID, Valid: true},
+		StatusesCount: pgtype.Int8{Int64: 0, Valid: true},
+		LastStatusAt:  pgtype.Timestamptz{Time: time.Now(), Valid: true},
 	})
 	if err != nil {
 		// Ignore duplicates
 		_ = err
 	}
 
-	res := FeaturedTag{
-		ID:            strconv.FormatInt(featured.ID, 10),
-		Name:          featured.Name.String,
-		StatusesCount: featured.StatusesCount,
-		LastStatusAt:  featured.LastStatusAt.Time,
-	}
-
-	web.JSON(w, http.StatusOK, res)
+	web.JSON(w, http.StatusOK, h.dbTagToAPI(featured))
 }
 
 // Delete handles DELETE /api/v1/featured_tags/:id

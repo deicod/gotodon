@@ -13,6 +13,7 @@ import (
 type Querier interface {
 	AddAccountToList(ctx context.Context, arg AddAccountToListParams) error
 	AddAnnouncementReaction(ctx context.Context, arg AddAnnouncementReactionParams) (AnnouncementReaction, error)
+	AddStatusTags(ctx context.Context, arg AddStatusTagsParams) error
 	AdminApproveAccount(ctx context.Context, accountID int64) error
 	AdminAssignReport(ctx context.Context, arg AdminAssignReportParams) error
 	AdminCreateCustomEmoji(ctx context.Context, arg AdminCreateCustomEmojiParams) (CustomEmoji, error)
@@ -44,10 +45,9 @@ type Querier interface {
 	AdminUnsilenceAccount(ctx context.Context, id int64) error
 	AdminUnsuspendAccount(ctx context.Context, id int64) error
 	AdminUpdateDomainBlock(ctx context.Context, arg AdminUpdateDomainBlockParams) (DomainBlock, error)
-	AttachMediaToStatus(ctx context.Context, arg AttachMediaToStatusParams) error
+	AttachMediaToStatus(ctx context.Context, arg AttachMediaToStatusParams) (int64, error)
 	ClearNotifications(ctx context.Context, accountID int64) error
-	ClearResetPasswordToken(ctx context.Context, id int64) error
-	ConfirmUser(ctx context.Context, id int64) error
+	ClearStatusTags(ctx context.Context, statusID int64) error
 	CountAccountPins(ctx context.Context, accountID int64) (int64, error)
 	CountFeaturedTags(ctx context.Context, accountID int64) (int64, error)
 	CountFollowers(ctx context.Context, targetAccountID int64) (int64, error)
@@ -71,8 +71,10 @@ type Querier interface {
 	CreateList(ctx context.Context, arg CreateListParams) (List, error)
 	CreateMediaAttachment(ctx context.Context, arg CreateMediaAttachmentParams) (MediaAttachment, error)
 	CreateMention(ctx context.Context, arg CreateMentionParams) (Mention, error)
+	CreateMentions(ctx context.Context, arg CreateMentionsParams) error
 	CreateMute(ctx context.Context, arg CreateMuteParams) (Mute, error)
 	CreateNotification(ctx context.Context, arg CreateNotificationParams) (Notification, error)
+	CreateNotifications(ctx context.Context, arg CreateNotificationsParams) ([]Notification, error)
 	CreateOAuthAccessToken(ctx context.Context, arg CreateOAuthAccessTokenParams) (OauthAccessToken, error)
 	CreateOAuthApplication(ctx context.Context, arg CreateOAuthApplicationParams) (OauthApplication, error)
 	CreatePoll(ctx context.Context, arg CreatePollParams) (Poll, error)
@@ -107,6 +109,7 @@ type Querier interface {
 	DeletePushSubscription(ctx context.Context, accessTokenID pgtype.Int8) error
 	DeleteScheduledStatus(ctx context.Context, arg DeleteScheduledStatusParams) error
 	DeleteStatus(ctx context.Context, id int64) error
+	DetachMediaFromStatus(ctx context.Context, arg DetachMediaFromStatusParams) (int64, error)
 	DismissAnnouncement(ctx context.Context, arg DismissAnnouncementParams) error
 	GetAccountByID(ctx context.Context, id int64) (Account, error)
 	GetAccountByURI(ctx context.Context, uri string) (Account, error)
@@ -114,8 +117,14 @@ type Querier interface {
 	GetAccountByUsernameAndDomain(ctx context.Context, arg GetAccountByUsernameAndDomainParams) (Account, error)
 	GetAccountStats(ctx context.Context, accountID int64) (AccountStat, error)
 	GetAccountStatuses(ctx context.Context, arg GetAccountStatusesParams) ([]Status, error)
+	GetAccountsByIDs(ctx context.Context, ids []int64) ([]Account, error)
+	GetAccountsByUsernames(ctx context.Context, usernames []string) ([]Account, error)
+	GetAccountsByUsernamesAndDomains(ctx context.Context, arg GetAccountsByUsernamesAndDomainsParams) ([]Account, error)
 	GetAllVotes(ctx context.Context, pollID int64) ([]PollVote, error)
+	GetAppByClientID(ctx context.Context, uid string) (GetAppByClientIDRow, error)
 	GetBlock(ctx context.Context, arg GetBlockParams) (Block, error)
+	GetBlocksByAccountIDs(ctx context.Context, arg GetBlocksByAccountIDsParams) ([]Block, error)
+	GetBlocksFromAccounts(ctx context.Context, arg GetBlocksFromAccountsParams) ([]Block, error)
 	GetBookmark(ctx context.Context, arg GetBookmarkParams) (Bookmark, error)
 	GetConversation(ctx context.Context, id int64) (Conversation, error)
 	GetCustomEmoji(ctx context.Context, arg GetCustomEmojiParams) (CustomEmoji, error)
@@ -138,9 +147,13 @@ type Querier interface {
 	GetMarker(ctx context.Context, arg GetMarkerParams) (Marker, error)
 	GetMediaAttachment(ctx context.Context, id int64) (MediaAttachment, error)
 	GetMediaAttachmentByAccount(ctx context.Context, arg GetMediaAttachmentByAccountParams) (MediaAttachment, error)
+	GetMediaAttachmentsByStatusIDs(ctx context.Context, statusIds []int64) ([]MediaAttachment, error)
 	GetMentionsByAccountID(ctx context.Context, arg GetMentionsByAccountIDParams) ([]Mention, error)
 	GetMentionsByStatusID(ctx context.Context, statusID int64) ([]Mention, error)
+	GetMentionsByStatusIDs(ctx context.Context, statusIds []int64) ([]Mention, error)
 	GetMute(ctx context.Context, arg GetMuteParams) (Mute, error)
+	GetMutesByAccountIDs(ctx context.Context, arg GetMutesByAccountIDsParams) ([]Mute, error)
+	GetMutesFromAccounts(ctx context.Context, arg GetMutesFromAccountsParams) ([]Mute, error)
 	GetNotification(ctx context.Context, arg GetNotificationParams) (Notification, error)
 	GetOAuthAccessToken(ctx context.Context, token string) (OauthAccessToken, error)
 	GetOAuthAccessTokenByRefresh(ctx context.Context, refreshToken pgtype.Text) (OauthAccessToken, error)
@@ -161,16 +174,18 @@ type Querier interface {
 	GetStatusByURI(ctx context.Context, uri pgtype.Text) (Status, error)
 	GetStatusDescendants(ctx context.Context, statusID pgtype.Int8) ([]Status, error)
 	GetStatusStats(ctx context.Context, statusID int64) (StatusStat, error)
+	GetStatusStatsByIDs(ctx context.Context, statusIds []int64) ([]StatusStat, error)
 	GetStatusesByIDs(ctx context.Context, ids []int64) ([]Status, error)
 	GetTagByName(ctx context.Context, lower string) (Tag, error)
+	GetTagsByNames(ctx context.Context, dollar_1 []string) ([]Tag, error)
+	GetTagsByStatusIDs(ctx context.Context, statusIds []int64) ([]GetTagsByStatusIDsRow, error)
 	// Placeholder: In future, use preview_cards table
 	GetTrendingLinks(ctx context.Context) ([]int32, error)
 	GetTrendingStatuses(ctx context.Context, limit int32) ([]GetTrendingStatusesRow, error)
 	GetTrendingTags(ctx context.Context, limit int32) ([]GetTrendingTagsRow, error)
 	GetUserByAccountID(ctx context.Context, accountID int64) (User, error)
 	GetUserByConfirmationToken(ctx context.Context, confirmationToken pgtype.Text) (User, error)
-	GetUserByEmail(ctx context.Context, lower string) (User, error)
-	GetUserByID(ctx context.Context, id int64) (User, error)
+	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByResetPasswordToken(ctx context.Context, resetPasswordToken pgtype.Text) (User, error)
 	GetUserRole(ctx context.Context, id int64) (UserRole, error)
 	GetVotes(ctx context.Context, arg GetVotesParams) ([]PollVote, error)
@@ -206,7 +221,6 @@ type Querier interface {
 	ListScheduledStatuses(ctx context.Context, arg ListScheduledStatusesParams) ([]ScheduledStatus, error)
 	ListUnattachedMedia(ctx context.Context, arg ListUnattachedMediaParams) ([]MediaAttachment, error)
 	ListUserOAuthTokens(ctx context.Context, resourceOwnerID pgtype.Int8) ([]ListUserOAuthTokensRow, error)
-	ListUserRoles(ctx context.Context) ([]UserRole, error)
 	// Placeholder: Requires conversation_mutes or new table for read state which implies 'unread' logic
 	// Currently just creating a stub query if we add unread tracking later
 	MarkConversationRead(ctx context.Context) error
@@ -214,6 +228,8 @@ type Querier interface {
 	PinStatus(ctx context.Context, arg PinStatusParams) (StatusPin, error)
 	RemoveAccountFromList(ctx context.Context, arg RemoveAccountFromListParams) error
 	RemoveAnnouncementReaction(ctx context.Context, arg RemoveAnnouncementReactionParams) error
+	RemoveMentions(ctx context.Context, arg RemoveMentionsParams) error
+	RemoveStatusTags(ctx context.Context, arg RemoveStatusTagsParams) error
 	RevokeOAuthAccessToken(ctx context.Context, token string) error
 	RevokeOAuthAccessTokensByApplication(ctx context.Context, arg RevokeOAuthAccessTokensByApplicationParams) error
 	RevokeOAuthAccessTokensByUser(ctx context.Context, resourceOwnerID pgtype.Int8) error
@@ -221,7 +237,6 @@ type Querier interface {
 	SearchAccountsV2(ctx context.Context, arg SearchAccountsV2Params) ([]Account, error)
 	SearchHashtags(ctx context.Context, arg SearchHashtagsParams) ([]Tag, error)
 	SearchStatuses(ctx context.Context, arg SearchStatusesParams) ([]SearchStatusesRow, error)
-	SetResetPasswordToken(ctx context.Context, arg SetResetPasswordTokenParams) error
 	SuspendAccount(ctx context.Context, arg SuspendAccountParams) error
 	UnpinStatus(ctx context.Context, arg UnpinStatusParams) error
 	UnsuspendAccount(ctx context.Context, id int64) error
@@ -236,9 +251,11 @@ type Querier interface {
 	UpdateOAuthTokenLastUsed(ctx context.Context, arg UpdateOAuthTokenLastUsedParams) error
 	UpdateScheduledStatus(ctx context.Context, arg UpdateScheduledStatusParams) (ScheduledStatus, error)
 	UpdateStatus(ctx context.Context, arg UpdateStatusParams) (Status, error)
-	UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error)
+	UpdateStatusURI(ctx context.Context, arg UpdateStatusURIParams) error
+	UpdateUserSettings(ctx context.Context, arg UpdateUserSettingsParams) error
 	UpsertMarker(ctx context.Context, arg UpsertMarkerParams) (Marker, error)
 	UpsertPreferences(ctx context.Context, arg UpsertPreferencesParams) (Preference, error)
+	UpsertTags(ctx context.Context, dollar_1 []string) error
 	Vote(ctx context.Context, arg VoteParams) error
 }
 

@@ -1,28 +1,34 @@
-// Package v1 provides the Mastodon-compatible REST API v1 handlers.
 package v1
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/auth"
+	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 )
 
 // AccountsHandler handles account-related endpoints
 type AccountsHandler struct {
-	queries *db.Queries
+	queries db.Querier
+	pool    *pgxpool.Pool
+	cfg     *config.Config
 }
 
 // NewAccountsHandler creates a new accounts handler
-func NewAccountsHandler(queries *db.Queries) *AccountsHandler {
-	return &AccountsHandler{queries: queries}
+func NewAccountsHandler(queries db.Querier, pool *pgxpool.Pool, cfg *config.Config) *AccountsHandler {
+	return &AccountsHandler{queries: queries, pool: pool, cfg: cfg}
 }
 
 func (h *AccountsHandler) useDB() bool {
@@ -90,58 +96,7 @@ type AccountRole struct {
 }
 
 func (h *AccountsHandler) dbAccountToAPI(dbAcc db.Account) Account {
-	createdAt := time.Now().Add(-24 * time.Hour)
-	if dbAcc.CreatedAt.Valid {
-		createdAt = dbAcc.CreatedAt.Time
-	}
-
-	acct := dbAcc.Username
-	if dbAcc.Domain.Valid && dbAcc.Domain.String != "" {
-		acct = dbAcc.Username + "@" + dbAcc.Domain.String
-	}
-
-	url := dbAcc.Uri
-	if dbAcc.Url.Valid {
-		url = dbAcc.Url.String
-	}
-
-	discoverable := dbAcc.Discoverable.Valid && dbAcc.Discoverable.Bool
-	bot := dbAcc.ActorType.Valid && dbAcc.ActorType.String == "Service"
-
-	avatar := "https://example.com/avatars/original/missing.png"
-	header := "https://example.com/headers/original/missing.png"
-	if dbAcc.AvatarFileName.Valid && dbAcc.AvatarFileName.String != "" {
-		avatar = dbAcc.AvatarFileName.String
-	}
-	if dbAcc.HeaderFileName.Valid && dbAcc.HeaderFileName.String != "" {
-		header = dbAcc.HeaderFileName.String
-	}
-
-	return Account{
-		ID:             strconv.FormatInt(dbAcc.ID, 10),
-		Username:       dbAcc.Username,
-		Acct:           acct,
-		DisplayName:    dbAcc.DisplayName,
-		Locked:         dbAcc.Locked,
-		Bot:            bot,
-		Discoverable:   &discoverable,
-		Indexable:      dbAcc.Indexable,
-		Group:          false,
-		CreatedAt:      createdAt,
-		Note:           dbAcc.Note,
-		URL:            url,
-		URI:            dbAcc.Uri,
-		Avatar:         avatar,
-		AvatarStatic:   avatar,
-		Header:         header,
-		HeaderStatic:   header,
-		FollowersCount: 0,
-		FollowingCount: 0,
-		StatusesCount:  0,
-		LastStatusAt:   nil,
-		Emojis:         []CustomEmoji{},
-		Fields:         []Field{},
-	}
+	return SerializeAccount(h.cfg, dbAcc)
 }
 
 func (h *AccountsHandler) dbAccountWithStats(ctx context.Context, dbAcc db.Account) Account {
@@ -286,6 +241,53 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 			web.JSONError(w, http.StatusInternalServerError, "Failed to update account")
 			return
 		}
+
+		// Update user settings (source params) - mapped to preferences table
+		if req.SourcePrivacy != nil || req.SourceSensitive != nil || req.SourceLanguage != nil {
+			// Fetch existing preferences to defaults if needed
+			currentPrefs, err := h.queries.GetPreferences(ctx, accountID)
+			if err != nil {
+				if !errors.Is(err, pgx.ErrNoRows) {
+					web.JSONError(w, http.StatusInternalServerError, "Failed to fetch preferences")
+					return
+				}
+				// Likely not found, use defaults
+				currentPrefs = db.Preference{
+					PostingDefaultVisibility: pgtype.Text{String: "public", Valid: true},
+					PostingDefaultSensitive:  pgtype.Bool{Bool: false, Valid: true},
+					PostingDefaultLanguage:   pgtype.Text{String: "en", Valid: true},
+					ReadingExpandMedia:       pgtype.Text{String: "default", Valid: true},
+					ReadingExpandSpoilers:    pgtype.Bool{Bool: false, Valid: true},
+				}
+			}
+
+			upsertParams := db.UpsertPreferencesParams{
+				AccountID:                accountID,
+				PostingDefaultVisibility: currentPrefs.PostingDefaultVisibility,
+				PostingDefaultSensitive:  currentPrefs.PostingDefaultSensitive,
+				PostingDefaultLanguage:   currentPrefs.PostingDefaultLanguage,
+				ReadingExpandMedia:       currentPrefs.ReadingExpandMedia,
+				ReadingExpandSpoilers:    currentPrefs.ReadingExpandSpoilers,
+			}
+
+			if req.SourcePrivacy != nil {
+				upsertParams.PostingDefaultVisibility = pgtype.Text{String: *req.SourcePrivacy, Valid: true}
+			}
+			if req.SourceSensitive != nil {
+				upsertParams.PostingDefaultSensitive = pgtype.Bool{Bool: *req.SourceSensitive, Valid: true}
+			}
+			if req.SourceLanguage != nil {
+				upsertParams.PostingDefaultLanguage = pgtype.Text{String: *req.SourceLanguage, Valid: true}
+			}
+
+			_, err = h.queries.UpsertPreferences(ctx, upsertParams)
+			if err != nil {
+				web.JSONError(w, http.StatusInternalServerError, "Failed to update preferences")
+				return
+			}
+			// Ignore error for now, non-critical if preference update fails but main account updated
+		}
+
 		acc := h.dbAccountWithStats(ctx, dbAcc)
 		web.JSON(w, http.StatusOK, CredentialAccount{
 			Account: acc,
@@ -397,7 +399,17 @@ func (h *AccountsHandler) Register(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	if h.useDB() {
-		dbAcc, err := h.queries.CreateAccount(ctx, db.CreateAccountParams{
+		// Start transaction
+		tx, err := h.pool.Begin(ctx)
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to start transaction")
+			return
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		qtx := db.New(tx)
+
+		dbAcc, err := qtx.CreateAccount(ctx, db.CreateAccountParams{
 			Username:     req.Username,
 			DisplayName:  req.Username,
 			Note:         "",
@@ -413,13 +425,75 @@ func (h *AccountsHandler) Register(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Create account stats
-		_, _ = h.queries.CreateAccountStats(ctx, dbAcc.ID)
+		if _, err := qtx.CreateAccountStats(ctx, dbAcc.ID); err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to create account stats")
+			return
+		}
+
+		// Create User record with credential
+		hashedPassword, err := auth.HashPassword(req.Password)
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to hash password")
+			return
+		}
+
+		// Confirm the user immediately for now
+		// Confirm the user immediately for now
+		now := time.Now()
+		dbUser, err := qtx.CreateUser(ctx, db.CreateUserParams{
+			Email:             req.Email,
+			EncryptedPassword: hashedPassword,
+			AccountID:         dbAcc.ID,
+			ConfirmedAt:       pgtype.Timestamptz{Time: now, Valid: true},
+			InviteID:          pgtype.Int8{Valid: false},
+			RoleID:            pgtype.Int8{Valid: false},
+		})
+		if err != nil {
+			// Check for unique constraint violation (code 23505)
+			if pgErr, ok := err.(*pgconn.PgError); ok && pgErr.Code == "23505" {
+				web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Email has already been taken")
+				return
+			}
+			web.JSONError(w, http.StatusInternalServerError, "Failed to create user record")
+			return
+		}
+
+		// Generate OAuth access token
+		tokenString, err := auth.GenerateConfirmationToken() // reusing secure random generator
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to generate token")
+			return
+		}
+
+		// Create token record
+		_, err = qtx.CreateOAuthAccessToken(ctx, db.CreateOAuthAccessTokenParams{
+			Token:           tokenString,
+			RefreshToken:    pgtype.Text{Valid: false},
+			ExpiresIn:       pgtype.Int4{Valid: false},
+			Scopes:          pgtype.Text{String: "read write follow push", Valid: true},
+			ApplicationID:   pgtype.Int8{Valid: false}, // No app context for registration yet
+			ResourceOwnerID: pgtype.Int8{Int64: dbUser.ID, Valid: true},
+		})
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to create access token")
+			return
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to commit transaction")
+			return
+		}
+
+		createdAt := time.Now()
+		if dbAcc.CreatedAt.Valid {
+			createdAt = dbAcc.CreatedAt.Time
+		}
 
 		web.JSON(w, http.StatusOK, map[string]interface{}{
-			"access_token": "placeholder_token",
+			"access_token": tokenString,
 			"token_type":   "Bearer",
 			"scope":        "read write follow push",
-			"created_at":   dbAcc.CreatedAt.Time.Unix(),
+			"created_at":   createdAt.Unix(),
 		})
 		return
 	}
@@ -762,7 +836,7 @@ func (h *AccountsHandler) Statuses(w http.ResponseWriter, r *http.Request) {
 			web.JSON(w, http.StatusOK, []any{})
 			return
 		}
-		web.JSON(w, http.StatusOK, statuses)
+		web.JSON(w, http.StatusOK, SerializeStatuses(r.Context(), h.queries, h.cfg, statuses))
 		return
 	}
 

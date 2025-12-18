@@ -140,13 +140,14 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	// Internal handlers
 
 	// Register v1 handlers
-	accountsHandler := v1.NewAccountsHandler(queries)
+	accountsHandler := v1.NewAccountsHandler(queries, pool, cfg)
 	accountsHandler.RegisterRoutes(mux)
 
-	statusesHandler := v1.NewStatusesHandler(queries, streamingHub)
+	// Statuses
+	statusesHandler := v1.NewStatusesHandler(queries, pool, streamingHub, cfg)
 	statusesHandler.RegisterRoutes(mux)
 
-	timelinesHandler := v1.NewTimelinesHandler(queries)
+	timelinesHandler := v1.NewTimelinesHandler(queries, cfg)
 	timelinesHandler.RegisterRoutes(mux)
 
 	listsHandler := v1.NewListsHandler(queries)
@@ -184,28 +185,28 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	directoryHandler := v1.NewDirectoryHandler(queries)
 	directoryHandler.RegisterRoutes(mux)
 
-	bookmarksHandler := v1.NewBookmarksHandler(queries)
+	bookmarksHandler := v1.NewBookmarksHandler(queries, cfg)
 	bookmarksHandler.RegisterRoutes(mux)
 
-	favouritesHandler := v1.NewFavouritesHandler(queries)
+	favouritesHandler := v1.NewFavouritesHandler(queries, cfg)
 	favouritesHandler.RegisterRoutes(mux)
 
-	mutesHandler := v1.NewMutesHandler(queries)
+	mutesHandler := v1.NewMutesHandler(queries, cfg)
 	mutesHandler.RegisterRoutes(mux)
 
-	blocksHandler := v1.NewBlocksHandler(queries)
+	blocksHandler := v1.NewBlocksHandler(queries, cfg)
 	blocksHandler.RegisterRoutes(mux)
 
 	customEmojisHandler := v1.NewCustomEmojisHandler(queries)
 	customEmojisHandler.RegisterRoutes(mux)
 
-	conversationsHandler := v1.NewConversationsHandler(queries)
+	conversationsHandler := v1.NewConversationsHandler(queries, cfg)
 	conversationsHandler.RegisterRoutes(mux)
 
-	followRequestsHandler := v1.NewFollowRequestsHandler(queries)
+	followRequestsHandler := v1.NewFollowRequestsHandler(queries, cfg)
 	followRequestsHandler.RegisterRoutes(mux)
 
-	domainBlocksHandler := v1.NewDomainBlocksHandler(queries)
+	domainBlocksHandler := v1.NewDomainBlocksHandler(queries, cfg)
 	domainBlocksHandler.RegisterRoutes(mux)
 
 	scheduledStatusesHandler := v1.NewScheduledStatusesHandler(queries)
@@ -327,12 +328,8 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	})
 
 	// Apps endpoint (for OAuth app registration)
-	mux.HandleFunc("POST /api/v1/apps", func(w http.ResponseWriter, r *http.Request) {
-		// TODO: Implement app registration
-		web.JSON(w, http.StatusNotImplemented, map[string]string{
-			"error": "Not implemented yet",
-		})
-	})
+	v1AppsHandler := v1.NewAppsHandler(queries)
+	v1AppsHandler.RegisterRoutes(mux)
 
 	// Well-known endpoints
 	mux.HandleFunc("GET /.well-known/webfinger", func(w http.ResponseWriter, r *http.Request) {
@@ -386,7 +383,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 </XRD>`, cfg.Instance.LocalDomain)
 		w.Header().Set("Content-Type", "application/xrd+xml; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(xml))
+		if _, err := w.Write([]byte(xml)); err != nil {
+			logger.Error("Failed to write host-meta XML response", "error", err)
+		}
 	})
 
 	mux.HandleFunc("GET /.well-known/nodeinfo", func(w http.ResponseWriter, r *http.Request) {

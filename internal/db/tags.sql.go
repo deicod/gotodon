@@ -9,6 +9,31 @@ import (
 	"context"
 )
 
+const addStatusTags = `-- name: AddStatusTags :exec
+INSERT INTO statuses_tags (status_id, tag_id)
+SELECT $1, unnest($2::bigint[])
+ON CONFLICT DO NOTHING
+`
+
+type AddStatusTagsParams struct {
+	StatusID int64   `db:"status_id" json:"status_id"`
+	Column2  []int64 `db:"column_2" json:"column_2"`
+}
+
+func (q *Queries) AddStatusTags(ctx context.Context, arg AddStatusTagsParams) error {
+	_, err := q.db.Exec(ctx, addStatusTags, arg.StatusID, arg.Column2)
+	return err
+}
+
+const clearStatusTags = `-- name: ClearStatusTags :exec
+DELETE FROM statuses_tags WHERE status_id = $1
+`
+
+func (q *Queries) ClearStatusTags(ctx context.Context, statusID int64) error {
+	_, err := q.db.Exec(ctx, clearStatusTags, statusID)
+	return err
+}
+
 const createTag = `-- name: CreateTag :one
 INSERT INTO tags (name, created_at, updated_at)
 VALUES ($1, now(), now())
@@ -59,4 +84,67 @@ func (q *Queries) GetTagByName(ctx context.Context, lower string) (Tag, error) {
 		&i.DisplayName,
 	)
 	return i, err
+}
+
+const getTagsByNames = `-- name: GetTagsByNames :many
+SELECT id, name, created_at, updated_at, usable, trendable, listable, reviewed_at, requested_review_at, last_status_at, max_score, max_score_at, display_name FROM tags WHERE name = ANY($1::text[])
+`
+
+func (q *Queries) GetTagsByNames(ctx context.Context, dollar_1 []string) ([]Tag, error) {
+	rows, err := q.db.Query(ctx, getTagsByNames, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Tag{}
+	for rows.Next() {
+		var i Tag
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Usable,
+			&i.Trendable,
+			&i.Listable,
+			&i.ReviewedAt,
+			&i.RequestedReviewAt,
+			&i.LastStatusAt,
+			&i.MaxScore,
+			&i.MaxScoreAt,
+			&i.DisplayName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const removeStatusTags = `-- name: RemoveStatusTags :exec
+DELETE FROM statuses_tags WHERE status_id = $1 AND tag_id = ANY($2::bigint[])
+`
+
+type RemoveStatusTagsParams struct {
+	StatusID int64   `db:"status_id" json:"status_id"`
+	Column2  []int64 `db:"column_2" json:"column_2"`
+}
+
+func (q *Queries) RemoveStatusTags(ctx context.Context, arg RemoveStatusTagsParams) error {
+	_, err := q.db.Exec(ctx, removeStatusTags, arg.StatusID, arg.Column2)
+	return err
+}
+
+const upsertTags = `-- name: UpsertTags :exec
+INSERT INTO tags (name, created_at, updated_at)
+SELECT unnest($1::text[]), now(), now()
+ON CONFLICT (name) DO UPDATE SET updated_at = now()
+`
+
+func (q *Queries) UpsertTags(ctx context.Context, dollar_1 []string) error {
+	_, err := q.db.Exec(ctx, upsertTags, dollar_1)
+	return err
 }

@@ -59,7 +59,6 @@ type Account struct {
 	RequestedReviewAt          pgtype.Timestamptz `db:"requested_review_at" json:"requested_review_at"`
 	Indexable                  bool               `db:"indexable" json:"indexable"`
 	AttributionDomains         []string           `db:"attribution_domains" json:"attribution_domains"`
-	SearchIndex                interface{}        `db:"search_index" json:"search_index"`
 }
 
 type AccountDomainBlock struct {
@@ -197,12 +196,12 @@ type Favourite struct {
 type FeaturedTag struct {
 	ID            int64              `db:"id" json:"id"`
 	AccountID     int64              `db:"account_id" json:"account_id"`
-	TagID         int64              `db:"tag_id" json:"tag_id"`
-	StatusesCount int64              `db:"statuses_count" json:"statuses_count"`
+	TagID         pgtype.Int8        `db:"tag_id" json:"tag_id"`
+	Name          string             `db:"name" json:"name"`
+	StatusesCount pgtype.Int8        `db:"statuses_count" json:"statuses_count"`
 	LastStatusAt  pgtype.Timestamptz `db:"last_status_at" json:"last_status_at"`
 	CreatedAt     pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
-	Name          pgtype.Text        `db:"name" json:"name"`
 }
 
 type Filter struct {
@@ -472,7 +471,6 @@ type Status struct {
 	Trendable                 pgtype.Bool        `db:"trendable" json:"trendable"`
 	OrderedMediaAttachmentIds []int64            `db:"ordered_media_attachment_ids" json:"ordered_media_attachment_ids"`
 	FetchedRepliesAt          pgtype.Timestamptz `db:"fetched_replies_at" json:"fetched_replies_at"`
-	SearchIndex               interface{}        `db:"search_index" json:"search_index"`
 }
 
 type StatusPin struct {

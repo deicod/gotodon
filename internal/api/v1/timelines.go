@@ -2,129 +2,31 @@
 package v1
 
 import (
-	"context"
 	"net/http"
 	"strconv"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 )
 
 // TimelinesHandler handles timeline endpoints
 type TimelinesHandler struct {
-	queries *db.Queries
+	queries db.Querier
+	cfg     *config.Config
 }
 
 // NewTimelinesHandler creates a new timelines handler
-func NewTimelinesHandler(queries *db.Queries) *TimelinesHandler {
-	return &TimelinesHandler{queries: queries}
+func NewTimelinesHandler(queries db.Querier, cfg *config.Config) *TimelinesHandler {
+	return &TimelinesHandler{
+		queries: queries,
+		cfg:     cfg,
+	}
 }
 
 func (h *TimelinesHandler) useDB() bool {
 	return h.queries != nil
-}
-
-func (h *TimelinesHandler) dbStatusesToAPI(ctx context.Context, dbStatuses []db.Status) []Status {
-	statuses := make([]Status, len(dbStatuses))
-	for i, s := range dbStatuses {
-		statuses[i] = h.dbStatusToAPI(ctx, s)
-	}
-	return statuses
-}
-
-func (h *TimelinesHandler) dbStatusToAPI(ctx context.Context, dbStatus db.Status) Status {
-	visibility := visibilityToString[dbStatus.Visibility]
-	if visibility == "" {
-		visibility = "public"
-	}
-
-	var url *string
-	if dbStatus.Url.Valid {
-		url = &dbStatus.Url.String
-	}
-
-	var inReplyToID, inReplyToAccountID *string
-	if dbStatus.InReplyToID.Valid {
-		s := strconv.FormatInt(dbStatus.InReplyToID.Int64, 10)
-		inReplyToID = &s
-	}
-	if dbStatus.InReplyToAccountID.Valid {
-		s := strconv.FormatInt(dbStatus.InReplyToAccountID.Int64, 10)
-		inReplyToAccountID = &s
-	}
-
-	var language *string
-	if dbStatus.Language.Valid {
-		language = &dbStatus.Language.String
-	}
-
-	// Load stats
-	var repliesCount, reblogsCount, favouritesCount int64
-	if h.useDB() {
-		stats, err := h.queries.GetStatusStats(ctx, dbStatus.ID)
-		if err == nil {
-			repliesCount = stats.RepliesCount
-			reblogsCount = stats.ReblogsCount
-			favouritesCount = stats.FavouritesCount
-		}
-	}
-
-	// Load account
-	var account Account
-	if h.useDB() {
-		dbAcc, err := h.queries.GetAccountByID(ctx, dbStatus.AccountID)
-		if err == nil {
-			discoverable := dbAcc.Discoverable.Valid && dbAcc.Discoverable.Bool
-			account = Account{
-				ID:           strconv.FormatInt(dbAcc.ID, 10),
-				Username:     dbAcc.Username,
-				Acct:         dbAcc.Username,
-				DisplayName:  dbAcc.DisplayName,
-				Discoverable: &discoverable,
-				Emojis:       []CustomEmoji{},
-				Fields:       []Field{},
-			}
-			if dbAcc.CreatedAt.Valid {
-				account.CreatedAt = dbAcc.CreatedAt.Time
-			}
-		}
-	}
-
-	uri := ""
-	if dbStatus.Uri.Valid {
-		uri = dbStatus.Uri.String
-	}
-
-	status := Status{
-		ID:                 strconv.FormatInt(dbStatus.ID, 10),
-		InReplyToID:        inReplyToID,
-		InReplyToAccountID: inReplyToAccountID,
-		Sensitive:          dbStatus.Sensitive,
-		SpoilerText:        dbStatus.SpoilerText,
-		Visibility:         visibility,
-		Language:           language,
-		URI:                uri,
-		URL:                url,
-		RepliesCount:       repliesCount,
-		ReblogsCount:       reblogsCount,
-		FavouritesCount:    favouritesCount,
-		Content:            "<p>" + dbStatus.Text + "</p>",
-		Account:            account,
-		MediaAttachments:   []MediaAttach{},
-		Mentions:           []Mention{},
-		Tags:               []Tag{},
-		Emojis:             []any{},
-	}
-
-	if dbStatus.CreatedAt.Valid {
-		status.CreatedAt = dbStatus.CreatedAt.Time
-	}
-	if dbStatus.EditedAt.Valid {
-		status.EditedAt = &dbStatus.EditedAt.Time
-	}
-
-	return status
 }
 
 // Home handles GET /api/v1/timelines/home
@@ -148,7 +50,7 @@ func (h *TimelinesHandler) Home(w http.ResponseWriter, r *http.Request) {
 			web.JSON(w, http.StatusOK, []Status{})
 			return
 		}
-		web.JSON(w, http.StatusOK, h.dbStatusesToAPI(ctx, dbStatuses))
+		web.JSON(w, http.StatusOK, SerializeStatuses(ctx, h.queries, h.cfg, dbStatuses))
 		return
 	}
 
@@ -172,7 +74,7 @@ func (h *TimelinesHandler) Public(w http.ResponseWriter, r *http.Request) {
 			web.JSON(w, http.StatusOK, []Status{})
 			return
 		}
-		web.JSON(w, http.StatusOK, h.dbStatusesToAPI(ctx, dbStatuses))
+		web.JSON(w, http.StatusOK, SerializeStatuses(ctx, h.queries, h.cfg, dbStatuses))
 		return
 	}
 
@@ -203,7 +105,7 @@ func (h *TimelinesHandler) Hashtag(w http.ResponseWriter, r *http.Request) {
 			web.JSON(w, http.StatusOK, []Status{})
 			return
 		}
-		web.JSON(w, http.StatusOK, h.dbStatusesToAPI(ctx, dbStatuses))
+		web.JSON(w, http.StatusOK, SerializeStatuses(ctx, h.queries, h.cfg, dbStatuses))
 		return
 	}
 
@@ -253,7 +155,7 @@ func (h *TimelinesHandler) List(w http.ResponseWriter, r *http.Request) {
 			web.JSON(w, http.StatusOK, []Status{})
 			return
 		}
-		web.JSON(w, http.StatusOK, h.dbStatusesToAPI(ctx, dbStatuses))
+		web.JSON(w, http.StatusOK, SerializeStatuses(ctx, h.queries, h.cfg, dbStatuses))
 		return
 	}
 

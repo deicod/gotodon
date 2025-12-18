@@ -1,0 +1,244 @@
+package v1
+
+import (
+	"context"
+	"strconv"
+
+	"github.com/deicod/gotodon/internal/config"
+	"github.com/deicod/gotodon/internal/db"
+)
+
+const (
+	MediaTypeImage   = 1 // Assuming 1 based on previous usage "image" fallback
+	MediaTypeVideo   = 2
+	MediaTypeUnknown = 0 // Just in case
+)
+
+// SerializeStatuses converts a slice of database Status records to API Statuses efficiently
+func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, dbStatuses []db.Status) []Status {
+	if len(dbStatuses) == 0 {
+		return []Status{}
+	}
+
+	statusIDs := make([]int64, len(dbStatuses))
+	accountIDs := make([]int64, 0, len(dbStatuses))
+	accountIDMap := make(map[int64]bool)
+
+	for i, s := range dbStatuses {
+		statusIDs[i] = s.ID
+		if !accountIDMap[s.AccountID] {
+			accountIDs = append(accountIDs, s.AccountID)
+			accountIDMap[s.AccountID] = true
+		}
+	}
+
+	// Bulk fetch related data
+	dbAccounts, _ := q.GetAccountsByIDs(ctx, accountIDs)
+	dbMedias, _ := q.GetMediaAttachmentsByStatusIDs(ctx, statusIDs)
+	dbMentions, _ := q.GetMentionsByStatusIDs(ctx, statusIDs)
+	dbStats, _ := q.GetStatusStatsByIDs(ctx, statusIDs)
+
+	// Map data for easy lookup
+	accountsMap := make(map[int64]Account)
+	for _, a := range dbAccounts {
+		accountsMap[a.ID] = SerializeAccount(cfg, a)
+	}
+
+	mediaMap := make(map[int64][]MediaAttach)
+	for _, m := range dbMedias {
+		if !m.StatusID.Valid {
+			continue
+		}
+		sid := m.StatusID.Int64
+		mediaType := "image"
+		if m.Type == MediaTypeVideo {
+			mediaType = "video"
+		}
+
+		var remoteURL *string
+		if m.RemoteUrl != "" {
+			s := m.RemoteUrl
+			remoteURL = &s
+		}
+
+		var description *string
+		if m.Description.Valid {
+			s := m.Description.String
+			description = &s
+		}
+
+		var blurhash *string
+		if m.Blurhash.Valid {
+			s := m.Blurhash.String
+			blurhash = &s
+		}
+
+		// Use configured domain if media is local and URL is relative (though model usually stores full or relative)
+		// For robustness, assumes URL in DB is correct for now, or we could prefix if needed.
+		// Existing code used raw m.RemoteUrl or m.ThumbnailRemoteUrl.
+		// For local files, we might need to prepend valid URLs but let's stick to DB values for now unless empty.
+
+		mediaMap[sid] = append(mediaMap[sid], MediaAttach{
+			ID:          strconv.FormatInt(m.ID, 10),
+			Type:        mediaType,
+			URL:         m.RemoteUrl,
+			PreviewURL:  m.ThumbnailRemoteUrl.String,
+			RemoteURL:   remoteURL,
+			Description: description,
+			Blurhash:    blurhash,
+		})
+	}
+
+	mentionsMap := make(map[int64][]Mention)
+	// For mentions, we need the mentioned account usernames.
+	// The bulk query GetMentionsByStatusIDs gives us the Mention records.
+	// We need to fetch the Accounts for these mentions to populate Username/Acct/URL.
+	// This is valid: [P1] N+1 fix.
+
+	// Collect mentioned account IDs
+	mentionedAccountIDs := make([]int64, 0)
+	mentionedAccountIDSeen := make(map[int64]bool)
+	for _, m := range dbMentions {
+		if !mentionedAccountIDSeen[m.AccountID] {
+			mentionedAccountIDs = append(mentionedAccountIDs, m.AccountID)
+			mentionedAccountIDSeen[m.AccountID] = true
+		}
+	}
+
+	// Fetch mentioned accounts
+	if len(mentionedAccountIDs) > 0 {
+		mentionedDbAccounts, _ := q.GetAccountsByIDs(ctx, mentionedAccountIDs)
+		mentionedAccountsMap := make(map[int64]Account)
+		for _, a := range mentionedDbAccounts {
+			mentionedAccountsMap[a.ID] = SerializeAccount(cfg, a)
+		}
+
+		for _, m := range dbMentions {
+			acc, ok := mentionedAccountsMap[m.AccountID]
+			if ok {
+				mentionsMap[m.StatusID] = append(mentionsMap[m.StatusID], Mention{
+					ID:       acc.ID,
+					Username: acc.Username,
+					Acct:     acc.Acct,
+					URL:      acc.URI,
+				})
+			}
+		}
+	}
+
+	// Fetch tags
+	dbTags, _ := q.GetTagsByStatusIDs(ctx, statusIDs)
+	tagsMap := make(map[int64][]Tag)
+	for _, t := range dbTags {
+		tagsMap[t.StatusID] = append(tagsMap[t.StatusID], Tag{
+			Name: t.Name,
+			URL:  "https://" + cfg.Instance.LocalDomain + "/tags/" + t.Name, // Construct local tag URL
+		})
+	}
+
+	statsMap := make(map[int64]db.StatusStat)
+	for _, s := range dbStats {
+		statsMap[s.StatusID] = s
+	}
+
+	results := make([]Status, len(dbStatuses))
+	for i, dbStatus := range dbStatuses {
+		// Defaults
+		visibility := "public"
+		switch dbStatus.Visibility {
+		case 1:
+			visibility = "unlisted"
+		case 2:
+			visibility = "private"
+		case 3:
+			visibility = "direct"
+		}
+
+		account, ok := accountsMap[dbStatus.AccountID]
+		if !ok {
+			// Fallback empty account to avoid crash
+			account = Account{ID: strconv.FormatInt(dbStatus.AccountID, 10), Username: "unknown"}
+		}
+
+		mediaAttachments := mediaMap[dbStatus.ID]
+		if mediaAttachments == nil {
+			mediaAttachments = []MediaAttach{}
+		}
+
+		mentions := mentionsMap[dbStatus.ID]
+		if mentions == nil {
+			mentions = []Mention{}
+		}
+
+		statusTags := tagsMap[dbStatus.ID]
+		if statusTags == nil {
+			statusTags = []Tag{}
+		}
+
+		// Stats
+		repliesCount := int64(0)
+		reblogsCount := int64(0)
+		favouritesCount := int64(0)
+		if stat, ok := statsMap[dbStatus.ID]; ok {
+			repliesCount = stat.RepliesCount
+			reblogsCount = stat.ReblogsCount
+			favouritesCount = stat.FavouritesCount
+		}
+
+		var language *string
+		if dbStatus.Language.Valid {
+			s := dbStatus.Language.String
+			language = &s
+		}
+
+		s := Status{
+			ID:                 strconv.FormatInt(dbStatus.ID, 10),
+			CreatedAt:          dbStatus.CreatedAt.Time,
+			InReplyToID:        nil,
+			InReplyToAccountID: nil,
+			Sensitive:          dbStatus.Sensitive,
+			SpoilerText:        dbStatus.SpoilerText,
+			Visibility:         visibility,
+			Language:           language,
+			URI:                dbStatus.Uri.String,
+			URL:                &dbStatus.Url.String,
+			RepliesCount:       repliesCount,
+			ReblogsCount:       reblogsCount,
+			FavouritesCount:    favouritesCount,
+			Favourited:         false,
+			Reblogged:          false,
+			Muted:              false,
+			Bookmarked:         false,
+			Content:            dbStatus.Text,
+			Reblog:             nil,
+			Account:            account,
+			MediaAttachments:   mediaAttachments,
+			Mentions:           mentions,
+			Tags:               statusTags,
+			Emojis:             []CustomEmoji{},
+			Pinned:             false,
+		}
+
+		if dbStatus.InReplyToID.Valid {
+			idStr := strconv.FormatInt(dbStatus.InReplyToID.Int64, 10)
+			s.InReplyToID = &idStr
+		}
+		if dbStatus.InReplyToAccountID.Valid {
+			idStr := strconv.FormatInt(dbStatus.InReplyToAccountID.Int64, 10)
+			s.InReplyToAccountID = &idStr
+		}
+
+		results[i] = s
+	}
+
+	return results
+}
+
+// SerializeStatus converts a database Status record to API Status
+func SerializeStatus(ctx context.Context, q db.Querier, cfg *config.Config, dbStatus db.Status) Status {
+	results := SerializeStatuses(ctx, q, cfg, []db.Status{dbStatus})
+	if len(results) > 0 {
+		return results[0]
+	}
+	return Status{}
+}

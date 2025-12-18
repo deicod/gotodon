@@ -18,12 +18,13 @@ import (
 
 // FollowRequestsHandler handles follow request endpoints
 type FollowRequestsHandler struct {
-	queries *db.Queries
+	queries db.Querier
+	cfg     *config.Config
 }
 
 // NewFollowRequestsHandler creates a new follow requests handler
-func NewFollowRequestsHandler(queries *db.Queries) *FollowRequestsHandler {
-	return &FollowRequestsHandler{queries: queries}
+func NewFollowRequestsHandler(queries db.Querier, cfg *config.Config) *FollowRequestsHandler {
+	return &FollowRequestsHandler{queries: queries, cfg: cfg}
 }
 
 func (h *FollowRequestsHandler) useDB() bool {
@@ -51,7 +52,7 @@ func (h *FollowRequestsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 		accounts := make([]Account, len(dbReqs))
 		for i, a := range dbReqs {
-			accounts[i] = dbAccountToBasicAPI(a)
+			accounts[i] = SerializeAccount(h.cfg, a)
 		}
 		web.JSON(w, http.StatusOK, accounts)
 		return
@@ -172,12 +173,13 @@ func (h *FollowRequestsHandler) RegisterRoutes(mux *http.ServeMux) {
 
 // DomainBlocksHandler handles user domain blocks (not admin)
 type DomainBlocksHandler struct {
-	queries *db.Queries
+	queries db.Querier
+	cfg     *config.Config
 }
 
 // NewDomainBlocksHandler creates a new domain blocks handler
-func NewDomainBlocksHandler(queries *db.Queries) *DomainBlocksHandler {
-	return &DomainBlocksHandler{queries: queries}
+func NewDomainBlocksHandler(queries db.Querier, cfg *config.Config) *DomainBlocksHandler {
+	return &DomainBlocksHandler{queries: queries, cfg: cfg}
 }
 
 func (h *DomainBlocksHandler) useDB() bool {
@@ -280,11 +282,11 @@ func (h *DomainBlocksHandler) RegisterRoutes(mux *http.ServeMux) {
 
 // ScheduledStatusesHandler handles scheduled statuses endpoints
 type ScheduledStatusesHandler struct {
-	queries *db.Queries
+	queries db.Querier
 }
 
 // NewScheduledStatusesHandler creates a new scheduled statuses handler
-func NewScheduledStatusesHandler(queries *db.Queries) *ScheduledStatusesHandler {
+func NewScheduledStatusesHandler(queries db.Querier) *ScheduledStatusesHandler {
 	return &ScheduledStatusesHandler{queries: queries}
 }
 
@@ -413,12 +415,12 @@ func (h *ScheduledStatusesHandler) RegisterRoutes(mux *http.ServeMux) {
 
 // PushHandler handles push subscription endpoints
 type PushHandler struct {
-	queries *db.Queries
+	queries db.Querier
 	cfg     *config.Config
 }
 
 // NewPushHandler creates a new push handler
-func NewPushHandler(queries *db.Queries, cfg *config.Config) *PushHandler {
+func NewPushHandler(queries db.Querier, cfg *config.Config) *PushHandler {
 	return &PushHandler{
 		queries: queries,
 		cfg:     cfg,

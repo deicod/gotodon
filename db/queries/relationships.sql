@@ -158,3 +158,23 @@ JOIN statuses s ON s.account_id = a.id AND s.reblog_of_id = $1
 WHERE a.suspended_at IS NULL AND s.deleted_at IS NULL
 ORDER BY s.id DESC
 LIMIT $2 OFFSET $3;
+
+-- name: GetMutesByAccountIDs :many
+SELECT * FROM mutes 
+WHERE account_id = $1 
+AND target_account_id = ANY(@target_account_ids::bigint[]);
+
+-- name: GetBlocksByAccountIDs :many
+SELECT * FROM blocks
+WHERE account_id = $1
+AND target_account_id = ANY(@target_account_ids::bigint[]);
+
+-- name: GetMutesFromAccounts :many
+SELECT * FROM mutes
+WHERE target_account_id = $1
+AND account_id = ANY(@account_ids::bigint[]);
+
+-- name: GetBlocksFromAccounts :many
+SELECT * FROM blocks
+WHERE target_account_id = $1
+AND account_id = ANY(@account_ids::bigint[]);

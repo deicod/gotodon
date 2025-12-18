@@ -2,23 +2,24 @@
 package v1
 
 import (
-	"context"
 	"net/http"
 	"strconv"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 )
 
 // BookmarksHandler handles bookmarks endpoints
 type BookmarksHandler struct {
-	queries *db.Queries
+	queries db.Querier
+	cfg     *config.Config
 }
 
 // NewBookmarksHandler creates a new bookmarks handler
-func NewBookmarksHandler(queries *db.Queries) *BookmarksHandler {
-	return &BookmarksHandler{queries: queries}
+func NewBookmarksHandler(queries db.Querier, cfg *config.Config) *BookmarksHandler {
+	return &BookmarksHandler{queries: queries, cfg: cfg}
 }
 
 func (h *BookmarksHandler) useDB() bool {
@@ -46,17 +47,19 @@ func (h *BookmarksHandler) List(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		statuses := make([]Status, 0, len(bookmarks))
-		for _, b := range bookmarks {
-			dbStatus, err := h.queries.GetStatusByID(r.Context(), b.StatusID)
+		statusIDs := make([]int64, len(bookmarks))
+		for i, b := range bookmarks {
+			statusIDs[i] = b.StatusID
+		}
+
+		statuses := []Status{}
+		if len(statusIDs) > 0 {
+			dbStatuses, err := h.queries.GetStatusesByIDs(r.Context(), statusIDs)
 			if err != nil {
-				continue
+				web.JSONError(w, http.StatusInternalServerError, "Failed to fetch statuses")
+				return
 			}
-			dbAcc, err := h.queries.GetAccountByID(r.Context(), dbStatus.AccountID)
-			if err != nil {
-				continue
-			}
-			statuses = append(statuses, dbStatusToBasicAPI(dbStatus, dbAcc))
+			statuses = SerializeStatuses(r.Context(), h.queries, h.cfg, dbStatuses)
 		}
 		web.JSON(w, http.StatusOK, statuses)
 		return
@@ -86,12 +89,13 @@ func (h *BookmarksHandler) RegisterRoutes(mux *http.ServeMux) {
 
 // FavouritesHandler handles favourites endpoints
 type FavouritesHandler struct {
-	queries *db.Queries
+	queries db.Querier
+	cfg     *config.Config
 }
 
 // NewFavouritesHandler creates a new favourites handler
-func NewFavouritesHandler(queries *db.Queries) *FavouritesHandler {
-	return &FavouritesHandler{queries: queries}
+func NewFavouritesHandler(queries db.Querier, cfg *config.Config) *FavouritesHandler {
+	return &FavouritesHandler{queries: queries, cfg: cfg}
 }
 
 func (h *FavouritesHandler) useDB() bool {
@@ -107,9 +111,10 @@ func (h *FavouritesHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.useDB() {
+		limit := parseBookmarksLimit(web.QueryParam(r, "limit"), 20, 40)
 		dbStatuses, err := h.queries.ListFavourites(r.Context(), db.ListFavouritesParams{
 			AccountID: accountID,
-			Limit:     40,
+			Limit:     int32(limit),
 			Offset:    0,
 		})
 		if err != nil {
@@ -117,14 +122,8 @@ func (h *FavouritesHandler) List(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		statuses := make([]Status, 0, len(dbStatuses))
-		for _, s := range dbStatuses {
-			dbAcc, err := h.queries.GetAccountByID(r.Context(), s.AccountID)
-			if err != nil {
-				continue
-			}
-			statuses = append(statuses, dbStatusToBasicAPI(s, dbAcc))
-		}
+		// Optimize: Use SerializeStatuses directly on the results
+		statuses := SerializeStatuses(r.Context(), h.queries, h.cfg, dbStatuses)
 		web.JSON(w, http.StatusOK, statuses)
 		return
 	}
@@ -138,12 +137,13 @@ func (h *FavouritesHandler) RegisterRoutes(mux *http.ServeMux) {
 
 // MutesHandler handles mutes endpoints
 type MutesHandler struct {
-	queries *db.Queries
+	queries db.Querier
+	cfg     *config.Config
 }
 
 // NewMutesHandler creates a new mutes handler
-func NewMutesHandler(queries *db.Queries) *MutesHandler {
-	return &MutesHandler{queries: queries}
+func NewMutesHandler(queries db.Querier, cfg *config.Config) *MutesHandler {
+	return &MutesHandler{queries: queries, cfg: cfg}
 }
 
 func (h *MutesHandler) useDB() bool {
@@ -171,7 +171,7 @@ func (h *MutesHandler) List(w http.ResponseWriter, r *http.Request) {
 
 		accounts := make([]Account, len(dbAccounts))
 		for i, a := range dbAccounts {
-			accounts[i] = dbAccountToBasicAPI(a)
+			accounts[i] = SerializeAccount(h.cfg, a)
 		}
 		web.JSON(w, http.StatusOK, accounts)
 		return
@@ -186,12 +186,13 @@ func (h *MutesHandler) RegisterRoutes(mux *http.ServeMux) {
 
 // BlocksHandler handles blocks endpoints
 type BlocksHandler struct {
-	queries *db.Queries
+	queries db.Querier
+	cfg     *config.Config
 }
 
 // NewBlocksHandler creates a new blocks handler
-func NewBlocksHandler(queries *db.Queries) *BlocksHandler {
-	return &BlocksHandler{queries: queries}
+func NewBlocksHandler(queries db.Querier, cfg *config.Config) *BlocksHandler {
+	return &BlocksHandler{queries: queries, cfg: cfg}
 }
 
 func (h *BlocksHandler) useDB() bool {
@@ -219,7 +220,7 @@ func (h *BlocksHandler) List(w http.ResponseWriter, r *http.Request) {
 
 		accounts := make([]Account, len(dbAccounts))
 		for i, a := range dbAccounts {
-			accounts[i] = dbAccountToBasicAPI(a)
+			accounts[i] = SerializeAccount(h.cfg, a)
 		}
 		web.JSON(w, http.StatusOK, accounts)
 		return
@@ -234,11 +235,11 @@ func (h *BlocksHandler) RegisterRoutes(mux *http.ServeMux) {
 
 // CustomEmojisHandler handles custom emojis endpoints
 type CustomEmojisHandler struct {
-	queries *db.Queries
+	queries db.Querier
 }
 
 // NewCustomEmojisHandler creates a new custom emojis handler
-func NewCustomEmojisHandler(queries *db.Queries) *CustomEmojisHandler {
+func NewCustomEmojisHandler(queries db.Querier) *CustomEmojisHandler {
 	return &CustomEmojisHandler{queries: queries}
 }
 
@@ -284,12 +285,13 @@ func (h *CustomEmojisHandler) RegisterRoutes(mux *http.ServeMux) {
 
 // ConversationsHandler handles conversations endpoints
 type ConversationsHandler struct {
-	queries *db.Queries
+	queries db.Querier
+	cfg     *config.Config
 }
 
 // NewConversationsHandler creates a new conversations handler
-func NewConversationsHandler(queries *db.Queries) *ConversationsHandler {
-	return &ConversationsHandler{queries: queries}
+func NewConversationsHandler(queries db.Querier, cfg *config.Config) *ConversationsHandler {
+	return &ConversationsHandler{queries: queries, cfg: cfg}
 }
 
 // Conversation represents a direct message conversation
@@ -308,19 +310,15 @@ func (h *ConversationsHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	limit := 20
-	if l := web.QueryParam(r, "limit"); l != "" {
-		if i, err := strconv.Atoi(l); err == nil && i > 0 {
-			limit = i
-		}
-	}
+	ctx := r.Context()
+	limit := parseBookmarksLimit(web.QueryParam(r, "limit"), 20, 40)
 
 	if h.queries == nil {
 		web.JSON(w, http.StatusOK, []Conversation{})
 		return
 	}
 
-	dbConversations, err := h.queries.ListConversations(r.Context(), db.ListConversationsParams{
+	dbConversations, err := h.queries.ListConversations(ctx, db.ListConversationsParams{
 		AccountID: accountID,
 		Limit:     int32(limit),
 		Offset:    0,
@@ -330,33 +328,78 @@ func (h *ConversationsHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Bulk fetch statuses
+	statusIDs := make([]int64, 0, len(dbConversations))
+	for _, c := range dbConversations {
+		statusIDs = append(statusIDs, c.LastStatusID)
+	}
+
+	statusMap := make(map[int64]db.Status)
+	if len(statusIDs) > 0 {
+		statuses, err := h.queries.GetStatusesByIDs(ctx, statusIDs)
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to fetch conversation statuses")
+			return
+		}
+		for _, s := range statuses {
+			statusMap[s.ID] = s
+		}
+	}
+
+	// Account fetching logic is now handled by the getAccount helper and on-demand fetching
+	// to avoid complex pre-fetching logic without a dedicated GetAccountsByIDs query.
+
+	// Local cache for accounts to minimize DB hits
+	cachedAccounts := make(map[int64]Account)
+	getAccount := func(id int64) (Account, error) {
+		if acc, ok := cachedAccounts[id]; ok {
+			return acc, nil
+		}
+		dbAcc, err := h.queries.GetAccountByID(ctx, id)
+		if err != nil {
+			return Account{}, err
+		}
+		acc := SerializeAccount(h.cfg, dbAcc)
+		cachedAccounts[id] = acc
+		return acc, nil
+	}
+
 	conversations := make([]Conversation, 0, len(dbConversations))
 	for _, c := range dbConversations {
-		// Fetch last status
-		status, err := h.queries.GetStatusByID(context.Background(), c.LastStatusID)
-		if err != nil {
-			continue
-		}
-		statusAccount, err := h.queries.GetAccountByID(context.Background(), c.LastStatusAccountID)
-		if err != nil {
+		status, ok := statusMap[c.LastStatusID]
+		if !ok {
 			continue
 		}
 
-		apiStatus := dbStatusToBasicAPI(status, statusAccount)
+		apiStatus := SerializeStatus(ctx, h.queries, h.cfg, status)
 
-		// Determine participants (simplified: just the other person in the last status)
 		accounts := []Account{}
 		if c.LastStatusAccountID != accountID {
-			accounts = append(accounts, dbAccountToBasicAPI(statusAccount))
+			// Sender is the other person
+			if acc, err := getAccount(c.LastStatusAccountID); err == nil {
+				accounts = append(accounts, acc)
+			}
 		} else {
-			// If I am the author, try to find who I replied to or mentioned
-			// This is a simplification. Real implementation would query mentions.
-			_ = 0
+			// I am the sender, find who I'm talking to
+			if status.InReplyToAccountID.Valid {
+				if acc, err := getAccount(status.InReplyToAccountID.Int64); err == nil {
+					accounts = append(accounts, acc)
+				}
+			} else {
+				// Check mentions
+				mentions, err := h.queries.GetMentionsByStatusID(ctx, status.ID)
+				if err == nil && len(mentions) > 0 {
+					// Just take the first mention for now as per Mastodon simplified logic often used
+					if acc, err := getAccount(mentions[0].AccountID); err == nil {
+						accounts = append(accounts, acc)
+					}
+				}
+			}
 		}
 
 		conversations = append(conversations, Conversation{
 			ID:         strconv.FormatInt(c.ID, 10),
-			Unread:     false, // TODO: Implement unread logic
+			Unread:     false,
 			Accounts:   accounts,
 			LastStatus: &apiStatus,
 		})
@@ -408,48 +451,6 @@ func (h *ConversationsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/conversations", h.List)
 	mux.HandleFunc("DELETE /api/v1/conversations/{id}", h.Delete)
 	mux.HandleFunc("POST /api/v1/conversations/{id}/read", h.MarkRead)
-}
-
-// Helper to convert db.Status to basic API Status
-// Helper to convert db.Status to basic API Status
-func dbStatusToBasicAPI(s db.Status, a db.Account) Status {
-	visibility := "public"
-	switch s.Visibility {
-	case 1:
-		visibility = "unlisted"
-	case 2:
-		visibility = "private"
-	case 3:
-		visibility = "direct"
-	}
-
-	return Status{
-		ID:               strconv.FormatInt(s.ID, 10),
-		Content:          s.Text,
-		Visibility:       visibility,
-		URI:              s.Uri.String,
-		Account:          dbAccountToBasicAPI(a),
-		MediaAttachments: []MediaAttach{},
-		Mentions:         []Mention{},
-		Tags:             []Tag{},
-		Emojis:           []any{},
-	}
-}
-
-// Helper to convert db.Account to basic API Account
-func dbAccountToBasicAPI(a db.Account) Account {
-	discoverable := a.Discoverable.Valid && a.Discoverable.Bool
-	return Account{
-		ID:           strconv.FormatInt(a.ID, 10),
-		Username:     a.Username,
-		Acct:         a.Username,
-		DisplayName:  a.DisplayName,
-		Note:         a.Note,
-		Locked:       a.Locked,
-		Discoverable: &discoverable,
-		Emojis:       []CustomEmoji{},
-		Fields:       []Field{},
-	}
 }
 
 // GetEmojiURL returns the URL for a custom emoji

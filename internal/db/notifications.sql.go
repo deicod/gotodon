@@ -71,6 +71,59 @@ func (q *Queries) CreateNotification(ctx context.Context, arg CreateNotification
 	return i, err
 }
 
+const createNotifications = `-- name: CreateNotifications :many
+INSERT INTO notifications (
+    account_id, from_account_id, activity_type, activity_id, type, created_at, updated_at
+)
+SELECT unnest($1::bigint[]), $2, $3, $4, $5, now(), now()
+RETURNING id, activity_id, activity_type, created_at, updated_at, account_id, from_account_id, type, filtered, group_key
+`
+
+type CreateNotificationsParams struct {
+	Column1       []int64     `db:"column_1" json:"column_1"`
+	FromAccountID int64       `db:"from_account_id" json:"from_account_id"`
+	ActivityType  string      `db:"activity_type" json:"activity_type"`
+	ActivityID    int64       `db:"activity_id" json:"activity_id"`
+	Type          pgtype.Text `db:"type" json:"type"`
+}
+
+func (q *Queries) CreateNotifications(ctx context.Context, arg CreateNotificationsParams) ([]Notification, error) {
+	rows, err := q.db.Query(ctx, createNotifications,
+		arg.Column1,
+		arg.FromAccountID,
+		arg.ActivityType,
+		arg.ActivityID,
+		arg.Type,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Notification{}
+	for rows.Next() {
+		var i Notification
+		if err := rows.Scan(
+			&i.ID,
+			&i.ActivityID,
+			&i.ActivityType,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.AccountID,
+			&i.FromAccountID,
+			&i.Type,
+			&i.Filtered,
+			&i.GroupKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const deleteNotification = `-- name: DeleteNotification :exec
 DELETE FROM notifications WHERE id = $1 AND account_id = $2
 `

@@ -11,50 +11,21 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const clearResetPasswordToken = `-- name: ClearResetPasswordToken :exec
-UPDATE users SET 
-    reset_password_token = NULL, 
-    reset_password_sent_at = NULL,
-    updated_at = now()
-WHERE id = $1
-`
-
-func (q *Queries) ClearResetPasswordToken(ctx context.Context, id int64) error {
-	_, err := q.db.Exec(ctx, clearResetPasswordToken, id)
-	return err
-}
-
-const confirmUser = `-- name: ConfirmUser :exec
-UPDATE users SET 
-    confirmed_at = now(), 
-    confirmation_token = NULL,
-    updated_at = now()
-WHERE id = $1
-`
-
-func (q *Queries) ConfirmUser(ctx context.Context, id int64) error {
-	_, err := q.db.Exec(ctx, confirmUser, id)
-	return err
-}
-
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (
-    email, encrypted_password, account_id, locale, 
-    confirmation_token, confirmation_sent_at, approved, role_id
+    email, encrypted_password, account_id, confirmed_at, invite_id, role_id
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8
+    $1, $2, $3, $4, $5, $6
 ) RETURNING id, email, created_at, updated_at, encrypted_password, reset_password_token, reset_password_sent_at, sign_in_count, current_sign_in_at, last_sign_in_at, confirmation_token, confirmed_at, confirmation_sent_at, unconfirmed_email, locale, consumed_timestep, otp_required_for_login, last_emailed_at, otp_backup_codes, account_id, disabled, invite_id, chosen_languages, created_by_application_id, approved, sign_in_token, sign_in_token_sent_at, webauthn_id, sign_up_ip, skip_sign_in_token, role_id, settings, time_zone, otp_secret
 `
 
 type CreateUserParams struct {
-	Email              string             `db:"email" json:"email"`
-	EncryptedPassword  string             `db:"encrypted_password" json:"encrypted_password"`
-	AccountID          int64              `db:"account_id" json:"account_id"`
-	Locale             pgtype.Text        `db:"locale" json:"locale"`
-	ConfirmationToken  pgtype.Text        `db:"confirmation_token" json:"confirmation_token"`
-	ConfirmationSentAt pgtype.Timestamptz `db:"confirmation_sent_at" json:"confirmation_sent_at"`
-	Approved           bool               `db:"approved" json:"approved"`
-	RoleID             pgtype.Int8        `db:"role_id" json:"role_id"`
+	Email             string             `db:"email" json:"email"`
+	EncryptedPassword string             `db:"encrypted_password" json:"encrypted_password"`
+	AccountID         int64              `db:"account_id" json:"account_id"`
+	ConfirmedAt       pgtype.Timestamptz `db:"confirmed_at" json:"confirmed_at"`
+	InviteID          pgtype.Int8        `db:"invite_id" json:"invite_id"`
+	RoleID            pgtype.Int8        `db:"role_id" json:"role_id"`
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, error) {
@@ -62,10 +33,8 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		arg.Email,
 		arg.EncryptedPassword,
 		arg.AccountID,
-		arg.Locale,
-		arg.ConfirmationToken,
-		arg.ConfirmationSentAt,
-		arg.Approved,
+		arg.ConfirmedAt,
+		arg.InviteID,
 		arg.RoleID,
 	)
 	var i User
@@ -201,57 +170,11 @@ func (q *Queries) GetUserByConfirmationToken(ctx context.Context, confirmationTo
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, created_at, updated_at, encrypted_password, reset_password_token, reset_password_sent_at, sign_in_count, current_sign_in_at, last_sign_in_at, confirmation_token, confirmed_at, confirmation_sent_at, unconfirmed_email, locale, consumed_timestep, otp_required_for_login, last_emailed_at, otp_backup_codes, account_id, disabled, invite_id, chosen_languages, created_by_application_id, approved, sign_in_token, sign_in_token_sent_at, webauthn_id, sign_up_ip, skip_sign_in_token, role_id, settings, time_zone, otp_secret FROM users WHERE lower(email) = lower($1)
+SELECT id, email, created_at, updated_at, encrypted_password, reset_password_token, reset_password_sent_at, sign_in_count, current_sign_in_at, last_sign_in_at, confirmation_token, confirmed_at, confirmation_sent_at, unconfirmed_email, locale, consumed_timestep, otp_required_for_login, last_emailed_at, otp_backup_codes, account_id, disabled, invite_id, chosen_languages, created_by_application_id, approved, sign_in_token, sign_in_token_sent_at, webauthn_id, sign_up_ip, skip_sign_in_token, role_id, settings, time_zone, otp_secret FROM users WHERE email = $1
 `
 
-func (q *Queries) GetUserByEmail(ctx context.Context, lower string) (User, error) {
-	row := q.db.QueryRow(ctx, getUserByEmail, lower)
-	var i User
-	err := row.Scan(
-		&i.ID,
-		&i.Email,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.EncryptedPassword,
-		&i.ResetPasswordToken,
-		&i.ResetPasswordSentAt,
-		&i.SignInCount,
-		&i.CurrentSignInAt,
-		&i.LastSignInAt,
-		&i.ConfirmationToken,
-		&i.ConfirmedAt,
-		&i.ConfirmationSentAt,
-		&i.UnconfirmedEmail,
-		&i.Locale,
-		&i.ConsumedTimestep,
-		&i.OtpRequiredForLogin,
-		&i.LastEmailedAt,
-		&i.OtpBackupCodes,
-		&i.AccountID,
-		&i.Disabled,
-		&i.InviteID,
-		&i.ChosenLanguages,
-		&i.CreatedByApplicationID,
-		&i.Approved,
-		&i.SignInToken,
-		&i.SignInTokenSentAt,
-		&i.WebauthnID,
-		&i.SignUpIp,
-		&i.SkipSignInToken,
-		&i.RoleID,
-		&i.Settings,
-		&i.TimeZone,
-		&i.OtpSecret,
-	)
-	return i, err
-}
-
-const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, created_at, updated_at, encrypted_password, reset_password_token, reset_password_sent_at, sign_in_count, current_sign_in_at, last_sign_in_at, confirmation_token, confirmed_at, confirmation_sent_at, unconfirmed_email, locale, consumed_timestep, otp_required_for_login, last_emailed_at, otp_backup_codes, account_id, disabled, invite_id, chosen_languages, created_by_application_id, approved, sign_in_token, sign_in_token_sent_at, webauthn_id, sign_up_ip, skip_sign_in_token, role_id, settings, time_zone, otp_secret FROM users WHERE id = $1
-`
-
-func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
-	row := q.db.QueryRow(ctx, getUserByID, id)
+func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByEmail, email)
 	var i User
 	err := row.Scan(
 		&i.ID,
@@ -293,7 +216,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 }
 
 const getUserByResetPasswordToken = `-- name: GetUserByResetPasswordToken :one
-SELECT id, email, created_at, updated_at, encrypted_password, reset_password_token, reset_password_sent_at, sign_in_count, current_sign_in_at, last_sign_in_at, confirmation_token, confirmed_at, confirmation_sent_at, unconfirmed_email, locale, consumed_timestep, otp_required_for_login, last_emailed_at, otp_backup_codes, account_id, disabled, invite_id, chosen_languages, created_by_application_id, approved, sign_in_token, sign_in_token_sent_at, webauthn_id, sign_up_ip, skip_sign_in_token, role_id, settings, time_zone, otp_secret FROM users WHERE reset_password_token = $1
+SELECT id, email, created_at, updated_at, encrypted_password, reset_password_token, reset_password_sent_at, sign_in_count, current_sign_in_at, last_sign_in_at, confirmation_token, confirmed_at, confirmation_sent_at, unconfirmed_email, locale, consumed_timestep, otp_required_for_login, last_emailed_at, otp_backup_codes, account_id, disabled, invite_id, chosen_languages, created_by_application_id, approved, sign_in_token, sign_in_token_sent_at, webauthn_id, sign_up_ip, skip_sign_in_token, role_id, settings, time_zone, otp_secret FROM users WHERE reset_password_token = $1 AND reset_password_token IS NOT NULL
 `
 
 func (q *Queries) GetUserByResetPasswordToken(ctx context.Context, resetPasswordToken pgtype.Text) (User, error) {
@@ -360,141 +283,19 @@ func (q *Queries) GetUserRole(ctx context.Context, id int64) (UserRole, error) {
 	return i, err
 }
 
-const listUserRoles = `-- name: ListUserRoles :many
-SELECT id, name, color, position, permissions, highlighted, created_at, updated_at FROM user_roles ORDER BY position DESC
-`
-
-func (q *Queries) ListUserRoles(ctx context.Context) ([]UserRole, error) {
-	rows, err := q.db.Query(ctx, listUserRoles)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []UserRole{}
-	for rows.Next() {
-		var i UserRole
-		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.Color,
-			&i.Position,
-			&i.Permissions,
-			&i.Highlighted,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const setResetPasswordToken = `-- name: SetResetPasswordToken :exec
-UPDATE users SET 
-    reset_password_token = $2, 
-    reset_password_sent_at = now(),
-    updated_at = now()
-WHERE id = $1
-`
-
-type SetResetPasswordTokenParams struct {
-	ID                 int64       `db:"id" json:"id"`
-	ResetPasswordToken pgtype.Text `db:"reset_password_token" json:"reset_password_token"`
-}
-
-func (q *Queries) SetResetPasswordToken(ctx context.Context, arg SetResetPasswordTokenParams) error {
-	_, err := q.db.Exec(ctx, setResetPasswordToken, arg.ID, arg.ResetPasswordToken)
-	return err
-}
-
-const updateUser = `-- name: UpdateUser :one
+const updateUserSettings = `-- name: UpdateUserSettings :exec
 UPDATE users SET
-    email = COALESCE($2, email),
-    encrypted_password = COALESCE($3, encrypted_password),
-    locale = COALESCE($4, locale),
-    chosen_languages = COALESCE($5, chosen_languages),
-    confirmed_at = COALESCE($6, confirmed_at),
-    current_sign_in_at = COALESCE($7, current_sign_in_at),
-    last_sign_in_at = COALESCE($8, last_sign_in_at),
-    sign_in_count = sign_in_count + COALESCE($9, 0),
-    otp_required_for_login = COALESCE($10, otp_required_for_login),
-    disabled = COALESCE($11, disabled),
-    approved = COALESCE($12, approved),
+    settings = COALESCE($2, settings),
     updated_at = now()
-WHERE id = $1
-RETURNING id, email, created_at, updated_at, encrypted_password, reset_password_token, reset_password_sent_at, sign_in_count, current_sign_in_at, last_sign_in_at, confirmation_token, confirmed_at, confirmation_sent_at, unconfirmed_email, locale, consumed_timestep, otp_required_for_login, last_emailed_at, otp_backup_codes, account_id, disabled, invite_id, chosen_languages, created_by_application_id, approved, sign_in_token, sign_in_token_sent_at, webauthn_id, sign_up_ip, skip_sign_in_token, role_id, settings, time_zone, otp_secret
+WHERE account_id = $1
 `
 
-type UpdateUserParams struct {
-	ID                  int64              `db:"id" json:"id"`
-	Email               pgtype.Text        `db:"email" json:"email"`
-	EncryptedPassword   pgtype.Text        `db:"encrypted_password" json:"encrypted_password"`
-	Locale              pgtype.Text        `db:"locale" json:"locale"`
-	ChosenLanguages     []string           `db:"chosen_languages" json:"chosen_languages"`
-	ConfirmedAt         pgtype.Timestamptz `db:"confirmed_at" json:"confirmed_at"`
-	CurrentSignInAt     pgtype.Timestamptz `db:"current_sign_in_at" json:"current_sign_in_at"`
-	LastSignInAt        pgtype.Timestamptz `db:"last_sign_in_at" json:"last_sign_in_at"`
-	SignInCountDelta    pgtype.Int4        `db:"sign_in_count_delta" json:"sign_in_count_delta"`
-	OtpRequiredForLogin pgtype.Bool        `db:"otp_required_for_login" json:"otp_required_for_login"`
-	Disabled            pgtype.Bool        `db:"disabled" json:"disabled"`
-	Approved            pgtype.Bool        `db:"approved" json:"approved"`
+type UpdateUserSettingsParams struct {
+	AccountID int64       `db:"account_id" json:"account_id"`
+	Settings  pgtype.Text `db:"settings" json:"settings"`
 }
 
-func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error) {
-	row := q.db.QueryRow(ctx, updateUser,
-		arg.ID,
-		arg.Email,
-		arg.EncryptedPassword,
-		arg.Locale,
-		arg.ChosenLanguages,
-		arg.ConfirmedAt,
-		arg.CurrentSignInAt,
-		arg.LastSignInAt,
-		arg.SignInCountDelta,
-		arg.OtpRequiredForLogin,
-		arg.Disabled,
-		arg.Approved,
-	)
-	var i User
-	err := row.Scan(
-		&i.ID,
-		&i.Email,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.EncryptedPassword,
-		&i.ResetPasswordToken,
-		&i.ResetPasswordSentAt,
-		&i.SignInCount,
-		&i.CurrentSignInAt,
-		&i.LastSignInAt,
-		&i.ConfirmationToken,
-		&i.ConfirmedAt,
-		&i.ConfirmationSentAt,
-		&i.UnconfirmedEmail,
-		&i.Locale,
-		&i.ConsumedTimestep,
-		&i.OtpRequiredForLogin,
-		&i.LastEmailedAt,
-		&i.OtpBackupCodes,
-		&i.AccountID,
-		&i.Disabled,
-		&i.InviteID,
-		&i.ChosenLanguages,
-		&i.CreatedByApplicationID,
-		&i.Approved,
-		&i.SignInToken,
-		&i.SignInTokenSentAt,
-		&i.WebauthnID,
-		&i.SignUpIp,
-		&i.SkipSignInToken,
-		&i.RoleID,
-		&i.Settings,
-		&i.TimeZone,
-		&i.OtpSecret,
-	)
-	return i, err
+func (q *Queries) UpdateUserSettings(ctx context.Context, arg UpdateUserSettingsParams) error {
+	_, err := q.db.Exec(ctx, updateUserSettings, arg.AccountID, arg.Settings)
+	return err
 }

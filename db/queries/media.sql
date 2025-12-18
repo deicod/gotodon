@@ -32,9 +32,13 @@ UPDATE media_attachments SET
 WHERE id = $1 AND account_id = $2
 RETURNING *;
 
--- name: AttachMediaToStatus :exec
+-- name: AttachMediaToStatus :execrows
 UPDATE media_attachments SET status_id = $2, updated_at = now()
 WHERE id = $1 AND account_id = $3 AND status_id IS NULL;
 
 -- name: DeleteMediaAttachment :exec
 DELETE FROM media_attachments WHERE id = $1 AND account_id = $2;
+
+-- name: DetachMediaFromStatus :execrows
+UPDATE media_attachments SET status_id = NULL, updated_at = now()
+WHERE id = $1 AND account_id = $2 AND status_id IS NOT NULL;
