@@ -51,6 +51,8 @@ type Querier interface {
 	AttachPreviewCardToStatus(ctx context.Context, arg AttachPreviewCardToStatusParams) error
 	BulkAcceptNotificationRequests(ctx context.Context, arg BulkAcceptNotificationRequestsParams) error
 	BulkDismissNotificationRequests(ctx context.Context, arg BulkDismissNotificationRequestsParams) error
+	ClearAccountAvatar(ctx context.Context, id int64) (Account, error)
+	ClearAccountHeader(ctx context.Context, id int64) (Account, error)
 	ClearNotifications(ctx context.Context, accountID int64) error
 	ClearStatusTags(ctx context.Context, statusID int64) error
 	ClearStatusTrends(ctx context.Context) error

@@ -95,3 +95,23 @@ AND suspended_at IS NULL;
 SELECT DISTINCT domain FROM accounts 
 WHERE domain IS NOT NULL AND domain != '' AND suspended_at IS NULL
 ORDER BY domain;
+
+-- name: ClearAccountAvatar :one
+UPDATE accounts SET
+    avatar_file_name = '',
+    avatar_content_type = '',
+    avatar_file_size = NULL,
+    avatar_updated_at = NULL,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: ClearAccountHeader :one
+UPDATE accounts SET
+    header_file_name = '',
+    header_content_type = '',
+    header_file_size = NULL,
+    header_updated_at = NULL,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;

@@ -165,8 +165,9 @@
 - [x] Add tests
 
 ### Task 2.9: Profile Management
-- [ ] Implement `DELETE /api/v1/profile/avatar`
-- [ ] Implement `DELETE /api/v1/profile/header`
+- [x] Implement `DELETE /api/v1/profile/avatar`
+- [x] Implement `DELETE /api/v1/profile/header`
+- [x] Add tests in `profile_test.go`
 
 ### Task 2.10: Annual Reports
 - [ ] Create `internal/api/v1/annual_reports.go`

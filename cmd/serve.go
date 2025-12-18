@@ -227,6 +227,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	v1InstanceInfoHandler := v1.NewInstanceInfoHandler(queries, cfg)
 	v1InstanceInfoHandler.RegisterRoutes(mux)
 
+	v1ProfileHandler := v1.NewProfileHandler(queries, cfg)
+	v1ProfileHandler.RegisterRoutes(mux)
+
 	// Register v2 handlers
 	// V2 Generic
 	v2InstanceHandler := v2.NewInstanceHandler(cfg)
