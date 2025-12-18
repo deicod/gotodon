@@ -61,12 +61,40 @@ type Account struct {
 	AttributionDomains         []string           `db:"attribution_domains" json:"attribution_domains"`
 }
 
+type AccountAlias struct {
+	ID        int64              `db:"id" json:"id"`
+	AccountID int64              `db:"account_id" json:"account_id"`
+	Acct      string             `db:"acct" json:"acct"`
+	Uri       string             `db:"uri" json:"uri"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
 type AccountDomainBlock struct {
 	ID        int64              `db:"id" json:"id"`
 	Domain    string             `db:"domain" json:"domain"`
 	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	AccountID int64              `db:"account_id" json:"account_id"`
+}
+
+type AccountMigration struct {
+	ID              int64              `db:"id" json:"id"`
+	AccountID       pgtype.Int8        `db:"account_id" json:"account_id"`
+	Acct            string             `db:"acct" json:"acct"`
+	FollowersCount  int64              `db:"followers_count" json:"followers_count"`
+	TargetAccountID pgtype.Int8        `db:"target_account_id" json:"target_account_id"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type AccountNote struct {
+	ID              int64              `db:"id" json:"id"`
+	AccountID       int64              `db:"account_id" json:"account_id"`
+	TargetAccountID int64              `db:"target_account_id" json:"target_account_id"`
+	Comment         string             `db:"comment" json:"comment"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 type AccountPin struct {

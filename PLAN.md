@@ -49,13 +49,13 @@
   - [x] Define columns: status_id, account_id, score, rank, allowed, language
 
 ### Task 1.4: Account Feature Tables
-- [ ] Add `account_notes` table (private notes about users)
-  - [ ] Define columns: account_id, target_account_id, comment
-  - [ ] Add unique index
-- [ ] Add `account_aliases` table
-  - [ ] Define columns: account_id, acct, uri
-- [ ] Add `account_migrations` table
-  - [ ] Define columns: account_id, acct, followers_count, target_account_id
+- [x] Add `account_notes` table (private notes about users)
+  - [x] Define columns: account_id, target_account_id, comment
+  - [x] Add unique index
+- [x] Add `account_aliases` table
+  - [x] Define columns: account_id, acct, uri
+- [x] Add `account_migrations` table
+  - [x] Define columns: account_id, acct, followers_count, target_account_id
 
 ### Task 1.5: Admin & Moderation Tables
 - [ ] Add `rules` table (server rules)

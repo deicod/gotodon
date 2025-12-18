@@ -60,11 +60,15 @@ type Querier interface {
 	CountFollowedTags(ctx context.Context, accountID int64) (int64, error)
 	CountFollowers(ctx context.Context, targetAccountID int64) (int64, error)
 	CountFollowing(ctx context.Context, accountID int64) (int64, error)
+	CountMigrationFollowers(ctx context.Context, targetAccountID pgtype.Int8) (int64, error)
 	CountNotificationRequests(ctx context.Context, accountID int64) (int64, error)
 	CountQuotesByQuotedStatus(ctx context.Context, quotedStatusID pgtype.Int8) (int64, error)
 	CountStatusEdits(ctx context.Context, statusID int64) (int64, error)
 	CountUnreadNotifications(ctx context.Context, accountID int64) (int64, error)
 	CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error)
+	CreateAccountAlias(ctx context.Context, arg CreateAccountAliasParams) (AccountAlias, error)
+	CreateAccountMigration(ctx context.Context, arg CreateAccountMigrationParams) (AccountMigration, error)
+	CreateAccountNote(ctx context.Context, arg CreateAccountNoteParams) (AccountNote, error)
 	CreateAccountPin(ctx context.Context, arg CreateAccountPinParams) (AccountPin, error)
 	CreateAccountStats(ctx context.Context, accountID int64) (AccountStat, error)
 	CreateBlock(ctx context.Context, arg CreateBlockParams) (Block, error)
@@ -107,6 +111,9 @@ type Querier interface {
 	DecrementStatusFavourites(ctx context.Context, statusID int64) error
 	DecrementStatusReblogs(ctx context.Context, statusID int64) error
 	DecrementStatusReplies(ctx context.Context, statusID int64) error
+	DeleteAccountAlias(ctx context.Context, id int64) error
+	DeleteAccountAliasesByAccountID(ctx context.Context, accountID int64) error
+	DeleteAccountNote(ctx context.Context, arg DeleteAccountNoteParams) error
 	DeleteAccountPin(ctx context.Context, arg DeleteAccountPinParams) error
 	DeleteBlock(ctx context.Context, arg DeleteBlockParams) error
 	DeleteBookmark(ctx context.Context, arg DeleteBookmarkParams) error
@@ -142,10 +149,18 @@ type Querier interface {
 	DetachPreviewCardFromStatus(ctx context.Context, arg DetachPreviewCardFromStatusParams) error
 	DismissAnnouncement(ctx context.Context, arg DismissAnnouncementParams) error
 	DismissNotificationRequest(ctx context.Context, id int64) error
+	GetAccountAliasByURI(ctx context.Context, arg GetAccountAliasByURIParams) (AccountAlias, error)
+	// Account Aliases queries (for account migration)
+	GetAccountAliases(ctx context.Context, accountID int64) ([]AccountAlias, error)
 	GetAccountByID(ctx context.Context, id int64) (Account, error)
 	GetAccountByURI(ctx context.Context, uri string) (Account, error)
 	GetAccountByUsername(ctx context.Context, username string) (Account, error)
 	GetAccountByUsernameAndDomain(ctx context.Context, arg GetAccountByUsernameAndDomainParams) (Account, error)
+	// Account Migrations queries
+	GetAccountMigration(ctx context.Context, id int64) (AccountMigration, error)
+	GetAccountMigrationsByAccountID(ctx context.Context, accountID pgtype.Int8) ([]AccountMigration, error)
+	// Account Notes queries (private notes about other users)
+	GetAccountNote(ctx context.Context, arg GetAccountNoteParams) (AccountNote, error)
 	GetAccountStats(ctx context.Context, accountID int64) (AccountStat, error)
 	GetAccountStatuses(ctx context.Context, arg GetAccountStatusesParams) ([]Status, error)
 	GetAccountsByIDs(ctx context.Context, ids []int64) ([]Account, error)
@@ -172,6 +187,7 @@ type Querier interface {
 	GetFollowing(ctx context.Context, arg GetFollowingParams) ([]Account, error)
 	GetHashtagTimeline(ctx context.Context, arg GetHashtagTimelineParams) ([]Status, error)
 	GetHomeTimeline(ctx context.Context, arg GetHomeTimelineParams) ([]Status, error)
+	GetLatestAccountMigration(ctx context.Context, accountID pgtype.Int8) (AccountMigration, error)
 	GetList(ctx context.Context, arg GetListParams) (List, error)
 	GetListTimeline(ctx context.Context, arg GetListTimelineParams) ([]Status, error)
 	GetListsContainingAccount(ctx context.Context, arg GetListsContainingAccountParams) ([]List, error)
@@ -182,6 +198,7 @@ type Querier interface {
 	GetMentionsByAccountID(ctx context.Context, arg GetMentionsByAccountIDParams) ([]Mention, error)
 	GetMentionsByStatusID(ctx context.Context, statusID int64) ([]Mention, error)
 	GetMentionsByStatusIDs(ctx context.Context, statusIds []int64) ([]Mention, error)
+	GetMigrationsByTargetAccount(ctx context.Context, targetAccountID pgtype.Int8) ([]AccountMigration, error)
 	GetMute(ctx context.Context, arg GetMuteParams) (Mute, error)
 	GetMutesByAccountIDs(ctx context.Context, arg GetMutesByAccountIDsParams) ([]Mute, error)
 	GetMutesFromAccounts(ctx context.Context, arg GetMutesFromAccountsParams) ([]Mute, error)
@@ -313,6 +330,7 @@ type Querier interface {
 	UnpinStatus(ctx context.Context, arg UnpinStatusParams) error
 	UnsuspendAccount(ctx context.Context, id int64) error
 	UpdateAccount(ctx context.Context, arg UpdateAccountParams) (Account, error)
+	UpdateAccountNote(ctx context.Context, arg UpdateAccountNoteParams) (AccountNote, error)
 	UpdateAccountStats(ctx context.Context, arg UpdateAccountStatsParams) error
 	UpdateCustomEmoji(ctx context.Context, arg UpdateCustomEmojiParams) (CustomEmoji, error)
 	UpdateFilter(ctx context.Context, arg UpdateFilterParams) (Filter, error)
@@ -332,6 +350,7 @@ type Querier interface {
 	UpdateStatusURI(ctx context.Context, arg UpdateStatusURIParams) error
 	UpdateTagTrendAllowed(ctx context.Context, arg UpdateTagTrendAllowedParams) (TagTrend, error)
 	UpdateUserSettings(ctx context.Context, arg UpdateUserSettingsParams) error
+	UpsertAccountNote(ctx context.Context, arg UpsertAccountNoteParams) (AccountNote, error)
 	UpsertMarker(ctx context.Context, arg UpsertMarkerParams) (Marker, error)
 	UpsertNotificationPolicy(ctx context.Context, arg UpsertNotificationPolicyParams) (NotificationPolicy, error)
 	UpsertNotificationRequest(ctx context.Context, arg UpsertNotificationRequestParams) (NotificationRequest, error)
