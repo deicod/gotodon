@@ -614,6 +614,16 @@ type StatusStat struct {
 	UntrustedReblogsCount    pgtype.Int8        `db:"untrusted_reblogs_count" json:"untrusted_reblogs_count"`
 }
 
+type StatusTrend struct {
+	ID        int64       `db:"id" json:"id"`
+	StatusID  int64       `db:"status_id" json:"status_id"`
+	AccountID int64       `db:"account_id" json:"account_id"`
+	Score     float64     `db:"score" json:"score"`
+	Rank      int32       `db:"rank" json:"rank"`
+	Allowed   bool        `db:"allowed" json:"allowed"`
+	Language  pgtype.Text `db:"language" json:"language"`
+}
+
 type StatusesTag struct {
 	StatusID int64 `db:"status_id" json:"status_id"`
 	TagID    int64 `db:"tag_id" json:"tag_id"`
@@ -633,6 +643,23 @@ type Tag struct {
 	MaxScore          pgtype.Float8      `db:"max_score" json:"max_score"`
 	MaxScoreAt        pgtype.Timestamptz `db:"max_score_at" json:"max_score_at"`
 	DisplayName       pgtype.Text        `db:"display_name" json:"display_name"`
+}
+
+type TagFollow struct {
+	ID        int64              `db:"id" json:"id"`
+	TagID     int64              `db:"tag_id" json:"tag_id"`
+	AccountID int64              `db:"account_id" json:"account_id"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type TagTrend struct {
+	ID       int64   `db:"id" json:"id"`
+	TagID    int64   `db:"tag_id" json:"tag_id"`
+	Score    float64 `db:"score" json:"score"`
+	Rank     int32   `db:"rank" json:"rank"`
+	Allowed  bool    `db:"allowed" json:"allowed"`
+	Language string  `db:"language" json:"language"`
 }
 
 type User struct {

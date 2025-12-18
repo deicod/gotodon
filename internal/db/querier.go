@@ -53,8 +53,11 @@ type Querier interface {
 	BulkDismissNotificationRequests(ctx context.Context, arg BulkDismissNotificationRequestsParams) error
 	ClearNotifications(ctx context.Context, accountID int64) error
 	ClearStatusTags(ctx context.Context, statusID int64) error
+	ClearStatusTrends(ctx context.Context) error
+	ClearTagTrends(ctx context.Context) error
 	CountAccountPins(ctx context.Context, accountID int64) (int64, error)
 	CountFeaturedTags(ctx context.Context, accountID int64) (int64, error)
+	CountFollowedTags(ctx context.Context, accountID int64) (int64, error)
 	CountFollowers(ctx context.Context, targetAccountID int64) (int64, error)
 	CountFollowing(ctx context.Context, accountID int64) (int64, error)
 	CountNotificationRequests(ctx context.Context, accountID int64) (int64, error)
@@ -99,6 +102,7 @@ type Querier interface {
 	CreateStatusEdit(ctx context.Context, arg CreateStatusEditParams) (StatusEdit, error)
 	CreateStatusStats(ctx context.Context, statusID int64) (StatusStat, error)
 	CreateTag(ctx context.Context, name string) (Tag, error)
+	CreateTagFollow(ctx context.Context, arg CreateTagFollowParams) (TagFollow, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	DecrementStatusFavourites(ctx context.Context, statusID int64) error
 	DecrementStatusReblogs(ctx context.Context, statusID int64) error
@@ -131,6 +135,9 @@ type Querier interface {
 	DeleteScheduledStatus(ctx context.Context, arg DeleteScheduledStatusParams) error
 	DeleteStatus(ctx context.Context, id int64) error
 	DeleteStatusEditsForStatus(ctx context.Context, statusID int64) error
+	DeleteStatusTrend(ctx context.Context, statusID int64) error
+	DeleteTagFollow(ctx context.Context, arg DeleteTagFollowParams) error
+	DeleteTagTrend(ctx context.Context, arg DeleteTagTrendParams) error
 	DetachMediaFromStatus(ctx context.Context, arg DetachMediaFromStatusParams) (int64, error)
 	DetachPreviewCardFromStatus(ctx context.Context, arg DetachPreviewCardFromStatusParams) error
 	DismissAnnouncement(ctx context.Context, arg DismissAnnouncementParams) error
@@ -222,8 +229,15 @@ type Querier interface {
 	GetStatusEditsByStatusID(ctx context.Context, statusID int64) ([]StatusEdit, error)
 	GetStatusStats(ctx context.Context, statusID int64) (StatusStat, error)
 	GetStatusStatsByIDs(ctx context.Context, statusIds []int64) ([]StatusStat, error)
+	// Status Trends queries
+	GetStatusTrend(ctx context.Context, statusID int64) (StatusTrend, error)
 	GetStatusesByIDs(ctx context.Context, ids []int64) ([]Status, error)
 	GetTagByName(ctx context.Context, lower string) (Tag, error)
+	// Tag Follows queries
+	GetTagFollow(ctx context.Context, arg GetTagFollowParams) (TagFollow, error)
+	GetTagFollowersCount(ctx context.Context, tagID int64) (int64, error)
+	// Tag Trends queries
+	GetTagTrend(ctx context.Context, arg GetTagTrendParams) (TagTrend, error)
 	GetTagsByNames(ctx context.Context, dollar_1 []string) ([]Tag, error)
 	GetTagsByStatusIDs(ctx context.Context, statusIds []int64) ([]GetTagsByStatusIDsRow, error)
 	// Placeholder: In future, use preview_cards table
@@ -245,8 +259,10 @@ type Querier interface {
 	IncrementVoteCount(ctx context.Context, arg IncrementVoteCountParams) error
 	IncrementVotersCount(ctx context.Context, id int64) error
 	IsBookmarked(ctx context.Context, arg IsBookmarkedParams) (bool, error)
+	IsFollowingTag(ctx context.Context, arg IsFollowingTagParams) (bool, error)
 	ListAccountPins(ctx context.Context, accountID int64) ([]ListAccountPinsRow, error)
 	ListAccountsInList(ctx context.Context, arg ListAccountsInListParams) ([]Account, error)
+	ListAllTrendingTags(ctx context.Context, arg ListAllTrendingTagsParams) ([]ListAllTrendingTagsRow, error)
 	ListAnnouncementReactions(ctx context.Context, announcementID int64) ([]AnnouncementReaction, error)
 	ListAnnouncements(ctx context.Context, arg ListAnnouncementsParams) ([]Announcement, error)
 	ListBlocks(ctx context.Context, arg ListBlocksParams) ([]Account, error)
@@ -262,6 +278,7 @@ type Querier interface {
 	ListFilterStatuses(ctx context.Context, filterID int64) ([]FilterStatus, error)
 	ListFilters(ctx context.Context, accountID int64) ([]Filter, error)
 	ListFollowRequests(ctx context.Context, arg ListFollowRequestsParams) ([]Account, error)
+	ListFollowedTags(ctx context.Context, arg ListFollowedTagsParams) ([]Tag, error)
 	ListLists(ctx context.Context, accountID int64) ([]List, error)
 	ListLocalAccounts(ctx context.Context, arg ListLocalAccountsParams) ([]Account, error)
 	ListMediaAttachmentsByStatus(ctx context.Context, statusID pgtype.Int8) ([]MediaAttachment, error)
@@ -270,7 +287,10 @@ type Querier interface {
 	ListNotificationRequests(ctx context.Context, arg ListNotificationRequestsParams) ([]NotificationRequest, error)
 	ListNotifications(ctx context.Context, arg ListNotificationsParams) ([]Notification, error)
 	ListOAuthApplicationsByOwner(ctx context.Context, arg ListOAuthApplicationsByOwnerParams) ([]OauthApplication, error)
+	ListPendingTrendingStatuses(ctx context.Context, arg ListPendingTrendingStatusesParams) ([]Status, error)
 	ListScheduledStatuses(ctx context.Context, arg ListScheduledStatusesParams) ([]ScheduledStatus, error)
+	ListTrendingStatuses(ctx context.Context, arg ListTrendingStatusesParams) ([]Status, error)
+	ListTrendingTags(ctx context.Context, arg ListTrendingTagsParams) ([]ListTrendingTagsRow, error)
 	ListUnattachedMedia(ctx context.Context, arg ListUnattachedMediaParams) ([]MediaAttachment, error)
 	ListUserOAuthTokens(ctx context.Context, resourceOwnerID pgtype.Int8) ([]ListUserOAuthTokensRow, error)
 	// Placeholder: Requires conversation_mutes or new table for read state which implies 'unread' logic
@@ -308,7 +328,9 @@ type Querier interface {
 	UpdateQuoteState(ctx context.Context, arg UpdateQuoteStateParams) (Quote, error)
 	UpdateScheduledStatus(ctx context.Context, arg UpdateScheduledStatusParams) (ScheduledStatus, error)
 	UpdateStatus(ctx context.Context, arg UpdateStatusParams) (Status, error)
+	UpdateStatusTrendAllowed(ctx context.Context, arg UpdateStatusTrendAllowedParams) (StatusTrend, error)
 	UpdateStatusURI(ctx context.Context, arg UpdateStatusURIParams) error
+	UpdateTagTrendAllowed(ctx context.Context, arg UpdateTagTrendAllowedParams) (TagTrend, error)
 	UpdateUserSettings(ctx context.Context, arg UpdateUserSettingsParams) error
 	UpsertMarker(ctx context.Context, arg UpsertMarkerParams) (Marker, error)
 	UpsertNotificationPolicy(ctx context.Context, arg UpsertNotificationPolicyParams) (NotificationPolicy, error)
@@ -316,6 +338,8 @@ type Querier interface {
 	UpsertPreferences(ctx context.Context, arg UpsertPreferencesParams) (Preference, error)
 	// Preview Card Trends
 	UpsertPreviewCardTrend(ctx context.Context, arg UpsertPreviewCardTrendParams) (PreviewCardTrend, error)
+	UpsertStatusTrend(ctx context.Context, arg UpsertStatusTrendParams) (StatusTrend, error)
+	UpsertTagTrend(ctx context.Context, arg UpsertTagTrendParams) (TagTrend, error)
 	UpsertTags(ctx context.Context, dollar_1 []string) error
 	Vote(ctx context.Context, arg VoteParams) error
 }

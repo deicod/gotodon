@@ -40,13 +40,13 @@
   - [x] Add indexes
 
 ### Task 1.3: Tag & Trends Tables
-- [ ] Add `tag_follows` table
-  - [ ] Define columns: tag_id, account_id
-  - [ ] Add unique index on account_id + tag_id
-- [ ] Add `tag_trends` table
-  - [ ] Define columns: tag_id, score, rank, allowed, language
-- [ ] Add `status_trends` table
-  - [ ] Define columns: status_id, account_id, score, rank, allowed, language
+- [x] Add `tag_follows` table
+  - [x] Define columns: tag_id, account_id
+  - [x] Add unique index on account_id + tag_id
+- [x] Add `tag_trends` table
+  - [x] Define columns: tag_id, score, rank, allowed, language
+- [x] Add `status_trends` table
+  - [x] Define columns: status_id, account_id, score, rank, allowed, language
 
 ### Task 1.4: Account Feature Tables
 - [ ] Add `account_notes` table (private notes about users)
