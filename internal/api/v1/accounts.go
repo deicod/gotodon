@@ -1024,6 +1024,97 @@ func (h *AccountsHandler) FamiliarFollowers(w http.ResponseWriter, r *http.Reque
 	web.JSON(w, http.StatusOK, []map[string]any{})
 }
 
+// RemoveFromFollowers handles POST /api/v1/accounts/:id/remove_from_followers
+func (h *AccountsHandler) RemoveFromFollowers(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	targetID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	ctx := r.Context()
+
+	if h.useDB() {
+		// Remove the target's follow on us (they follow us, we remove them)
+		_ = h.queries.DeleteFollow(ctx, db.DeleteFollowParams{
+			AccountID:       targetID,
+			TargetAccountID: accountID,
+		})
+
+		rel := h.getRelationship(ctx, accountID, targetID)
+		web.JSON(w, http.StatusOK, rel)
+		return
+	}
+
+	// Mock fallback
+	web.JSON(w, http.StatusOK, Relationship{
+		ID:         web.Param(r, "id"),
+		FollowedBy: false,
+		Languages:  []any{},
+	})
+}
+
+// Lookup handles GET /api/v1/accounts/lookup
+func (h *AccountsHandler) Lookup(w http.ResponseWriter, r *http.Request) {
+	acct := web.QueryParam(r, "acct")
+	if acct == "" {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	ctx := r.Context()
+
+	if h.useDB() {
+		// Check if acct contains @ for remote account
+		if idx := len(acct) - 1; idx > 0 {
+			for i, c := range acct {
+				if c == '@' && i > 0 {
+					// Remote account: username@domain
+					username := acct[:i]
+					domain := acct[i+1:]
+					dbAcc, err := h.queries.GetAccountByUsernameAndDomain(ctx, db.GetAccountByUsernameAndDomainParams{
+						Username: username,
+						Domain:   domain,
+					})
+					if err != nil {
+						web.JSONError(w, http.StatusNotFound, "Record not found")
+						return
+					}
+					web.JSON(w, http.StatusOK, h.dbAccountWithStats(ctx, dbAcc))
+					return
+				}
+			}
+		}
+
+		// Local account
+		dbAcc, err := h.queries.GetAccountByUsername(ctx, acct)
+		if err != nil {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+		web.JSON(w, http.StatusOK, h.dbAccountWithStats(ctx, dbAcc))
+		return
+	}
+
+	// Mock fallback
+	discoverable := true
+	web.JSON(w, http.StatusOK, Account{
+		ID:           "1",
+		Username:     acct,
+		Acct:         acct,
+		DisplayName:  acct,
+		Discoverable: &discoverable,
+		Emojis:       []CustomEmoji{},
+		Fields:       []Field{},
+	})
+}
+
 // RegisterRoutes registers the accounts routes
 func (h *AccountsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/accounts/verify_credentials", h.VerifyCredentials)
@@ -1043,4 +1134,6 @@ func (h *AccountsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/accounts/{id}/mute", h.Mute)
 	mux.HandleFunc("POST /api/v1/accounts/{id}/unmute", h.Unmute)
 	mux.HandleFunc("POST /api/v1/accounts/{id}/note", h.SetNote)
+	mux.HandleFunc("POST /api/v1/accounts/{id}/remove_from_followers", h.RemoveFromFollowers)
+	mux.HandleFunc("GET /api/v1/accounts/lookup", h.Lookup)
 }

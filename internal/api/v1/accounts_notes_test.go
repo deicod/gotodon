@@ -152,3 +152,103 @@ func TestAccountsHandler_SetNote_RequiresAuth(t *testing.T) {
 		t.Errorf("unexpected error message: %v", errResp["error"])
 	}
 }
+
+func TestAccountsHandler_RemoveFromFollowers_MockMode(t *testing.T) {
+	h := NewAccountsHandler(nil, nil, nil)
+
+	tests := []struct {
+		name      string
+		targetID  string
+		accountID int64
+		wantCode  int
+	}{
+		{
+			name:      "authenticated user can remove follower",
+			targetID:  "12345",
+			accountID: 67890,
+			wantCode:  http.StatusOK,
+		},
+		{
+			name:      "unauthenticated user gets 401",
+			targetID:  "12345",
+			accountID: 0,
+			wantCode:  http.StatusUnauthorized,
+		},
+		{
+			name:      "invalid target ID returns not found",
+			targetID:  "invalid",
+			accountID: 67890,
+			wantCode:  http.StatusNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, rec := mockAccountsRequest(http.MethodPost, "/api/v1/accounts/"+tt.targetID+"/remove_from_followers", "", tt.accountID)
+			req.SetPathValue("id", tt.targetID)
+
+			h.RemoveFromFollowers(rec, req)
+
+			if rec.Code != tt.wantCode {
+				t.Errorf("status = %d, want %d", rec.Code, tt.wantCode)
+			}
+
+			if tt.wantCode == http.StatusOK {
+				var rel Relationship
+				if err := json.Unmarshal(rec.Body.Bytes(), &rel); err != nil {
+					t.Fatalf("Failed to unmarshal response: %v", err)
+				}
+				if rel.FollowedBy != false {
+					t.Error("expected followed_by to be false")
+				}
+			}
+		})
+	}
+}
+
+func TestAccountsHandler_Lookup_MockMode(t *testing.T) {
+	h := NewAccountsHandler(nil, nil, nil)
+
+	tests := []struct {
+		name     string
+		acct     string
+		wantCode int
+	}{
+		{
+			name:     "valid acct returns account",
+			acct:     "testuser",
+			wantCode: http.StatusOK,
+		},
+		{
+			name:     "empty acct returns not found",
+			acct:     "",
+			wantCode: http.StatusNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := "/api/v1/accounts/lookup"
+			if tt.acct != "" {
+				path += "?acct=" + tt.acct
+			}
+			req, rec := mockAccountsRequest(http.MethodGet, path, "", 0)
+
+			h.Lookup(rec, req)
+
+			if rec.Code != tt.wantCode {
+				t.Errorf("status = %d, want %d", rec.Code, tt.wantCode)
+			}
+
+			if tt.wantCode == http.StatusOK {
+				var acc Account
+				if err := json.Unmarshal(rec.Body.Bytes(), &acc); err != nil {
+					t.Fatalf("Failed to unmarshal response: %v", err)
+				}
+				if acc.Username != tt.acct {
+					t.Errorf("username = %q, want %q", acc.Username, tt.acct)
+				}
+			}
+		})
+	}
+}

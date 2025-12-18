@@ -160,8 +160,9 @@
 - [x] Add tests in `accounts_notes_test.go`
 
 ### Task 2.8: Account Management
-- [ ] Implement `POST /api/v1/accounts/{id}/remove_from_followers`
-- [ ] Verify `GET /api/v1/accounts/lookup` works correctly
+- [x] Implement `POST /api/v1/accounts/{id}/remove_from_followers`
+- [x] Verify `GET /api/v1/accounts/lookup` works correctly
+- [x] Add tests
 
 ### Task 2.9: Profile Management
 - [ ] Implement `DELETE /api/v1/profile/avatar`
