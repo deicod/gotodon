@@ -144,13 +144,14 @@
 - [x] Add tests in `tags_test.go`
 
 ### Task 2.6: Notification Improvements
-- [ ] Implement `GET /api/v1/notifications/unread_count`
-- [ ] Implement `GET /api/v1/notifications/requests`
-  - [ ] List notification permission requests
-- [ ] Implement `POST /api/v1/notifications/requests/{id}/accept`
-- [ ] Implement `POST /api/v1/notifications/requests/{id}/dismiss`
-- [ ] Implement `GET /api/v1/notifications/policy`
-- [ ] Implement `PUT /api/v1/notifications/policy`
+- [x] Implement `GET /api/v1/notifications/unread_count`
+- [x] Implement `GET /api/v1/notifications/requests`
+  - [x] List notification permission requests
+- [x] Implement `POST /api/v1/notifications/requests/{id}/accept`
+- [x] Implement `POST /api/v1/notifications/requests/{id}/dismiss`
+- [x] Implement `GET /api/v1/notifications/policy`
+- [x] Implement `PUT /api/v1/notifications/policy`
+- [x] Add tests in `notifications_test.go`
 
 ### Task 2.7: Account Notes
 - [x] Implement `POST /api/v1/accounts/{id}/note`

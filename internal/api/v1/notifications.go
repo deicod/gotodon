@@ -213,9 +213,290 @@ func (h *NotificationsHandler) Dismiss(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
+// NotificationPolicy represents a user's notification filtering policy
+type NotificationPolicy struct {
+	ForNotFollowing    string `json:"for_not_following"`
+	ForNotFollowers    string `json:"for_not_followers"`
+	ForNewAccounts     string `json:"for_new_accounts"`
+	ForPrivateMentions string `json:"for_private_mentions"`
+	ForLimitedAccounts string `json:"for_limited_accounts"`
+	Summary            struct {
+		PendingRequestsCount int64 `json:"pending_requests_count"`
+		PendingNotifications int64 `json:"pending_notifications_count"`
+	} `json:"summary"`
+}
+
+// NotificationRequest represents a pending notification permission request
+type NotificationRequest struct {
+	ID                 string    `json:"id"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+	Account            Account   `json:"account"`
+	NotificationsCount int64     `json:"notifications_count"`
+	LastStatus         *Status   `json:"last_status,omitempty"`
+}
+
+// policyIntToString converts database int32 enum to API string
+// 0=accept, 1=filter, 2=drop
+func policyIntToString(v int32) string {
+	switch v {
+	case 0:
+		return "accept"
+	case 1:
+		return "filter"
+	case 2:
+		return "drop"
+	default:
+		return "accept"
+	}
+}
+
+// policyStringToInt converts API string to database int32 enum
+func policyStringToInt(s string) int32 {
+	switch s {
+	case "accept":
+		return 0
+	case "filter":
+		return 1
+	case "drop":
+		return 2
+	default:
+		return 0
+	}
+}
+
+// UnreadCount handles GET /api/v1/notifications/unread_count
+func (h *NotificationsHandler) UnreadCount(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	count := int64(0)
+	if h.useDB() {
+		c, err := h.queries.CountUnreadNotifications(r.Context(), accountID)
+		if err == nil {
+			count = c
+		}
+	}
+
+	web.JSON(w, http.StatusOK, map[string]int64{"count": count})
+}
+
+// GetPolicy handles GET /api/v1/notifications/policy
+func (h *NotificationsHandler) GetPolicy(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	policy := NotificationPolicy{
+		ForNotFollowing:    "accept",
+		ForNotFollowers:    "accept",
+		ForNewAccounts:     "accept",
+		ForPrivateMentions: "accept",
+		ForLimitedAccounts: "filter",
+	}
+
+	if h.useDB() {
+		ctx := r.Context()
+		dbPolicy, err := h.queries.GetNotificationPolicy(ctx, accountID)
+		if err == nil {
+			policy.ForNotFollowing = policyIntToString(dbPolicy.ForNotFollowing)
+			policy.ForNotFollowers = policyIntToString(dbPolicy.ForNotFollowers)
+			policy.ForNewAccounts = policyIntToString(dbPolicy.ForNewAccounts)
+			policy.ForPrivateMentions = policyIntToString(dbPolicy.ForPrivateMentions)
+			policy.ForLimitedAccounts = policyIntToString(dbPolicy.ForLimitedAccounts)
+		}
+
+		// Get pending request count
+		pendingCount, err := h.queries.CountNotificationRequests(ctx, accountID)
+		if err == nil {
+			policy.Summary.PendingRequestsCount = pendingCount
+		}
+	}
+
+	web.JSON(w, http.StatusOK, policy)
+}
+
+// UpdatePolicy handles PUT /api/v1/notifications/policy
+func (h *NotificationsHandler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	var req struct {
+		ForNotFollowing    *string `json:"for_not_following" form:"for_not_following"`
+		ForNotFollowers    *string `json:"for_not_followers" form:"for_not_followers"`
+		ForNewAccounts     *string `json:"for_new_accounts" form:"for_new_accounts"`
+		ForPrivateMentions *string `json:"for_private_mentions" form:"for_private_mentions"`
+		ForLimitedAccounts *string `json:"for_limited_accounts" form:"for_limited_accounts"`
+	}
+	if err := web.Bind(r, &req); err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	policy := NotificationPolicy{
+		ForNotFollowing:    "accept",
+		ForNotFollowers:    "accept",
+		ForNewAccounts:     "accept",
+		ForPrivateMentions: "accept",
+		ForLimitedAccounts: "filter",
+	}
+
+	if req.ForNotFollowing != nil {
+		policy.ForNotFollowing = *req.ForNotFollowing
+	}
+	if req.ForNotFollowers != nil {
+		policy.ForNotFollowers = *req.ForNotFollowers
+	}
+	if req.ForNewAccounts != nil {
+		policy.ForNewAccounts = *req.ForNewAccounts
+	}
+	if req.ForPrivateMentions != nil {
+		policy.ForPrivateMentions = *req.ForPrivateMentions
+	}
+	if req.ForLimitedAccounts != nil {
+		policy.ForLimitedAccounts = *req.ForLimitedAccounts
+	}
+
+	if h.useDB() {
+		ctx := r.Context()
+		_, _ = h.queries.UpsertNotificationPolicy(ctx, db.UpsertNotificationPolicyParams{
+			AccountID:          accountID,
+			ForNotFollowing:    policyStringToInt(policy.ForNotFollowing),
+			ForNotFollowers:    policyStringToInt(policy.ForNotFollowers),
+			ForNewAccounts:     policyStringToInt(policy.ForNewAccounts),
+			ForPrivateMentions: policyStringToInt(policy.ForPrivateMentions),
+			ForLimitedAccounts: policyStringToInt(policy.ForLimitedAccounts),
+		})
+	}
+
+	web.JSON(w, http.StatusOK, policy)
+}
+
+// ListRequests handles GET /api/v1/notifications/requests
+func (h *NotificationsHandler) ListRequests(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	limit := int32(40)
+	offset := int32(0)
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.ParseInt(l, 10, 32); err == nil && parsed > 0 && parsed <= 80 {
+			limit = int32(parsed)
+		}
+	}
+
+	if h.useDB() {
+		ctx := r.Context()
+		dbRequests, err := h.queries.ListNotificationRequests(ctx, db.ListNotificationRequestsParams{
+			AccountID: accountID,
+			Limit:     limit,
+			Offset:    offset,
+		})
+		if err != nil {
+			web.JSON(w, http.StatusOK, []NotificationRequest{})
+			return
+		}
+
+		requests := make([]NotificationRequest, len(dbRequests))
+		for i, req := range dbRequests {
+			requests[i] = NotificationRequest{
+				ID:                 strconv.FormatInt(req.ID, 10),
+				NotificationsCount: req.NotificationsCount,
+			}
+			if req.CreatedAt.Valid {
+				requests[i].CreatedAt = req.CreatedAt.Time
+			}
+			if req.UpdatedAt.Valid {
+				requests[i].UpdatedAt = req.UpdatedAt.Time
+			}
+			// Load account info
+			if req.FromAccountID > 0 {
+				dbAcc, err := h.queries.GetAccountByID(ctx, req.FromAccountID)
+				if err == nil {
+					discoverable := dbAcc.Discoverable.Valid && dbAcc.Discoverable.Bool
+					requests[i].Account = Account{
+						ID:           strconv.FormatInt(dbAcc.ID, 10),
+						Username:     dbAcc.Username,
+						Acct:         dbAcc.Username,
+						DisplayName:  dbAcc.DisplayName,
+						Discoverable: &discoverable,
+						Emojis:       []CustomEmoji{},
+						Fields:       []Field{},
+					}
+				}
+			}
+		}
+		web.JSON(w, http.StatusOK, requests)
+		return
+	}
+
+	web.JSON(w, http.StatusOK, []NotificationRequest{})
+}
+
+// AcceptRequest handles POST /api/v1/notifications/requests/:id/accept
+func (h *NotificationsHandler) AcceptRequest(w http.ResponseWriter, r *http.Request) {
+	_, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	idStr := web.Param(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	if h.useDB() {
+		_ = h.queries.AcceptNotificationRequest(r.Context(), id)
+	}
+
+	web.JSON(w, http.StatusOK, map[string]any{})
+}
+
+// DismissRequest handles POST /api/v1/notifications/requests/:id/dismiss
+func (h *NotificationsHandler) DismissRequest(w http.ResponseWriter, r *http.Request) {
+	_, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	idStr := web.Param(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	if h.useDB() {
+		_ = h.queries.DismissNotificationRequest(r.Context(), id)
+	}
+
+	web.JSON(w, http.StatusOK, map[string]any{})
+}
+
 // RegisterRoutes registers the notifications routes
 func (h *NotificationsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/notifications", h.List)
+	mux.HandleFunc("GET /api/v1/notifications/unread_count", h.UnreadCount)
+	mux.HandleFunc("GET /api/v1/notifications/policy", h.GetPolicy)
+	mux.HandleFunc("PUT /api/v1/notifications/policy", h.UpdatePolicy)
+	mux.HandleFunc("GET /api/v1/notifications/requests", h.ListRequests)
+	mux.HandleFunc("POST /api/v1/notifications/requests/{id}/accept", h.AcceptRequest)
+	mux.HandleFunc("POST /api/v1/notifications/requests/{id}/dismiss", h.DismissRequest)
 	mux.HandleFunc("GET /api/v1/notifications/{id}", h.Get)
 	mux.HandleFunc("POST /api/v1/notifications/clear", h.Clear)
 	mux.HandleFunc("POST /api/v1/notifications/{id}/dismiss", h.Dismiss)
