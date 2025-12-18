@@ -90,3 +90,8 @@ WHERE (lower(username), lower(domain)) IN (
     SELECT lower(unnest(@usernames::text[])), lower(unnest(@domains::text[]))
 )
 AND suspended_at IS NULL;
+
+-- name: GetKnownDomains :many
+SELECT DISTINCT domain FROM accounts 
+WHERE domain IS NOT NULL AND domain != '' AND suspended_at IS NULL
+ORDER BY domain;

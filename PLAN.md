@@ -115,18 +115,19 @@
 - [ ] Add quote_id to status response serializer
 
 ### Task 2.4: Instance Information Endpoints
-- [ ] Create `internal/api/v1/instance_info.go`
-- [ ] Implement `GET /api/v1/instance/peers`
-  - [ ] Return list of known domains
-- [ ] Implement `GET /api/v1/instance/activity`
-  - [ ] Return weekly activity stats
-- [ ] Implement `GET /api/v1/instance/rules`
-  - [ ] Query rules table
-- [ ] Implement `GET /api/v1/instance/privacy_policy`
-- [ ] Implement `GET /api/v1/instance/terms_of_service`
-- [ ] Implement `GET /api/v1/instance/extended_description`
-- [ ] Implement `GET /api/v1/instance/translation_languages`
-- [ ] Implement `GET /api/v1/instance/languages`
+- [x] Create `internal/api/v1/instance_info.go`
+- [x] Implement `GET /api/v1/instance/peers`
+  - [x] Return list of known domains
+- [x] Implement `GET /api/v1/instance/activity`
+  - [x] Return weekly activity stats
+- [x] Implement `GET /api/v1/instance/rules`
+  - [x] Query rules table
+- [x] Implement `GET /api/v1/instance/privacy_policy`
+- [x] Implement `GET /api/v1/instance/terms_of_service`
+- [x] Implement `GET /api/v1/instance/extended_description`
+- [x] Implement `GET /api/v1/instance/translation_languages`
+- [x] Implement `GET /api/v1/instance/languages`
+- [x] Add tests in `instance_info_test.go`
 
 ### Task 2.5: Tag Following
 - [x] Create `internal/api/v1/tags.go`
@@ -152,9 +153,10 @@
 - [ ] Implement `PUT /api/v1/notifications/policy`
 
 ### Task 2.7: Account Notes
-- [ ] Implement `POST /api/v1/accounts/{id}/note`
-  - [ ] Create/update private note
-- [ ] Include note in relationships response
+- [x] Implement `POST /api/v1/accounts/{id}/note`
+  - [x] Create/update private note
+- [x] Include note in relationships response
+- [x] Add tests in `accounts_notes_test.go`
 
 ### Task 2.8: Account Management
 - [ ] Implement `POST /api/v1/accounts/{id}/remove_from_followers`

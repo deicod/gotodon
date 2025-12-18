@@ -144,3 +144,8 @@ LIMIT $1 OFFSET $2;
 -- name: UpdateStatusURI :exec
 UPDATE statuses SET uri = $1, updated_at = now()
 WHERE id = $2;
+
+-- name: CountStatusesInRange :one
+SELECT COUNT(*) FROM statuses 
+WHERE created_at >= $1 AND created_at < $2 AND deleted_at IS NULL;
+

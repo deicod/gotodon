@@ -799,6 +799,15 @@ func (h *AccountsHandler) getRelationship(ctx context.Context, accountID, target
 	})
 	rel.Muting = err == nil
 
+	// Get private note about target account
+	note, err := h.queries.GetAccountNote(ctx, db.GetAccountNoteParams{
+		AccountID:       accountID,
+		TargetAccountID: targetID,
+	})
+	if err == nil {
+		rel.Note = note.Comment
+	}
+
 	return rel
 }
 
@@ -943,6 +952,66 @@ func (h *AccountsHandler) Unmute(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, rel)
 }
 
+// SetNote handles POST /api/v1/accounts/:id/note
+func (h *AccountsHandler) SetNote(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	targetID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	var req struct {
+		Comment string `json:"comment" form:"comment"`
+	}
+	if err := web.Bind(r, &req); err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	ctx := r.Context()
+
+	if h.useDB() {
+		// Verify target account exists
+		_, err := h.queries.GetAccountByID(ctx, targetID)
+		if err != nil {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+
+		if req.Comment == "" {
+			// Empty comment means delete the note
+			_ = h.queries.DeleteAccountNote(ctx, db.DeleteAccountNoteParams{
+				AccountID:       accountID,
+				TargetAccountID: targetID,
+			})
+		} else {
+			// Upsert the note
+			_, _ = h.queries.UpsertAccountNote(ctx, db.UpsertAccountNoteParams{
+				AccountID:       accountID,
+				TargetAccountID: targetID,
+				Comment:         req.Comment,
+			})
+		}
+
+		rel := h.getRelationship(ctx, accountID, targetID)
+		web.JSON(w, http.StatusOK, rel)
+		return
+	}
+
+	// Mock fallback
+	web.JSON(w, http.StatusOK, Relationship{
+		ID:        web.Param(r, "id"),
+		Note:      req.Comment,
+		Languages: []any{},
+	})
+}
+
 // FamiliarFollowers handles GET /api/v1/accounts/familiar_followers
 func (h *AccountsHandler) FamiliarFollowers(w http.ResponseWriter, r *http.Request) {
 	_, ok := middleware.GetAccountID(r.Context())
@@ -973,4 +1042,5 @@ func (h *AccountsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/accounts/{id}/unblock", h.Unblock)
 	mux.HandleFunc("POST /api/v1/accounts/{id}/mute", h.Mute)
 	mux.HandleFunc("POST /api/v1/accounts/{id}/unmute", h.Unmute)
+	mux.HandleFunc("POST /api/v1/accounts/{id}/note", h.SetNote)
 }

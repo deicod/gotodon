@@ -11,6 +11,23 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countStatusesInRange = `-- name: CountStatusesInRange :one
+SELECT COUNT(*) FROM statuses 
+WHERE created_at >= $1 AND created_at < $2 AND deleted_at IS NULL
+`
+
+type CountStatusesInRangeParams struct {
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	CreatedAt_2 pgtype.Timestamptz `db:"created_at_2" json:"created_at_2"`
+}
+
+func (q *Queries) CountStatusesInRange(ctx context.Context, arg CountStatusesInRangeParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countStatusesInRange, arg.CreatedAt, arg.CreatedAt_2)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createStatus = `-- name: CreateStatus :one
 INSERT INTO statuses (
     uri, text, account_id, in_reply_to_id, in_reply_to_account_id,

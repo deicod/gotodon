@@ -553,6 +553,32 @@ func (q *Queries) GetAccountsByUsernamesAndDomains(ctx context.Context, arg GetA
 	return items, nil
 }
 
+const getKnownDomains = `-- name: GetKnownDomains :many
+SELECT DISTINCT domain FROM accounts 
+WHERE domain IS NOT NULL AND domain != '' AND suspended_at IS NULL
+ORDER BY domain
+`
+
+func (q *Queries) GetKnownDomains(ctx context.Context) ([]pgtype.Text, error) {
+	rows, err := q.db.Query(ctx, getKnownDomains)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.Text{}
+	for rows.Next() {
+		var domain pgtype.Text
+		if err := rows.Scan(&domain); err != nil {
+			return nil, err
+		}
+		items = append(items, domain)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listLocalAccounts = `-- name: ListLocalAccounts :many
 SELECT id, username, domain, private_key, public_key, created_at, updated_at, note, display_name, uri, url, avatar_file_name, avatar_content_type, avatar_file_size, avatar_updated_at, header_file_name, header_content_type, header_file_size, header_updated_at, avatar_remote_url, locked, header_remote_url, last_webfingered_at, inbox_url, outbox_url, shared_inbox_url, followers_url, following_url, protocol, memorial, moved_to_account_id, featured_collection_url, fields, actor_type, discoverable, also_known_as, silenced_at, suspended_at, hide_collections, avatar_storage_schema_version, header_storage_schema_version, suspension_origin, sensitized_at, trendable, reviewed_at, requested_review_at, indexable, attribution_domains FROM accounts 
 WHERE domain IS NULL AND suspended_at IS NULL
