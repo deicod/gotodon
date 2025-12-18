@@ -291,6 +291,17 @@ type FollowRequest struct {
 	Languages       []string           `db:"languages" json:"languages"`
 }
 
+type GeneratedAnnualReport struct {
+	ID            int64              `db:"id" json:"id"`
+	AccountID     int64              `db:"account_id" json:"account_id"`
+	Year          int32              `db:"year" json:"year"`
+	Data          []byte             `db:"data" json:"data"`
+	SchemaVersion int32              `db:"schema_version" json:"schema_version"`
+	ViewedAt      pgtype.Timestamptz `db:"viewed_at" json:"viewed_at"`
+	CreatedAt     pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
 type List struct {
 	ID            int64              `db:"id" json:"id"`
 	AccountID     int64              `db:"account_id" json:"account_id"`
@@ -308,6 +319,18 @@ type ListAccount struct {
 	FollowID  pgtype.Int8        `db:"follow_id" json:"follow_id"`
 	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type LoginActivity struct {
+	ID                   int64              `db:"id" json:"id"`
+	UserID               int64              `db:"user_id" json:"user_id"`
+	AuthenticationMethod pgtype.Text        `db:"authentication_method" json:"authentication_method"`
+	Provider             pgtype.Text        `db:"provider" json:"provider"`
+	Success              pgtype.Bool        `db:"success" json:"success"`
+	FailureReason        pgtype.Text        `db:"failure_reason" json:"failure_reason"`
+	Ip                   *netip.Addr        `db:"ip" json:"ip"`
+	UserAgent            pgtype.Text        `db:"user_agent" json:"user_agent"`
+	CreatedAt            pgtype.Timestamptz `db:"created_at" json:"created_at"`
 }
 
 type Marker struct {
@@ -598,6 +621,18 @@ type ScheduledStatus struct {
 	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
+type SessionActivation struct {
+	ID                    int64              `db:"id" json:"id"`
+	SessionID             string             `db:"session_id" json:"session_id"`
+	CreatedAt             pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	UserAgent             string             `db:"user_agent" json:"user_agent"`
+	Ip                    *netip.Addr        `db:"ip" json:"ip"`
+	AccessTokenID         pgtype.Int8        `db:"access_token_id" json:"access_token_id"`
+	UserID                int64              `db:"user_id" json:"user_id"`
+	WebPushSubscriptionID pgtype.Int8        `db:"web_push_subscription_id" json:"web_push_subscription_id"`
+}
+
 type Setting struct {
 	ID        int64              `db:"id" json:"id"`
 	Var       string             `db:"var" json:"var"`
@@ -784,4 +819,15 @@ type WebPushSubscription struct {
 	UpdatedAt     pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	AccessTokenID pgtype.Int8        `db:"access_token_id" json:"access_token_id"`
 	UserID        pgtype.Int8        `db:"user_id" json:"user_id"`
+}
+
+type WebauthnCredential struct {
+	ID         int64              `db:"id" json:"id"`
+	ExternalID string             `db:"external_id" json:"external_id"`
+	PublicKey  string             `db:"public_key" json:"public_key"`
+	Nickname   string             `db:"nickname" json:"nickname"`
+	SignCount  int64              `db:"sign_count" json:"sign_count"`
+	UserID     pgtype.Int8        `db:"user_id" json:"user_id"`
+	CreatedAt  pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }

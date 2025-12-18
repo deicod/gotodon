@@ -67,24 +67,26 @@
   - [x] Define columns: account_id, uri, by_moderator
 
 ### Task 1.6: Session & Security Tables
-- [ ] Add `session_activations` table
-- [ ] Add `login_activities` table
-- [ ] Add `webauthn_credentials` table
+- [x] Add `session_activations` table
+- [x] Add `login_activities` table
+- [x] Add `webauthn_credentials` table
 
 ### Task 1.7: Reports & Annual Features
-- [ ] Add `generated_annual_reports` table
-  - [ ] Define columns: account_id, year, data (jsonb), schema_version, viewed_at
+- [x] Add `generated_annual_reports` table
+  - [x] Define columns: account_id, year, data (jsonb), schema_version, viewed_at
 
 ### Task 1.8: Generate SQL Queries
-- [ ] Run `sqlc generate` after migration
-- [ ] Create `db/queries/status_edits.sql`
-- [ ] Create `db/queries/quotes.sql`
-- [ ] Create `db/queries/notification_policies.sql`
-- [ ] Create `db/queries/tag_follows.sql`
-- [ ] Create `db/queries/preview_cards.sql`
-- [ ] Create `db/queries/account_notes.sql`
-- [ ] Create `db/queries/rules.sql`
-- [ ] Verify with `go build ./...`
+- [x] Run `sqlc generate` after migration
+- [x] Create `db/queries/status_edits.sql`
+- [x] Create `db/queries/quotes.sql`
+- [x] Create `db/queries/notification_policies.sql`
+- [x] Create `db/queries/tag_follows.sql`
+- [x] Create `db/queries/preview_cards.sql`
+- [x] Create `db/queries/account_notes.sql`
+- [x] Create `db/queries/rules.sql`
+- [x] Create `db/queries/sessions.sql`
+- [x] Create `db/queries/annual_reports.sql`
+- [x] Verify with `go build ./...`
 
 ---
 

@@ -56,7 +56,9 @@ type Querier interface {
 	ClearStatusTrends(ctx context.Context) error
 	ClearTagTrends(ctx context.Context) error
 	CountAccountPins(ctx context.Context, accountID int64) (int64, error)
+	CountAnnualReportsByAccount(ctx context.Context, accountID int64) (int64, error)
 	CountDomainAllows(ctx context.Context) (int64, error)
+	CountFailedLoginAttempts(ctx context.Context, arg CountFailedLoginAttemptsParams) (int64, error)
 	CountFeaturedTags(ctx context.Context, accountID int64) (int64, error)
 	CountFollowedTags(ctx context.Context, accountID int64) (int64, error)
 	CountFollowers(ctx context.Context, targetAccountID int64) (int64, error)
@@ -64,14 +66,17 @@ type Querier interface {
 	CountMigrationFollowers(ctx context.Context, targetAccountID pgtype.Int8) (int64, error)
 	CountNotificationRequests(ctx context.Context, accountID int64) (int64, error)
 	CountQuotesByQuotedStatus(ctx context.Context, quotedStatusID pgtype.Int8) (int64, error)
+	CountSessionActivationsByUser(ctx context.Context, userID int64) (int64, error)
 	CountStatusEdits(ctx context.Context, statusID int64) (int64, error)
 	CountUnreadNotifications(ctx context.Context, accountID int64) (int64, error)
+	CountWebAuthnCredentialsByUser(ctx context.Context, userID pgtype.Int8) (int64, error)
 	CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error)
 	CreateAccountAlias(ctx context.Context, arg CreateAccountAliasParams) (AccountAlias, error)
 	CreateAccountMigration(ctx context.Context, arg CreateAccountMigrationParams) (AccountMigration, error)
 	CreateAccountNote(ctx context.Context, arg CreateAccountNoteParams) (AccountNote, error)
 	CreateAccountPin(ctx context.Context, arg CreateAccountPinParams) (AccountPin, error)
 	CreateAccountStats(ctx context.Context, accountID int64) (AccountStat, error)
+	CreateAnnualReport(ctx context.Context, arg CreateAnnualReportParams) (GeneratedAnnualReport, error)
 	CreateBlock(ctx context.Context, arg CreateBlockParams) (Block, error)
 	CreateBookmark(ctx context.Context, arg CreateBookmarkParams) error
 	CreateConversation(ctx context.Context, arg CreateConversationParams) (Conversation, error)
@@ -86,6 +91,8 @@ type Querier interface {
 	CreateFollow(ctx context.Context, arg CreateFollowParams) (Follow, error)
 	CreateFollowRequest(ctx context.Context, arg CreateFollowRequestParams) (FollowRequest, error)
 	CreateList(ctx context.Context, arg CreateListParams) (List, error)
+	// Login Activities queries
+	CreateLoginActivity(ctx context.Context, arg CreateLoginActivityParams) (LoginActivity, error)
 	CreateMediaAttachment(ctx context.Context, arg CreateMediaAttachmentParams) (MediaAttachment, error)
 	CreateMention(ctx context.Context, arg CreateMentionParams) (Mention, error)
 	CreateMentions(ctx context.Context, arg CreateMentionsParams) error
@@ -105,6 +112,7 @@ type Querier interface {
 	CreateReport(ctx context.Context, arg CreateReportParams) (Report, error)
 	CreateRule(ctx context.Context, arg CreateRuleParams) (Rule, error)
 	CreateScheduledStatus(ctx context.Context, arg CreateScheduledStatusParams) (ScheduledStatus, error)
+	CreateSessionActivation(ctx context.Context, arg CreateSessionActivationParams) (SessionActivation, error)
 	CreateStatus(ctx context.Context, arg CreateStatusParams) (Status, error)
 	CreateStatusEdit(ctx context.Context, arg CreateStatusEditParams) (StatusEdit, error)
 	CreateStatusStats(ctx context.Context, statusID int64) (StatusStat, error)
@@ -112,6 +120,7 @@ type Querier interface {
 	CreateTagFollow(ctx context.Context, arg CreateTagFollowParams) (TagFollow, error)
 	CreateTombstone(ctx context.Context, arg CreateTombstoneParams) (Tombstone, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
+	CreateWebAuthnCredential(ctx context.Context, arg CreateWebAuthnCredentialParams) (WebauthnCredential, error)
 	DecrementStatusFavourites(ctx context.Context, statusID int64) error
 	DecrementStatusReblogs(ctx context.Context, statusID int64) error
 	DecrementStatusReplies(ctx context.Context, statusID int64) error
@@ -119,6 +128,7 @@ type Querier interface {
 	DeleteAccountAliasesByAccountID(ctx context.Context, accountID int64) error
 	DeleteAccountNote(ctx context.Context, arg DeleteAccountNoteParams) error
 	DeleteAccountPin(ctx context.Context, arg DeleteAccountPinParams) error
+	DeleteAnnualReport(ctx context.Context, id int64) error
 	DeleteBlock(ctx context.Context, arg DeleteBlockParams) error
 	DeleteBookmark(ctx context.Context, arg DeleteBookmarkParams) error
 	DeleteConversation(ctx context.Context, id int64) error
@@ -148,6 +158,9 @@ type Querier interface {
 	DeleteRule(ctx context.Context, id int64) error
 	DeleteRuleTranslation(ctx context.Context, arg DeleteRuleTranslationParams) error
 	DeleteScheduledStatus(ctx context.Context, arg DeleteScheduledStatusParams) error
+	DeleteSessionActivation(ctx context.Context, id int64) error
+	DeleteSessionActivationBySessionID(ctx context.Context, sessionID string) error
+	DeleteSessionActivationsByUser(ctx context.Context, userID int64) error
 	DeleteStatus(ctx context.Context, id int64) error
 	DeleteStatusEditsForStatus(ctx context.Context, statusID int64) error
 	DeleteStatusTrend(ctx context.Context, statusID int64) error
@@ -155,6 +168,7 @@ type Querier interface {
 	DeleteTagTrend(ctx context.Context, arg DeleteTagTrendParams) error
 	DeleteTombstone(ctx context.Context, id int64) error
 	DeleteTombstoneByURI(ctx context.Context, uri string) error
+	DeleteWebAuthnCredential(ctx context.Context, id int64) error
 	DetachMediaFromStatus(ctx context.Context, arg DetachMediaFromStatusParams) (int64, error)
 	DetachPreviewCardFromStatus(ctx context.Context, arg DetachPreviewCardFromStatusParams) error
 	DismissAnnouncement(ctx context.Context, arg DismissAnnouncementParams) error
@@ -178,6 +192,9 @@ type Querier interface {
 	GetAccountsByUsernames(ctx context.Context, usernames []string) ([]Account, error)
 	GetAccountsByUsernamesAndDomains(ctx context.Context, arg GetAccountsByUsernamesAndDomainsParams) ([]Account, error)
 	GetAllVotes(ctx context.Context, pollID int64) ([]PollVote, error)
+	// Generated Annual Reports queries
+	GetAnnualReport(ctx context.Context, id int64) (GeneratedAnnualReport, error)
+	GetAnnualReportByAccountAndYear(ctx context.Context, arg GetAnnualReportByAccountAndYearParams) (GeneratedAnnualReport, error)
 	GetAppByClientID(ctx context.Context, uid string) (GetAppByClientIDRow, error)
 	GetBlock(ctx context.Context, arg GetBlockParams) (Block, error)
 	GetBlocksByAccountIDs(ctx context.Context, arg GetBlocksByAccountIDsParams) ([]Block, error)
@@ -201,6 +218,7 @@ type Querier interface {
 	GetFollowing(ctx context.Context, arg GetFollowingParams) ([]Account, error)
 	GetHashtagTimeline(ctx context.Context, arg GetHashtagTimelineParams) ([]Status, error)
 	GetHomeTimeline(ctx context.Context, arg GetHomeTimelineParams) ([]Status, error)
+	GetLastSuccessfulLogin(ctx context.Context, userID int64) (LoginActivity, error)
 	GetLatestAccountMigration(ctx context.Context, accountID pgtype.Int8) (AccountMigration, error)
 	GetList(ctx context.Context, arg GetListParams) (List, error)
 	GetListTimeline(ctx context.Context, arg GetListTimelineParams) ([]Status, error)
@@ -255,6 +273,9 @@ type Querier interface {
 	// Rule Translations queries
 	GetRuleTranslation(ctx context.Context, arg GetRuleTranslationParams) (RuleTranslation, error)
 	GetScheduledStatus(ctx context.Context, arg GetScheduledStatusParams) (ScheduledStatus, error)
+	// Session Activations queries
+	GetSessionActivation(ctx context.Context, id int64) (SessionActivation, error)
+	GetSessionActivationBySessionID(ctx context.Context, sessionID string) (SessionActivation, error)
 	GetStatusAncestors(ctx context.Context, statusID int64) ([]Status, error)
 	GetStatusByID(ctx context.Context, id int64) (Status, error)
 	GetStatusByURI(ctx context.Context, uri pgtype.Text) (Status, error)
@@ -283,12 +304,16 @@ type Querier interface {
 	GetTrendingPreviewCards(ctx context.Context, arg GetTrendingPreviewCardsParams) ([]GetTrendingPreviewCardsRow, error)
 	GetTrendingStatuses(ctx context.Context, limit int32) ([]GetTrendingStatusesRow, error)
 	GetTrendingTags(ctx context.Context, limit int32) ([]GetTrendingTagsRow, error)
+	GetUnviewedAnnualReports(ctx context.Context, accountID int64) ([]GeneratedAnnualReport, error)
 	GetUserByAccountID(ctx context.Context, accountID int64) (User, error)
 	GetUserByConfirmationToken(ctx context.Context, confirmationToken pgtype.Text) (User, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByResetPasswordToken(ctx context.Context, resetPasswordToken pgtype.Text) (User, error)
 	GetUserRole(ctx context.Context, id int64) (UserRole, error)
 	GetVotes(ctx context.Context, arg GetVotesParams) ([]PollVote, error)
+	// WebAuthn Credentials queries
+	GetWebAuthnCredential(ctx context.Context, id int64) (WebauthnCredential, error)
+	GetWebAuthnCredentialByExternalID(ctx context.Context, externalID string) (WebauthnCredential, error)
 	HardDeleteRule(ctx context.Context, id int64) error
 	HasNotificationPermission(ctx context.Context, arg HasNotificationPermissionParams) (bool, error)
 	IncrementNotificationRequestCount(ctx context.Context, arg IncrementNotificationRequestCountParams) (NotificationRequest, error)
@@ -305,6 +330,7 @@ type Querier interface {
 	ListAllTrendingTags(ctx context.Context, arg ListAllTrendingTagsParams) ([]ListAllTrendingTagsRow, error)
 	ListAnnouncementReactions(ctx context.Context, announcementID int64) ([]AnnouncementReaction, error)
 	ListAnnouncements(ctx context.Context, arg ListAnnouncementsParams) ([]Announcement, error)
+	ListAnnualReportsByAccount(ctx context.Context, accountID int64) ([]GeneratedAnnualReport, error)
 	ListBlocks(ctx context.Context, arg ListBlocksParams) ([]Account, error)
 	ListBookmarks(ctx context.Context, arg ListBookmarksParams) ([]ListBookmarksRow, error)
 	ListConversations(ctx context.Context, arg ListConversationsParams) ([]ListConversationsRow, error)
@@ -322,6 +348,7 @@ type Querier interface {
 	ListFollowedTags(ctx context.Context, arg ListFollowedTagsParams) ([]Tag, error)
 	ListLists(ctx context.Context, accountID int64) ([]List, error)
 	ListLocalAccounts(ctx context.Context, arg ListLocalAccountsParams) ([]Account, error)
+	ListLoginActivitiesByUser(ctx context.Context, arg ListLoginActivitiesByUserParams) ([]LoginActivity, error)
 	ListMediaAttachmentsByStatus(ctx context.Context, statusID pgtype.Int8) ([]MediaAttachment, error)
 	ListMutes(ctx context.Context, arg ListMutesParams) ([]Account, error)
 	ListNotificationPermissions(ctx context.Context, arg ListNotificationPermissionsParams) ([]NotificationPermission, error)
@@ -332,11 +359,14 @@ type Querier interface {
 	ListRuleTranslations(ctx context.Context, ruleID int64) ([]RuleTranslation, error)
 	ListRules(ctx context.Context) ([]Rule, error)
 	ListScheduledStatuses(ctx context.Context, arg ListScheduledStatusesParams) ([]ScheduledStatus, error)
+	ListSessionActivationsByUser(ctx context.Context, userID int64) ([]SessionActivation, error)
 	ListTombstonesByAccount(ctx context.Context, arg ListTombstonesByAccountParams) ([]Tombstone, error)
 	ListTrendingStatuses(ctx context.Context, arg ListTrendingStatusesParams) ([]Status, error)
 	ListTrendingTags(ctx context.Context, arg ListTrendingTagsParams) ([]ListTrendingTagsRow, error)
 	ListUnattachedMedia(ctx context.Context, arg ListUnattachedMediaParams) ([]MediaAttachment, error)
 	ListUserOAuthTokens(ctx context.Context, resourceOwnerID pgtype.Int8) ([]ListUserOAuthTokensRow, error)
+	ListWebAuthnCredentialsByUser(ctx context.Context, userID pgtype.Int8) ([]WebauthnCredential, error)
+	MarkAnnualReportViewed(ctx context.Context, id int64) (GeneratedAnnualReport, error)
 	// Placeholder: Requires conversation_mutes or new table for read state which implies 'unread' logic
 	// Currently just creating a stub query if we add unread tracking later
 	MarkConversationRead(ctx context.Context) error
@@ -359,6 +389,7 @@ type Querier interface {
 	UpdateAccount(ctx context.Context, arg UpdateAccountParams) (Account, error)
 	UpdateAccountNote(ctx context.Context, arg UpdateAccountNoteParams) (AccountNote, error)
 	UpdateAccountStats(ctx context.Context, arg UpdateAccountStatsParams) error
+	UpdateAnnualReportData(ctx context.Context, arg UpdateAnnualReportDataParams) (GeneratedAnnualReport, error)
 	UpdateCustomEmoji(ctx context.Context, arg UpdateCustomEmojiParams) (CustomEmoji, error)
 	UpdateFilter(ctx context.Context, arg UpdateFilterParams) (Filter, error)
 	UpdateFilterKeyword(ctx context.Context, arg UpdateFilterKeywordParams) (FilterKeyword, error)
@@ -373,11 +404,14 @@ type Querier interface {
 	UpdateQuoteState(ctx context.Context, arg UpdateQuoteStateParams) (Quote, error)
 	UpdateRule(ctx context.Context, arg UpdateRuleParams) (Rule, error)
 	UpdateScheduledStatus(ctx context.Context, arg UpdateScheduledStatusParams) (ScheduledStatus, error)
+	UpdateSessionActivation(ctx context.Context, arg UpdateSessionActivationParams) (SessionActivation, error)
 	UpdateStatus(ctx context.Context, arg UpdateStatusParams) (Status, error)
 	UpdateStatusTrendAllowed(ctx context.Context, arg UpdateStatusTrendAllowedParams) (StatusTrend, error)
 	UpdateStatusURI(ctx context.Context, arg UpdateStatusURIParams) error
 	UpdateTagTrendAllowed(ctx context.Context, arg UpdateTagTrendAllowedParams) (TagTrend, error)
 	UpdateUserSettings(ctx context.Context, arg UpdateUserSettingsParams) error
+	UpdateWebAuthnCredentialNickname(ctx context.Context, arg UpdateWebAuthnCredentialNicknameParams) (WebauthnCredential, error)
+	UpdateWebAuthnCredentialSignCount(ctx context.Context, arg UpdateWebAuthnCredentialSignCountParams) (WebauthnCredential, error)
 	UpsertAccountNote(ctx context.Context, arg UpsertAccountNoteParams) (AccountNote, error)
 	UpsertMarker(ctx context.Context, arg UpsertMarkerParams) (Marker, error)
 	UpsertNotificationPolicy(ctx context.Context, arg UpsertNotificationPolicyParams) (NotificationPolicy, error)
