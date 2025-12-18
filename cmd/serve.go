@@ -221,6 +221,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	v1FeaturedTagsHandler := v1.NewFeaturedTagsHandler(queries)
 	v1FeaturedTagsHandler.RegisterRoutes(mux)
 
+	v1TagsHandler := v1.NewTagsHandler(queries, cfg)
+	v1TagsHandler.RegisterRoutes(mux)
+
 	// Register v2 handlers
 	// V2 Generic
 	v2InstanceHandler := v2.NewInstanceHandler(cfg)

@@ -129,18 +129,18 @@
 - [ ] Implement `GET /api/v1/instance/languages`
 
 ### Task 2.5: Tag Following
-- [ ] Create `internal/api/v1/tags.go`
-- [ ] Implement `GET /api/v1/tags/{id}`
-  - [ ] Return tag info with following status
-- [ ] Implement `POST /api/v1/tags/{id}/follow`
-  - [ ] Insert into tag_follows
-- [ ] Implement `POST /api/v1/tags/{id}/unfollow`
-  - [ ] Delete from tag_follows
-- [ ] Implement `POST /api/v1/tags/{id}/feature`
-- [ ] Implement `POST /api/v1/tags/{id}/unfeature`
-- [ ] Implement `GET /api/v1/followed_tags`
-  - [ ] List user's followed tags
-- [ ] Add tests in `tags_test.go`
+- [x] Create `internal/api/v1/tags.go`
+- [x] Implement `GET /api/v1/tags/{id}`
+  - [x] Return tag info with following status
+- [x] Implement `POST /api/v1/tags/{id}/follow`
+  - [x] Insert into tag_follows
+- [x] Implement `POST /api/v1/tags/{id}/unfollow`
+  - [x] Delete from tag_follows
+- [x] Implement `POST /api/v1/tags/{id}/feature`
+- [x] Implement `POST /api/v1/tags/{id}/unfeature`
+- [x] Implement `GET /api/v1/followed_tags`
+  - [x] List user's followed tags
+- [x] Add tests in `tags_test.go`
 
 ### Task 2.6: Notification Improvements
 - [ ] Implement `GET /api/v1/notifications/unread_count`
