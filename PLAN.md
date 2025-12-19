@@ -177,8 +177,9 @@
 - [x] Add tests in `annual_reports_test.go`
 
 ### Task 2.11: Email Confirmations
-- [ ] Implement `POST /api/v1/emails/confirmations`
-- [ ] Implement `GET /api/v1/emails/check_confirmation`
+- [x] Implement `POST /api/v1/emails/confirmations`
+- [x] Implement `GET /api/v1/emails/check_confirmation`
+- [x] Add tests in `emails_test.go`
 
 ### Task 2.12: Peers Search
 - [ ] Implement `GET /api/v1/peers/search`

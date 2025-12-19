@@ -233,6 +233,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	v1AnnualReportsHandler := v1.NewAnnualReportsHandler(queries)
 	v1AnnualReportsHandler.RegisterRoutes(mux)
 
+	v1EmailsHandler := v1.NewEmailsHandler(queries)
+	v1EmailsHandler.RegisterRoutes(mux)
+
 	// Register v2 handlers
 	// V2 Generic
 	v2InstanceHandler := v2.NewInstanceHandler(cfg)
