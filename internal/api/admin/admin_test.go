@@ -110,6 +110,19 @@ func TestCanonicalEmailBlocksHandler_CRUD(t *testing.T) {
 	h.GetAll(rec2, req2)
 }
 
+func TestAdminTagsHandler_CRUD(t *testing.T) {
+	t.Skip("Skipping test requiring database connection")
+	h := NewTagsHandler(nil)
+
+	// Update (requires existing tag)
+	req1, rec1 := mockAdminRequest(http.MethodPut, "/api/v1/admin/tags/1", `{"listable":false}`)
+	h.Update(rec1, req1)
+
+	// GetAll
+	req2, rec2 := mockAdminRequest(http.MethodGet, "/api/v1/admin/tags", "")
+	h.GetAll(rec2, req2)
+}
+
 func TestInstanceHandler_GetUpdate(t *testing.T) {
 	t.Skip("Skipping test requiring database connection for auth check")
 	// Although InstanceHandler logic is simple, it now calls requireAdmin which fails without DB.

@@ -42,12 +42,14 @@ type Querier interface {
 	AdminGetIpBlock(ctx context.Context, id int64) (AdminGetIpBlockRow, error)
 	AdminGetIpBlockByIP(ctx context.Context, ip string) (AdminGetIpBlockByIPRow, error)
 	AdminGetReport(ctx context.Context, id int64) (Report, error)
+	AdminGetTag(ctx context.Context, id int64) (Tag, error)
 	AdminListAccounts(ctx context.Context, arg AdminListAccountsParams) ([]AdminListAccountsRow, error)
 	AdminListCanonicalEmailBlocks(ctx context.Context, arg AdminListCanonicalEmailBlocksParams) ([]CanonicalEmailBlock, error)
 	AdminListCustomEmojis(ctx context.Context, arg AdminListCustomEmojisParams) ([]CustomEmoji, error)
 	AdminListDomainBlocks(ctx context.Context, arg AdminListDomainBlocksParams) ([]DomainBlock, error)
 	AdminListIpBlocks(ctx context.Context, arg AdminListIpBlocksParams) ([]AdminListIpBlocksRow, error)
 	AdminListReports(ctx context.Context, arg AdminListReportsParams) ([]AdminListReportsRow, error)
+	AdminListTags(ctx context.Context, arg AdminListTagsParams) ([]Tag, error)
 	AdminRejectAccount(ctx context.Context, accountID int64) error
 	AdminResolveReport(ctx context.Context, arg AdminResolveReportParams) error
 	AdminSensitizeAccount(ctx context.Context, id int64) error
@@ -58,6 +60,7 @@ type Querier interface {
 	AdminUnsuspendAccount(ctx context.Context, id int64) error
 	AdminUpdateDomainBlock(ctx context.Context, arg AdminUpdateDomainBlockParams) (DomainBlock, error)
 	AdminUpdateIpBlock(ctx context.Context, arg AdminUpdateIpBlockParams) (AdminUpdateIpBlockRow, error)
+	AdminUpdateTag(ctx context.Context, arg AdminUpdateTagParams) (Tag, error)
 	AttachMediaToStatus(ctx context.Context, arg AttachMediaToStatusParams) (int64, error)
 	AttachPreviewCardToStatus(ctx context.Context, arg AttachPreviewCardToStatusParams) error
 	BulkAcceptNotificationRequests(ctx context.Context, arg BulkAcceptNotificationRequestsParams) error

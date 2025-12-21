@@ -233,9 +233,9 @@
 - [x] Implement `POST /api/v1/admin/canonical_email_blocks/test`
 
 ### Task 4.4: Admin Tags
-- [ ] Implement `GET /api/v1/admin/tags`
-- [ ] Implement `GET /api/v1/admin/tags/{id}`
-- [ ] Implement `PUT /api/v1/admin/tags/{id}`
+- [x] Implement `GET /api/v1/admin/tags`
+- [x] Implement `GET /api/v1/admin/tags/{id}`
+- [x] Implement `PUT /api/v1/admin/tags/{id}`
 
 ### Task 4.5: Trends Moderation
 - [ ] Implement approve/reject for tags
