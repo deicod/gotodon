@@ -20,6 +20,7 @@ type Querier interface {
 	AdminAssignReport(ctx context.Context, arg AdminAssignReportParams) error
 	AdminCreateCustomEmoji(ctx context.Context, arg AdminCreateCustomEmojiParams) (CustomEmoji, error)
 	AdminCreateDomainBlock(ctx context.Context, arg AdminCreateDomainBlockParams) (DomainBlock, error)
+	AdminCreateIpBlock(ctx context.Context, arg AdminCreateIpBlockParams) (AdminCreateIpBlockRow, error)
 	// Note: Cascades to accounts usually, or we should delete account separately? Schema has fk_users_account -> accounts(id).
 	// Accounts table is the parent. FK is in users pointing to accounts.
 	// Actually, deleting the USER might not delete the ACCOUNT if the FK is ON DELETE CASCADE on the user side?
@@ -29,14 +30,18 @@ type Querier interface {
 	// Let's change this to delete from accounts.
 	AdminDeleteAccount(ctx context.Context, id int64) error
 	AdminDeleteDomainBlock(ctx context.Context, id int64) error
+	AdminDeleteIpBlock(ctx context.Context, id int64) error
 	AdminDisableAccount(ctx context.Context, accountID int64) error
 	AdminEnableAccount(ctx context.Context, accountID int64) error
 	AdminGetAccount(ctx context.Context, id int64) (AdminGetAccountRow, error)
 	AdminGetDomainBlock(ctx context.Context, id int64) (DomainBlock, error)
+	AdminGetIpBlock(ctx context.Context, id int64) (AdminGetIpBlockRow, error)
+	AdminGetIpBlockByIP(ctx context.Context, ip string) (AdminGetIpBlockByIPRow, error)
 	AdminGetReport(ctx context.Context, id int64) (Report, error)
 	AdminListAccounts(ctx context.Context, arg AdminListAccountsParams) ([]AdminListAccountsRow, error)
 	AdminListCustomEmojis(ctx context.Context, arg AdminListCustomEmojisParams) ([]CustomEmoji, error)
 	AdminListDomainBlocks(ctx context.Context, arg AdminListDomainBlocksParams) ([]DomainBlock, error)
+	AdminListIpBlocks(ctx context.Context, arg AdminListIpBlocksParams) ([]AdminListIpBlocksRow, error)
 	AdminListReports(ctx context.Context, arg AdminListReportsParams) ([]AdminListReportsRow, error)
 	AdminRejectAccount(ctx context.Context, accountID int64) error
 	AdminResolveReport(ctx context.Context, arg AdminResolveReportParams) error
@@ -47,6 +52,7 @@ type Querier interface {
 	AdminUnsilenceAccount(ctx context.Context, id int64) error
 	AdminUnsuspendAccount(ctx context.Context, id int64) error
 	AdminUpdateDomainBlock(ctx context.Context, arg AdminUpdateDomainBlockParams) (DomainBlock, error)
+	AdminUpdateIpBlock(ctx context.Context, arg AdminUpdateIpBlockParams) (AdminUpdateIpBlockRow, error)
 	AttachMediaToStatus(ctx context.Context, arg AttachMediaToStatusParams) (int64, error)
 	AttachPreviewCardToStatus(ctx context.Context, arg AttachPreviewCardToStatusParams) error
 	BulkAcceptNotificationRequests(ctx context.Context, arg BulkAcceptNotificationRequestsParams) error

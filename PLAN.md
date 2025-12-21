@@ -224,8 +224,8 @@
 - [x] Implement `DELETE /api/v1/admin/domain_allows/{id}`
 
 ### Task 4.2: IP Blocks
-- [ ] Create `internal/api/admin/ip_blocks.go`
-- [ ] Implement CRUD for `/api/v1/admin/ip_blocks`
+- [x] Create `internal/api/admin/ip_blocks.go`
+- [x] Implement CRUD for `/api/v1/admin/ip_blocks`
 
 ### Task 4.3: Canonical Email Blocks
 - [ ] Create `internal/api/admin/canonical_email_blocks.go`

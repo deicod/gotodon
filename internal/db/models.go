@@ -302,6 +302,16 @@ type GeneratedAnnualReport struct {
 	UpdatedAt     pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
+type IpBlock struct {
+	ID        int64              `db:"id" json:"id"`
+	Ip        netip.Addr         `db:"ip" json:"ip"`
+	Severity  int32              `db:"severity" json:"severity"`
+	ExpiresAt pgtype.Timestamptz `db:"expires_at" json:"expires_at"`
+	Comment   string             `db:"comment" json:"comment"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
 type List struct {
 	ID            int64              `db:"id" json:"id"`
 	AccountID     int64              `db:"account_id" json:"account_id"`
