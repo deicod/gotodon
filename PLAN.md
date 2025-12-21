@@ -238,9 +238,9 @@
 - [x] Implement `PUT /api/v1/admin/tags/{id}`
 
 ### Task 4.5: Trends Moderation
-- [ ] Implement approve/reject for tags
-- [ ] Implement approve/reject for links
-- [ ] Implement approve/reject for statuses
+- [x] Implement approve/reject for tags
+- [x] Implement approve/reject for links
+- [x] Implement approve/reject for statuses
 
 ### Task 4.6: Account Deletion
 - [ ] Implement `DELETE /api/v1/admin/accounts/{id}`

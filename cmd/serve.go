@@ -291,7 +291,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	adminInstanceHandler := admin.NewInstanceHandler()
 	adminInstanceHandler.RegisterRoutes(mux)
 
-	adminTrendsHandler := admin.NewTrendsHandler()
+	adminTrendsHandler := admin.NewTrendsHandler(queries, cfg)
 	adminTrendsHandler.RegisterRoutes(mux)
 
 	adminDimensionsHandler := admin.NewDimensionsHandler()

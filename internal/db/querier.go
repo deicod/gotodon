@@ -50,6 +50,9 @@ type Querier interface {
 	AdminListIpBlocks(ctx context.Context, arg AdminListIpBlocksParams) ([]AdminListIpBlocksRow, error)
 	AdminListReports(ctx context.Context, arg AdminListReportsParams) ([]AdminListReportsRow, error)
 	AdminListTags(ctx context.Context, arg AdminListTagsParams) ([]Tag, error)
+	AdminListTrendingLinks(ctx context.Context, limit int32) ([]PreviewCard, error)
+	AdminListTrendingStatuses(ctx context.Context, limit int32) ([]Status, error)
+	AdminListTrendingTags(ctx context.Context, limit int32) ([]AdminListTrendingTagsRow, error)
 	AdminRejectAccount(ctx context.Context, accountID int64) error
 	AdminResolveReport(ctx context.Context, arg AdminResolveReportParams) error
 	AdminSensitizeAccount(ctx context.Context, id int64) error
@@ -60,7 +63,10 @@ type Querier interface {
 	AdminUnsuspendAccount(ctx context.Context, id int64) error
 	AdminUpdateDomainBlock(ctx context.Context, arg AdminUpdateDomainBlockParams) (DomainBlock, error)
 	AdminUpdateIpBlock(ctx context.Context, arg AdminUpdateIpBlockParams) (AdminUpdateIpBlockRow, error)
+	AdminUpdatePreviewCardTrendable(ctx context.Context, arg AdminUpdatePreviewCardTrendableParams) (PreviewCard, error)
+	AdminUpdateStatusTrendable(ctx context.Context, arg AdminUpdateStatusTrendableParams) (Status, error)
 	AdminUpdateTag(ctx context.Context, arg AdminUpdateTagParams) (Tag, error)
+	AdminUpdateTagTrendable(ctx context.Context, arg AdminUpdateTagTrendableParams) (Tag, error)
 	AttachMediaToStatus(ctx context.Context, arg AttachMediaToStatusParams) (int64, error)
 	AttachPreviewCardToStatus(ctx context.Context, arg AttachPreviewCardToStatusParams) error
 	BulkAcceptNotificationRequests(ctx context.Context, arg BulkAcceptNotificationRequestsParams) error
