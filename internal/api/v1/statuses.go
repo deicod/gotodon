@@ -3,6 +3,7 @@ package v1
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -18,6 +19,7 @@ import (
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/streaming"
+	"github.com/deicod/gotodon/internal/translation"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/oauth"
 )
@@ -89,6 +91,8 @@ type Status struct {
 	EditedAt           *time.Time     `json:"edited_at"`
 	Content            string         `json:"content"`
 	Reblog             *Status        `json:"reblog"`
+	Quote              *Status        `json:"quote,omitempty"`
+	QuoteID            *string        `json:"quote_id,omitempty"`
 	Application        *StatusApp     `json:"application,omitempty"`
 	Account            Account        `json:"account"`
 	MediaAttachments   []MediaAttach  `json:"media_attachments"`
@@ -2105,6 +2109,219 @@ func formatContent(text string) string {
 	return "<p>" + text + "</p>"
 }
 
+// Translation represents a translated status
+type Translation struct {
+	Content                string `json:"content"`
+	SpoilerText            string `json:"spoiler_text,omitempty"`
+	DetectedSourceLanguage string `json:"detected_source_language"`
+	Language               string `json:"language"`
+	Provider               string `json:"provider"`
+}
+
+// Translate handles POST /api/v1/statuses/:id/translate
+func (h *StatusesHandler) Translate(w http.ResponseWriter, r *http.Request) {
+	idStr := web.Param(r, "id")
+	if idStr == "" {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	// Parse target language (default to "en")
+	targetLang := web.QueryParam(r, "lang")
+	if targetLang == "" {
+		targetLang = "en"
+	}
+
+	ctx := r.Context()
+
+	// Check if translation is enabled
+	if h.cfg == nil || !h.cfg.Translation.Enabled() {
+		web.JSONError(w, http.StatusUnprocessableEntity, "Translation is not enabled on this server")
+		return
+	}
+
+	if h.useDB() {
+		// Fetch the status
+		status, err := h.queries.GetStatusByID(ctx, id)
+		if err != nil {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+
+		// Only allow translation of public/unlisted statuses
+		if status.Visibility != VisibilityPublic && status.Visibility != VisibilityUnlisted {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+
+		// Create translation service
+		svc := translation.NewService(translation.Config{
+			Backend:  h.cfg.Translation.Backend,
+			APIKey:   h.cfg.Translation.APIKey,
+			Endpoint: h.cfg.Translation.Endpoint,
+			Plan:     h.cfg.Translation.Plan,
+		})
+
+		// Translate the content
+		result, err := svc.Translate(ctx, status.Text, targetLang)
+		if err != nil {
+			if errors.Is(err, translation.ErrTranslationNotConfigured) {
+				web.JSONError(w, http.StatusUnprocessableEntity, "Translation is not enabled on this server")
+			} else {
+				web.JSONError(w, http.StatusServiceUnavailable, "Translation service unavailable")
+			}
+			return
+		}
+
+		// Also translate spoiler text if present
+		spoilerText := ""
+		if status.SpoilerText != "" {
+			spoilerResult, err := svc.Translate(ctx, status.SpoilerText, targetLang)
+			if err == nil {
+				spoilerText = spoilerResult.Content
+			}
+		}
+
+		web.JSON(w, http.StatusOK, Translation{
+			Content:                formatContent(result.Content),
+			SpoilerText:            spoilerText,
+			DetectedSourceLanguage: result.DetectedSourceLanguage,
+			Language:               result.Language,
+			Provider:               result.Provider,
+		})
+		return
+	}
+
+	// Mock fallback - translation not available without DB
+	web.JSONError(w, http.StatusUnprocessableEntity, "Translation is not enabled on this server")
+}
+
+// Quotes handles GET /api/v1/statuses/:id/quotes
+// Returns statuses that have quoted this status
+func (h *StatusesHandler) Quotes(w http.ResponseWriter, r *http.Request) {
+	idStr := web.Param(r, "id")
+	if idStr == "" {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	limit := parseLimit(web.QueryParam(r, "limit"), 40, 40)
+	ctx := r.Context()
+
+	if h.useDB() {
+		// Verify status exists
+		_, err := h.queries.GetStatusByID(ctx, id)
+		if err != nil {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+
+		// Get quotes for this status
+		quotes, err := h.queries.GetQuotesByQuotedStatusID(ctx, db.GetQuotesByQuotedStatusIDParams{
+			QuotedStatusID: pgtype.Int8{Int64: id, Valid: true},
+			Limit:          int32(limit),
+			Offset:         0,
+		})
+		if err != nil {
+			web.JSON(w, http.StatusOK, []Status{})
+			return
+		}
+
+		// Get statuses that quote this one
+		statuses := make([]Status, 0, len(quotes))
+		for _, q := range quotes {
+			dbStatus, err := h.queries.GetStatusByID(ctx, q.StatusID)
+			if err == nil {
+				statuses = append(statuses, SerializeStatus(ctx, h.queries, h.cfg, dbStatus))
+			}
+		}
+
+		web.JSON(w, http.StatusOK, statuses)
+		return
+	}
+
+	// Mock fallback
+	web.JSON(w, http.StatusOK, []Status{})
+}
+
+// RevokeQuote handles POST /api/v1/statuses/:id/quotes/:quote_id/revoke
+// Allows the quoted status author to reject/revoke a quote
+func (h *StatusesHandler) RevokeQuote(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	statusIDStr := web.Param(r, "id")
+	quoteIDStr := web.Param(r, "quote_id")
+
+	statusID, err := strconv.ParseInt(statusIDStr, 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	quoteID, err := strconv.ParseInt(quoteIDStr, 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	ctx := r.Context()
+
+	if h.useDB() {
+		// Verify the status exists and belongs to the user
+		status, err := h.queries.GetStatusByID(ctx, statusID)
+		if err != nil {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+
+		if status.AccountID != accountID {
+			web.JSONError(w, http.StatusForbidden, "You do not have permission to revoke quotes on this status")
+			return
+		}
+
+		// Get the quote
+		quote, err := h.queries.GetQuote(ctx, quoteID)
+		if err != nil {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+
+		// Verify quote is for this status
+		if !quote.QuotedStatusID.Valid || quote.QuotedStatusID.Int64 != statusID {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+
+		// Set quote state to rejected (state 2)
+		_, err = h.queries.UpdateQuoteState(ctx, db.UpdateQuoteStateParams{
+			ID:    quoteID,
+			State: 2, // rejected
+		})
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to revoke quote")
+			return
+		}
+	}
+
+	web.JSON(w, http.StatusOK, map[string]interface{}{})
+}
+
 // RegisterRoutes registers the statuses routes
 func (h *StatusesHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/statuses", h.Create)
@@ -2114,6 +2331,9 @@ func (h *StatusesHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/statuses/{id}/context", h.Context)
 	mux.HandleFunc("GET /api/v1/statuses/{id}/history", h.History)
 	mux.HandleFunc("GET /api/v1/statuses/{id}/source", h.Source)
+	mux.HandleFunc("POST /api/v1/statuses/{id}/translate", h.Translate)
+	mux.HandleFunc("GET /api/v1/statuses/{id}/quotes", h.Quotes)
+	mux.HandleFunc("POST /api/v1/statuses/{id}/quotes/{quote_id}/revoke", h.RevokeQuote)
 	mux.HandleFunc("POST /api/v1/statuses/{id}/favourite", h.Favourite)
 	mux.HandleFunc("POST /api/v1/statuses/{id}/unfavourite", h.Unfavourite)
 	mux.HandleFunc("POST /api/v1/statuses/{id}/reblog", h.Reblog)

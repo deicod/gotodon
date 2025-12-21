@@ -104,15 +104,19 @@
 - [x] Add tests in `status_edits_test.go`
 
 ### Task 2.2: Status Translation
-- [ ] Implement `POST /api/v1/statuses/{id}/translate`
-  - [ ] Integrate translation service (LibreTranslate or similar)
-  - [ ] Return translated content
+- [x] Implement `POST /api/v1/statuses/{id}/translate`
+  - [x] Create translation service interface (`internal/translation/service.go`)
+  - [x] Integrate DeepL and LibreTranslate backends
+  - [x] Add TranslationConfig to config.go
+  - [x] Return translated content
+- [x] Add tests in `status_edits_test.go`
 
 ### Task 2.3: Quote Posts (v4.5+ Feature)
-- [ ] Add quote support to status creation
-- [ ] Implement `GET /api/v1/statuses/{id}/quotes`
-- [ ] Implement `POST /api/v1/statuses/{id}/quotes/{id}/revoke`
-- [ ] Add quote_id to status response serializer
+- [x] Add quote support to status creation (QuoteID field added to Status struct)
+- [x] Implement `GET /api/v1/statuses/{id}/quotes`
+- [x] Implement `POST /api/v1/statuses/{id}/quotes/{quote_id}/revoke`
+- [x] Add quote_id and quote to status response serializer
+- [x] Add tests in `status_edits_test.go`
 
 ### Task 2.4: Instance Information Endpoints
 - [x] Create `internal/api/v1/instance_info.go`
@@ -182,7 +186,8 @@
 - [x] Add tests in `emails_test.go`
 
 ### Task 2.12: Peers Search
-- [ ] Implement `GET /api/v1/peers/search`
+- [x] Implement `GET /api/v1/peers/search`
+- [x] Add tests in `peers_test.go`
 
 ---
 

@@ -10,11 +10,12 @@ import (
 
 // Config holds all configuration for Gotodon.
 type Config struct {
-	Server   ServerConfig   `mapstructure:"server"`
-	Database DatabaseConfig `mapstructure:"database"`
-	Redis    RedisConfig    `mapstructure:"redis"`
-	Secrets  SecretsConfig  `mapstructure:"secrets"`
-	Instance InstanceConfig `mapstructure:"instance"`
+	Server      ServerConfig      `mapstructure:"server"`
+	Database    DatabaseConfig    `mapstructure:"database"`
+	Redis       RedisConfig       `mapstructure:"redis"`
+	Secrets     SecretsConfig     `mapstructure:"secrets"`
+	Instance    InstanceConfig    `mapstructure:"instance"`
+	Translation TranslationConfig `mapstructure:"translation"`
 }
 
 // ServerConfig holds HTTP server configuration.
@@ -75,6 +76,19 @@ type InstanceConfig struct {
 	RegistrationsMode string `mapstructure:"registrations_mode"` // open, none, approved
 }
 
+// TranslationConfig holds translation service configuration.
+type TranslationConfig struct {
+	Backend  string `mapstructure:"backend"` // none, deepl, libretranslate
+	APIKey   string `mapstructure:"api_key"`
+	Endpoint string `mapstructure:"endpoint"` // For LibreTranslate only
+	Plan     string `mapstructure:"plan"`     // For DeepL: free or pro
+}
+
+// Enabled returns true if translation is configured
+func (c *TranslationConfig) Enabled() bool {
+	return c.Backend != "" && c.Backend != "none"
+}
+
 // Load reads configuration from file and environment variables.
 func Load() (*Config, error) {
 	v := viper.New()
@@ -122,6 +136,10 @@ func Load() (*Config, error) {
 	_ = v.BindEnv("secrets.otp_secret", "OTP_SECRET")
 	_ = v.BindEnv("secrets.vapid_private_key", "VAPID_PRIVATE_KEY")
 	_ = v.BindEnv("secrets.vapid_public_key", "VAPID_PUBLIC_KEY")
+	// Translation service env vars (Mastodon compatible)
+	_ = v.BindEnv("translation.api_key", "DEEPL_API_KEY")
+	_ = v.BindEnv("translation.plan", "DEEPL_PLAN")
+	_ = v.BindEnv("translation.endpoint", "LIBRE_TRANSLATE_ENDPOINT")
 
 	// Read config file (optional)
 	if err := v.ReadInConfig(); err != nil {

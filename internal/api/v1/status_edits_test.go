@@ -283,3 +283,149 @@ func TestStatusesHandler_Source_RequiresAuth(t *testing.T) {
 		t.Errorf("unexpected error message: %v", errResp["error"])
 	}
 }
+
+func TestStatusesHandler_Translate_MockMode(t *testing.T) {
+	h := NewStatusesHandler(nil, nil, nil, nil)
+
+	tests := []struct {
+		name     string
+		statusID string
+		wantCode int
+	}{
+		{
+			name:     "translation not enabled returns 422",
+			statusID: "123456789",
+			wantCode: http.StatusUnprocessableEntity,
+		},
+		{
+			name:     "empty status ID returns not found",
+			statusID: "",
+			wantCode: http.StatusNotFound,
+		},
+		{
+			name:     "invalid status ID returns not found",
+			statusID: "invalid",
+			wantCode: http.StatusNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, rec := mockStatusRequest(http.MethodPost, "/api/v1/statuses/"+tt.statusID+"/translate", 12345)
+			req.SetPathValue("id", tt.statusID)
+
+			h.Translate(rec, req)
+
+			if rec.Code != tt.wantCode {
+				t.Errorf("status = %d, want %d", rec.Code, tt.wantCode)
+			}
+		})
+	}
+}
+
+func TestTranslationStruct(t *testing.T) {
+	tr := Translation{
+		Content:                "<p>Hello world</p>",
+		SpoilerText:            "Warning",
+		DetectedSourceLanguage: "ja",
+		Language:               "en",
+		Provider:               "DeepL.com",
+	}
+
+	data, err := json.Marshal(tr)
+	if err != nil {
+		t.Fatalf("Failed to marshal Translation: %v", err)
+	}
+
+	var unmarshaled Translation
+	if err := json.Unmarshal(data, &unmarshaled); err != nil {
+		t.Fatalf("Failed to unmarshal Translation: %v", err)
+	}
+
+	if unmarshaled.Content != tr.Content {
+		t.Errorf("content = %q, want %q", unmarshaled.Content, tr.Content)
+	}
+	if unmarshaled.Provider != tr.Provider {
+		t.Errorf("provider = %q, want %q", unmarshaled.Provider, tr.Provider)
+	}
+}
+
+func TestStatusesHandler_Quotes_MockMode(t *testing.T) {
+	h := NewStatusesHandler(nil, nil, nil, nil)
+
+	tests := []struct {
+		name     string
+		statusID string
+		wantCode int
+	}{
+		{
+			name:     "valid status ID returns empty quotes list",
+			statusID: "123456789",
+			wantCode: http.StatusOK,
+		},
+		{
+			name:     "empty status ID returns not found",
+			statusID: "",
+			wantCode: http.StatusNotFound,
+		},
+		{
+			name:     "invalid status ID returns not found",
+			statusID: "invalid",
+			wantCode: http.StatusNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, rec := mockStatusRequest(http.MethodGet, "/api/v1/statuses/"+tt.statusID+"/quotes", 12345)
+			req.SetPathValue("id", tt.statusID)
+
+			h.Quotes(rec, req)
+
+			if rec.Code != tt.wantCode {
+				t.Errorf("status = %d, want %d", rec.Code, tt.wantCode)
+			}
+		})
+	}
+}
+
+func TestStatusesHandler_RevokeQuote_MockMode(t *testing.T) {
+	h := NewStatusesHandler(nil, nil, nil, nil)
+
+	tests := []struct {
+		name      string
+		statusID  string
+		quoteID   string
+		accountID int64
+		wantCode  int
+	}{
+		{
+			name:      "authenticated user can revoke quote",
+			statusID:  "123456789",
+			quoteID:   "999",
+			accountID: 12345,
+			wantCode:  http.StatusOK,
+		},
+		{
+			name:      "unauthenticated user gets 401",
+			statusID:  "123456789",
+			quoteID:   "999",
+			accountID: 0,
+			wantCode:  http.StatusUnauthorized,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, rec := mockStatusRequest(http.MethodPost, "/api/v1/statuses/"+tt.statusID+"/quotes/"+tt.quoteID+"/revoke", tt.accountID)
+			req.SetPathValue("id", tt.statusID)
+			req.SetPathValue("quote_id", tt.quoteID)
+
+			h.RevokeQuote(rec, req)
+
+			if rec.Code != tt.wantCode {
+				t.Errorf("status = %d, want %d", rec.Code, tt.wantCode)
+			}
+		})
+	}
+}

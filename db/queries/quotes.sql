@@ -7,7 +7,7 @@ SELECT * FROM quotes WHERE status_id = $1;
 
 -- name: GetQuotesByQuotedStatusID :many
 SELECT * FROM quotes 
-WHERE quoted_status_id = $1 
+WHERE quoted_status_id = $1 AND state = 0
 ORDER BY id DESC
 LIMIT $2 OFFSET $3;
 
@@ -32,3 +32,7 @@ SELECT * FROM quotes WHERE activity_uri = $1;
 
 -- name: CountQuotesByQuotedStatus :one
 SELECT COUNT(*) FROM quotes WHERE quoted_status_id = $1 AND state = 0;
+
+-- name: GetQuotesByStatusIDs :many
+SELECT * FROM quotes WHERE status_id = ANY(@status_ids::bigint[]) AND state = 0;
+

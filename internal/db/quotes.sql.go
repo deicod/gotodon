@@ -151,7 +151,7 @@ func (q *Queries) GetQuoteByStatusID(ctx context.Context, statusID int64) (Quote
 
 const getQuotesByQuotedStatusID = `-- name: GetQuotesByQuotedStatusID :many
 SELECT id, account_id, status_id, quoted_status_id, quoted_account_id, state, approval_uri, activity_uri, created_at, updated_at, legacy FROM quotes 
-WHERE quoted_status_id = $1 
+WHERE quoted_status_id = $1 AND state = 0
 ORDER BY id DESC
 LIMIT $2 OFFSET $3
 `
@@ -164,6 +164,42 @@ type GetQuotesByQuotedStatusIDParams struct {
 
 func (q *Queries) GetQuotesByQuotedStatusID(ctx context.Context, arg GetQuotesByQuotedStatusIDParams) ([]Quote, error) {
 	rows, err := q.db.Query(ctx, getQuotesByQuotedStatusID, arg.QuotedStatusID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Quote{}
+	for rows.Next() {
+		var i Quote
+		if err := rows.Scan(
+			&i.ID,
+			&i.AccountID,
+			&i.StatusID,
+			&i.QuotedStatusID,
+			&i.QuotedAccountID,
+			&i.State,
+			&i.ApprovalUri,
+			&i.ActivityUri,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Legacy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getQuotesByStatusIDs = `-- name: GetQuotesByStatusIDs :many
+SELECT id, account_id, status_id, quoted_status_id, quoted_account_id, state, approval_uri, activity_uri, created_at, updated_at, legacy FROM quotes WHERE status_id = ANY($1::bigint[]) AND state = 0
+`
+
+func (q *Queries) GetQuotesByStatusIDs(ctx context.Context, statusIds []int64) ([]Quote, error) {
+	rows, err := q.db.Query(ctx, getQuotesByStatusIDs, statusIds)
 	if err != nil {
 		return nil, err
 	}

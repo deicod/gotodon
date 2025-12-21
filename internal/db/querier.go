@@ -273,6 +273,7 @@ type Querier interface {
 	GetQuoteByActivityURI(ctx context.Context, activityUri pgtype.Text) (Quote, error)
 	GetQuoteByStatusID(ctx context.Context, statusID int64) (Quote, error)
 	GetQuotesByQuotedStatusID(ctx context.Context, arg GetQuotesByQuotedStatusIDParams) ([]Quote, error)
+	GetQuotesByStatusIDs(ctx context.Context, statusIds []int64) ([]Quote, error)
 	GetRebloggers(ctx context.Context, arg GetRebloggersParams) ([]Account, error)
 	GetRelationship(ctx context.Context, arg GetRelationshipParams) (GetRelationshipRow, error)
 	// Rules queries

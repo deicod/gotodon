@@ -141,6 +141,27 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 		statsMap[s.StatusID] = s
 	}
 
+	// Fetch quotes for statuses (quotes where these statuses are the quoting status)
+	dbQuotes, _ := q.GetQuotesByStatusIDs(ctx, statusIDs)
+	quotesMap := make(map[int64]db.Quote) // status_id -> quote
+	quotedStatusIDs := make([]int64, 0)
+	for _, qr := range dbQuotes {
+		quotesMap[qr.StatusID] = qr
+		if qr.QuotedStatusID.Valid {
+			quotedStatusIDs = append(quotedStatusIDs, qr.QuotedStatusID.Int64)
+		}
+	}
+
+	// Fetch quoted statuses
+	quotedStatusesMap := make(map[int64]Status)
+	if len(quotedStatusIDs) > 0 {
+		quotedDbStatuses, _ := q.GetStatusesByIDs(ctx, quotedStatusIDs)
+		// Serialize quoted statuses (without recursing into their quotes to avoid infinite loops)
+		for _, qs := range quotedDbStatuses {
+			quotedStatusesMap[qs.ID] = SerializeStatusSimple(ctx, q, cfg, qs)
+		}
+	}
+
 	results := make([]Status, len(dbStatuses))
 	for i, dbStatus := range dbStatuses {
 		// Defaults
@@ -228,6 +249,15 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 			s.InReplyToAccountID = &idStr
 		}
 
+		// Add quote fields if the status quotes another
+		if qr, hasQuote := quotesMap[dbStatus.ID]; hasQuote && qr.QuotedStatusID.Valid {
+			quoteIDStr := strconv.FormatInt(qr.QuotedStatusID.Int64, 10)
+			s.QuoteID = &quoteIDStr
+			if quotedStatus, ok := quotedStatusesMap[qr.QuotedStatusID.Int64]; ok {
+				s.Quote = &quotedStatus
+			}
+		}
+
 		results[i] = s
 	}
 
@@ -241,4 +271,46 @@ func SerializeStatus(ctx context.Context, q db.Querier, cfg *config.Config, dbSt
 		return results[0]
 	}
 	return Status{}
+}
+
+// SerializeStatusSimple converts a status without recursing into quotes (to avoid infinite loops)
+func SerializeStatusSimple(ctx context.Context, q db.Querier, cfg *config.Config, dbStatus db.Status) Status {
+	// Get account
+	account := Account{ID: strconv.FormatInt(dbStatus.AccountID, 10), Username: "unknown"}
+	if acc, err := q.GetAccountByID(ctx, dbStatus.AccountID); err == nil {
+		account = SerializeAccount(cfg, acc)
+	}
+
+	visibility := "public"
+	switch dbStatus.Visibility {
+	case 1:
+		visibility = "unlisted"
+	case 2:
+		visibility = "private"
+	case 3:
+		visibility = "direct"
+	}
+
+	var language *string
+	if dbStatus.Language.Valid {
+		s := dbStatus.Language.String
+		language = &s
+	}
+
+	return Status{
+		ID:               strconv.FormatInt(dbStatus.ID, 10),
+		CreatedAt:        dbStatus.CreatedAt.Time,
+		Sensitive:        dbStatus.Sensitive,
+		SpoilerText:      dbStatus.SpoilerText,
+		Visibility:       visibility,
+		Language:         language,
+		URI:              dbStatus.Uri.String,
+		URL:              &dbStatus.Url.String,
+		Content:          dbStatus.Text,
+		Account:          account,
+		MediaAttachments: []MediaAttach{},
+		Mentions:         []Mention{},
+		Tags:             []Tag{},
+		Emojis:           []CustomEmoji{},
+	}
 }
