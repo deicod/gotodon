@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/activitypub"
@@ -12,15 +13,17 @@ import (
 
 // FederationHandler handles ActivityPub federation endpoints
 type FederationHandler struct {
-	queries *db.Queries
-	domain  string
+	queries      *db.Queries
+	domain       string
+	actorFetcher activitypub.ActorFetcher
 }
 
 // NewFederationHandler creates a new federation handler
 func NewFederationHandler(queries *db.Queries, domain string) *FederationHandler {
 	return &FederationHandler{
-		queries: queries,
-		domain:  domain,
+		queries:      queries,
+		domain:       domain,
+		actorFetcher: newActorFetcher(queries, domain),
 	}
 }
 
@@ -231,8 +234,9 @@ func (h *FederationHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /users/{username}/following", h.GetFollowing)
 
 	// Inbox endpoints
-	mux.HandleFunc("POST /inbox", h.PostInbox)
-	mux.HandleFunc("POST /users/{username}/inbox", h.PostInbox)
+	inboxHandler := middleware.VerifyHTTPSignature(h.actorFetcher)(http.HandlerFunc(h.PostInbox))
+	mux.Handle("POST /inbox", inboxHandler)
+	mux.Handle("POST /users/{username}/inbox", inboxHandler)
 }
 
 // Helper to format account ID
