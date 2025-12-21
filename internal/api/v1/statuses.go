@@ -1961,6 +1961,51 @@ func (h *StatusesHandler) History(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Check visibility - private and direct statuses require authorization
+		viewerAccountID, isAuthenticated := middleware.GetAccountID(ctx)
+
+		// For private (followers-only) statuses, viewer must be author or follower
+		// For direct statuses, viewer must be author or mentioned
+		if dbStatus.Visibility == VisibilityPrivate || dbStatus.Visibility == VisibilityDirect {
+			if !isAuthenticated {
+				web.JSONError(w, http.StatusNotFound, "Record not found")
+				return
+			}
+
+			// Author can always see their own status
+			if viewerAccountID != dbStatus.AccountID {
+				// For direct messages, check if viewer is mentioned
+				if dbStatus.Visibility == VisibilityDirect {
+					mentions, err := h.queries.GetMentionsByStatusID(ctx, id)
+					if err != nil {
+						web.JSONError(w, http.StatusNotFound, "Record not found")
+						return
+					}
+					isMentioned := false
+					for _, m := range mentions {
+						if m.AccountID == viewerAccountID {
+							isMentioned = true
+							break
+						}
+					}
+					if !isMentioned {
+						web.JSONError(w, http.StatusNotFound, "Record not found")
+						return
+					}
+				} else {
+					// For private (followers-only), check if viewer follows the author
+					_, err := h.queries.GetFollow(ctx, db.GetFollowParams{
+						AccountID:       viewerAccountID,
+						TargetAccountID: dbStatus.AccountID,
+					})
+					if err != nil {
+						web.JSONError(w, http.StatusNotFound, "Record not found")
+						return
+					}
+				}
+			}
+		}
+
 		// Get the status author
 		dbAccount, err := h.queries.GetAccountByID(ctx, dbStatus.AccountID)
 		if err != nil {

@@ -57,7 +57,7 @@ RETURNING id, account_id, acct, followers_count, target_account_id, created_at, 
 `
 
 type CreateAccountMigrationParams struct {
-	AccountID       pgtype.Int8 `db:"account_id" json:"account_id"`
+	AccountID       int64       `db:"account_id" json:"account_id"`
 	Acct            string      `db:"acct" json:"acct"`
 	FollowersCount  int64       `db:"followers_count" json:"followers_count"`
 	TargetAccountID pgtype.Int8 `db:"target_account_id" json:"target_account_id"`
@@ -228,7 +228,7 @@ WHERE account_id = $1
 ORDER BY created_at DESC
 `
 
-func (q *Queries) GetAccountMigrationsByAccountID(ctx context.Context, accountID pgtype.Int8) ([]AccountMigration, error) {
+func (q *Queries) GetAccountMigrationsByAccountID(ctx context.Context, accountID int64) ([]AccountMigration, error) {
 	rows, err := q.db.Query(ctx, getAccountMigrationsByAccountID, accountID)
 	if err != nil {
 		return nil, err
@@ -289,7 +289,7 @@ ORDER BY created_at DESC
 LIMIT 1
 `
 
-func (q *Queries) GetLatestAccountMigration(ctx context.Context, accountID pgtype.Int8) (AccountMigration, error) {
+func (q *Queries) GetLatestAccountMigration(ctx context.Context, accountID int64) (AccountMigration, error) {
 	row := q.db.QueryRow(ctx, getLatestAccountMigration, accountID)
 	var i AccountMigration
 	err := row.Scan(

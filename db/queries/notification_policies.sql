@@ -130,10 +130,10 @@ DELETE FROM notification_requests
 WHERE account_id = $1 AND from_account_id = $2;
 
 -- name: AcceptNotificationRequest :exec
--- Converts a notification request to a permission
+-- Converts a notification request to a permission (only if owned by account)
 WITH deleted AS (
     DELETE FROM notification_requests nr
-    WHERE nr.id = $1
+    WHERE nr.id = $1 AND nr.account_id = $2
     RETURNING nr.account_id, nr.from_account_id
 )
 INSERT INTO notification_permissions (account_id, from_account_id)
@@ -141,7 +141,7 @@ SELECT d.account_id, d.from_account_id FROM deleted d
 ON CONFLICT (account_id, from_account_id) DO NOTHING;
 
 -- name: DismissNotificationRequest :exec
-DELETE FROM notification_requests WHERE id = $1;
+DELETE FROM notification_requests WHERE id = $1 AND account_id = $2;
 
 -- name: BulkAcceptNotificationRequests :exec
 WITH deleted AS (

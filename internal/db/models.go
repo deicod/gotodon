@@ -80,7 +80,7 @@ type AccountDomainBlock struct {
 
 type AccountMigration struct {
 	ID              int64              `db:"id" json:"id"`
-	AccountID       pgtype.Int8        `db:"account_id" json:"account_id"`
+	AccountID       int64              `db:"account_id" json:"account_id"`
 	Acct            string             `db:"acct" json:"acct"`
 	FollowersCount  int64              `db:"followers_count" json:"followers_count"`
 	TargetAccountID pgtype.Int8        `db:"target_account_id" json:"target_account_id"`

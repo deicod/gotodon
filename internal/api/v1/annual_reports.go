@@ -3,9 +3,12 @@ package v1
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
@@ -46,7 +49,7 @@ func (h *AnnualReportsHandler) List(w http.ResponseWriter, r *http.Request) {
 	if h.useDB() {
 		dbReports, err := h.queries.ListAnnualReportsByAccount(ctx, accountID)
 		if err != nil {
-			web.JSON(w, http.StatusOK, []AnnualReport{})
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
 			return
 		}
 
@@ -89,7 +92,11 @@ func (h *AnnualReportsHandler) Get(w http.ResponseWriter, r *http.Request) {
 			Year:      int32(year),
 		})
 		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
+			if errors.Is(err, pgx.ErrNoRows) {
+				web.JSONError(w, http.StatusNotFound, "Record not found")
+			} else {
+				web.JSONError(w, http.StatusInternalServerError, "Database error")
+			}
 			return
 		}
 		web.JSON(w, http.StatusOK, h.dbReportToAPI(dbReport))
@@ -133,7 +140,11 @@ func (h *AnnualReportsHandler) MarkAsRead(w http.ResponseWriter, r *http.Request
 			Year:      int32(year),
 		})
 		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
+			if errors.Is(err, pgx.ErrNoRows) {
+				web.JSONError(w, http.StatusNotFound, "Record not found")
+			} else {
+				web.JSONError(w, http.StatusInternalServerError, "Database error")
+			}
 			return
 		}
 

@@ -17,6 +17,8 @@ UPDATE accounts SET
     avatar_content_type = '',
     avatar_file_size = NULL,
     avatar_updated_at = NULL,
+    avatar_remote_url = '',
+    avatar_storage_schema_version = NULL,
     updated_at = now()
 WHERE id = $1
 RETURNING id, username, domain, private_key, public_key, created_at, updated_at, note, display_name, uri, url, avatar_file_name, avatar_content_type, avatar_file_size, avatar_updated_at, header_file_name, header_content_type, header_file_size, header_updated_at, avatar_remote_url, locked, header_remote_url, last_webfingered_at, inbox_url, outbox_url, shared_inbox_url, followers_url, following_url, protocol, memorial, moved_to_account_id, featured_collection_url, fields, actor_type, discoverable, also_known_as, silenced_at, suspended_at, hide_collections, avatar_storage_schema_version, header_storage_schema_version, suspension_origin, sensitized_at, trendable, reviewed_at, requested_review_at, indexable, attribution_domains
@@ -84,6 +86,8 @@ UPDATE accounts SET
     header_content_type = '',
     header_file_size = NULL,
     header_updated_at = NULL,
+    header_remote_url = '',
+    header_storage_schema_version = NULL,
     updated_at = now()
 WHERE id = $1
 RETURNING id, username, domain, private_key, public_key, created_at, updated_at, note, display_name, uri, url, avatar_file_name, avatar_content_type, avatar_file_size, avatar_updated_at, header_file_name, header_content_type, header_file_size, header_updated_at, avatar_remote_url, locked, header_remote_url, last_webfingered_at, inbox_url, outbox_url, shared_inbox_url, followers_url, following_url, protocol, memorial, moved_to_account_id, featured_collection_url, fields, actor_type, discoverable, also_known_as, silenced_at, suspended_at, hide_collections, avatar_storage_schema_version, header_storage_schema_version, suspension_origin, sensitized_at, trendable, reviewed_at, requested_review_at, indexable, attribution_domains

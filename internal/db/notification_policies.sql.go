@@ -14,7 +14,7 @@ import (
 const acceptNotificationRequest = `-- name: AcceptNotificationRequest :exec
 WITH deleted AS (
     DELETE FROM notification_requests nr
-    WHERE nr.id = $1
+    WHERE nr.id = $1 AND nr.account_id = $2
     RETURNING nr.account_id, nr.from_account_id
 )
 INSERT INTO notification_permissions (account_id, from_account_id)
@@ -22,9 +22,14 @@ SELECT d.account_id, d.from_account_id FROM deleted d
 ON CONFLICT (account_id, from_account_id) DO NOTHING
 `
 
-// Converts a notification request to a permission
-func (q *Queries) AcceptNotificationRequest(ctx context.Context, id int64) error {
-	_, err := q.db.Exec(ctx, acceptNotificationRequest, id)
+type AcceptNotificationRequestParams struct {
+	ID        int64 `db:"id" json:"id"`
+	AccountID int64 `db:"account_id" json:"account_id"`
+}
+
+// Converts a notification request to a permission (only if owned by account)
+func (q *Queries) AcceptNotificationRequest(ctx context.Context, arg AcceptNotificationRequestParams) error {
+	_, err := q.db.Exec(ctx, acceptNotificationRequest, arg.ID, arg.AccountID)
 	return err
 }
 
@@ -226,11 +231,16 @@ func (q *Queries) DeleteNotificationRequestByAccounts(ctx context.Context, arg D
 }
 
 const dismissNotificationRequest = `-- name: DismissNotificationRequest :exec
-DELETE FROM notification_requests WHERE id = $1
+DELETE FROM notification_requests WHERE id = $1 AND account_id = $2
 `
 
-func (q *Queries) DismissNotificationRequest(ctx context.Context, id int64) error {
-	_, err := q.db.Exec(ctx, dismissNotificationRequest, id)
+type DismissNotificationRequestParams struct {
+	ID        int64 `db:"id" json:"id"`
+	AccountID int64 `db:"account_id" json:"account_id"`
+}
+
+func (q *Queries) DismissNotificationRequest(ctx context.Context, arg DismissNotificationRequestParams) error {
+	_, err := q.db.Exec(ctx, dismissNotificationRequest, arg.ID, arg.AccountID)
 	return err
 }
 

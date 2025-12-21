@@ -102,6 +102,8 @@ UPDATE accounts SET
     avatar_content_type = '',
     avatar_file_size = NULL,
     avatar_updated_at = NULL,
+    avatar_remote_url = '',
+    avatar_storage_schema_version = NULL,
     updated_at = now()
 WHERE id = $1
 RETURNING *;
@@ -112,6 +114,9 @@ UPDATE accounts SET
     header_content_type = '',
     header_file_size = NULL,
     header_updated_at = NULL,
+    header_remote_url = '',
+    header_storage_schema_version = NULL,
     updated_at = now()
 WHERE id = $1
 RETURNING *;
+

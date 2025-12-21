@@ -446,7 +446,7 @@ func (h *NotificationsHandler) ListRequests(w http.ResponseWriter, r *http.Reque
 
 // AcceptRequest handles POST /api/v1/notifications/requests/:id/accept
 func (h *NotificationsHandler) AcceptRequest(w http.ResponseWriter, r *http.Request) {
-	_, ok := middleware.GetAccountID(r.Context())
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
 		return
@@ -460,7 +460,10 @@ func (h *NotificationsHandler) AcceptRequest(w http.ResponseWriter, r *http.Requ
 	}
 
 	if h.useDB() {
-		_ = h.queries.AcceptNotificationRequest(r.Context(), id)
+		_ = h.queries.AcceptNotificationRequest(r.Context(), db.AcceptNotificationRequestParams{
+			ID:        id,
+			AccountID: accountID,
+		})
 	}
 
 	web.JSON(w, http.StatusOK, map[string]any{})
@@ -468,7 +471,7 @@ func (h *NotificationsHandler) AcceptRequest(w http.ResponseWriter, r *http.Requ
 
 // DismissRequest handles POST /api/v1/notifications/requests/:id/dismiss
 func (h *NotificationsHandler) DismissRequest(w http.ResponseWriter, r *http.Request) {
-	_, ok := middleware.GetAccountID(r.Context())
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
 		return
@@ -482,7 +485,10 @@ func (h *NotificationsHandler) DismissRequest(w http.ResponseWriter, r *http.Req
 	}
 
 	if h.useDB() {
-		_ = h.queries.DismissNotificationRequest(r.Context(), id)
+		_ = h.queries.DismissNotificationRequest(r.Context(), db.DismissNotificationRequestParams{
+			ID:        id,
+			AccountID: accountID,
+		})
 	}
 
 	web.JSON(w, http.StatusOK, map[string]any{})

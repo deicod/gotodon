@@ -98,10 +98,18 @@ func (h *InstanceInfoHandler) Peers(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Get distinct domains from accounts table
-	domains, err := h.queries.GetKnownDomains(ctx)
+	dbDomains, err := h.queries.GetKnownDomains(ctx)
 	if err != nil {
 		web.JSON(w, http.StatusOK, []string{})
 		return
+	}
+
+	// Convert pgtype.Text to plain strings
+	domains := make([]string, 0, len(dbDomains))
+	for _, d := range dbDomains {
+		if d.Valid {
+			domains = append(domains, d.String)
+		}
 	}
 
 	web.JSON(w, http.StatusOK, domains)

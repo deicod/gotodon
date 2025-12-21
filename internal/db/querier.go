@@ -11,8 +11,8 @@ import (
 )
 
 type Querier interface {
-	// Converts a notification request to a permission
-	AcceptNotificationRequest(ctx context.Context, id int64) error
+	// Converts a notification request to a permission (only if owned by account)
+	AcceptNotificationRequest(ctx context.Context, arg AcceptNotificationRequestParams) error
 	AddAccountToList(ctx context.Context, arg AddAccountToListParams) error
 	AddAnnouncementReaction(ctx context.Context, arg AddAnnouncementReactionParams) (AnnouncementReaction, error)
 	AddStatusTags(ctx context.Context, arg AddStatusTagsParams) error
@@ -141,6 +141,7 @@ type Querier interface {
 	DeleteDomainBlock(ctx context.Context, arg DeleteDomainBlockParams) error
 	DeleteFavourite(ctx context.Context, arg DeleteFavouriteParams) error
 	DeleteFeaturedTag(ctx context.Context, arg DeleteFeaturedTagParams) error
+	DeleteFeaturedTagByTagID(ctx context.Context, arg DeleteFeaturedTagByTagIDParams) error
 	DeleteFilter(ctx context.Context, arg DeleteFilterParams) error
 	DeleteFilterKeyword(ctx context.Context, id int64) error
 	DeleteFilterStatus(ctx context.Context, id int64) error
@@ -175,7 +176,7 @@ type Querier interface {
 	DetachMediaFromStatus(ctx context.Context, arg DetachMediaFromStatusParams) (int64, error)
 	DetachPreviewCardFromStatus(ctx context.Context, arg DetachPreviewCardFromStatusParams) error
 	DismissAnnouncement(ctx context.Context, arg DismissAnnouncementParams) error
-	DismissNotificationRequest(ctx context.Context, id int64) error
+	DismissNotificationRequest(ctx context.Context, arg DismissNotificationRequestParams) error
 	ExistsTombstone(ctx context.Context, uri string) (bool, error)
 	GetAccountAliasByURI(ctx context.Context, arg GetAccountAliasByURIParams) (AccountAlias, error)
 	// Account Aliases queries (for account migration)
@@ -186,7 +187,7 @@ type Querier interface {
 	GetAccountByUsernameAndDomain(ctx context.Context, arg GetAccountByUsernameAndDomainParams) (Account, error)
 	// Account Migrations queries
 	GetAccountMigration(ctx context.Context, id int64) (AccountMigration, error)
-	GetAccountMigrationsByAccountID(ctx context.Context, accountID pgtype.Int8) ([]AccountMigration, error)
+	GetAccountMigrationsByAccountID(ctx context.Context, accountID int64) ([]AccountMigration, error)
 	// Account Notes queries (private notes about other users)
 	GetAccountNote(ctx context.Context, arg GetAccountNoteParams) (AccountNote, error)
 	GetAccountStats(ctx context.Context, accountID int64) (AccountStat, error)
@@ -223,7 +224,7 @@ type Querier interface {
 	GetHomeTimeline(ctx context.Context, arg GetHomeTimelineParams) ([]Status, error)
 	GetKnownDomains(ctx context.Context) ([]pgtype.Text, error)
 	GetLastSuccessfulLogin(ctx context.Context, userID int64) (LoginActivity, error)
-	GetLatestAccountMigration(ctx context.Context, accountID pgtype.Int8) (AccountMigration, error)
+	GetLatestAccountMigration(ctx context.Context, accountID int64) (AccountMigration, error)
 	GetList(ctx context.Context, arg GetListParams) (List, error)
 	GetListTimeline(ctx context.Context, arg GetListTimelineParams) ([]Status, error)
 	GetListsContainingAccount(ctx context.Context, arg GetListsContainingAccountParams) ([]List, error)
@@ -315,7 +316,7 @@ type Querier interface {
 	GetUnviewedAnnualReports(ctx context.Context, accountID int64) ([]GeneratedAnnualReport, error)
 	GetUserByAccountID(ctx context.Context, accountID int64) (User, error)
 	GetUserByConfirmationToken(ctx context.Context, confirmationToken pgtype.Text) (User, error)
-	GetUserByEmail(ctx context.Context, email string) (User, error)
+	GetUserByEmail(ctx context.Context, lower string) (User, error)
 	GetUserByResetPasswordToken(ctx context.Context, resetPasswordToken pgtype.Text) (User, error)
 	GetUserRole(ctx context.Context, id int64) (UserRole, error)
 	GetVotes(ctx context.Context, arg GetVotesParams) ([]PollVote, error)

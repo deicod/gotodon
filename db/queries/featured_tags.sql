@@ -18,3 +18,8 @@ WHERE account_id = $1 AND tag_id = $2;
 
 -- name: CountFeaturedTags :one
 SELECT count(*) FROM featured_tags WHERE account_id = $1;
+
+-- name: DeleteFeaturedTagByTagID :exec
+DELETE FROM featured_tags
+WHERE account_id = $1 AND tag_id = $2;
+

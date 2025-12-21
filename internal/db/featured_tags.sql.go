@@ -73,6 +73,21 @@ func (q *Queries) DeleteFeaturedTag(ctx context.Context, arg DeleteFeaturedTagPa
 	return err
 }
 
+const deleteFeaturedTagByTagID = `-- name: DeleteFeaturedTagByTagID :exec
+DELETE FROM featured_tags
+WHERE account_id = $1 AND tag_id = $2
+`
+
+type DeleteFeaturedTagByTagIDParams struct {
+	AccountID int64       `db:"account_id" json:"account_id"`
+	TagID     pgtype.Int8 `db:"tag_id" json:"tag_id"`
+}
+
+func (q *Queries) DeleteFeaturedTagByTagID(ctx context.Context, arg DeleteFeaturedTagByTagIDParams) error {
+	_, err := q.db.Exec(ctx, deleteFeaturedTagByTagID, arg.AccountID, arg.TagID)
+	return err
+}
+
 const getFeaturedTagByTagID = `-- name: GetFeaturedTagByTagID :one
 SELECT id, account_id, tag_id, name, statuses_count, last_status_at, created_at, updated_at FROM featured_tags
 WHERE account_id = $1 AND tag_id = $2

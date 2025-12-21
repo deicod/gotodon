@@ -170,11 +170,11 @@ func (q *Queries) GetUserByConfirmationToken(ctx context.Context, confirmationTo
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, created_at, updated_at, encrypted_password, reset_password_token, reset_password_sent_at, sign_in_count, current_sign_in_at, last_sign_in_at, confirmation_token, confirmed_at, confirmation_sent_at, unconfirmed_email, locale, consumed_timestep, otp_required_for_login, last_emailed_at, otp_backup_codes, account_id, disabled, invite_id, chosen_languages, created_by_application_id, approved, sign_in_token, sign_in_token_sent_at, webauthn_id, sign_up_ip, skip_sign_in_token, role_id, settings, time_zone, otp_secret FROM users WHERE email = $1
+SELECT id, email, created_at, updated_at, encrypted_password, reset_password_token, reset_password_sent_at, sign_in_count, current_sign_in_at, last_sign_in_at, confirmation_token, confirmed_at, confirmation_sent_at, unconfirmed_email, locale, consumed_timestep, otp_required_for_login, last_emailed_at, otp_backup_codes, account_id, disabled, invite_id, chosen_languages, created_by_application_id, approved, sign_in_token, sign_in_token_sent_at, webauthn_id, sign_up_ip, skip_sign_in_token, role_id, settings, time_zone, otp_secret FROM users WHERE LOWER(email) = LOWER($1)
 `
 
-func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
-	row := q.db.QueryRow(ctx, getUserByEmail, email)
+func (q *Queries) GetUserByEmail(ctx context.Context, lower string) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByEmail, lower)
 	var i User
 	err := row.Scan(
 		&i.ID,
