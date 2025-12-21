@@ -254,6 +254,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	v2SuggestionsHandler := v2.NewSuggestionsHandler(queries)
 	v2SuggestionsHandler.RegisterRoutes(mux)
 
+	v2NotificationsHandler := v2.NewNotificationsHandler(queries, cfg)
+	v2NotificationsHandler.RegisterRoutes(mux)
+
 	// Register OAuth handlers
 	oauthHandler := oauthapi.NewHandler(queries)
 	oauthHandler.RegisterRoutes(mux)

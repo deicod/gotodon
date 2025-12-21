@@ -34,3 +34,31 @@ INSERT INTO notifications (
 )
 SELECT unnest($1::bigint[]), $2, $3, $4, $5, now(), now()
 RETURNING *;
+
+-- name: ListNotificationsByGroupKey :many
+SELECT * FROM notifications
+WHERE account_id = $1
+  AND group_key = $2
+ORDER BY id DESC;
+
+-- name: ListNotificationsByTypeAndActivity :many
+SELECT * FROM notifications
+WHERE account_id = $1
+  AND group_key IS NULL
+  AND type = $2
+  AND activity_type = $3
+  AND activity_id = $4
+ORDER BY id DESC;
+
+-- name: DeleteNotificationsByGroupKey :exec
+DELETE FROM notifications
+WHERE account_id = $1
+  AND group_key = $2;
+
+-- name: DeleteNotificationsByTypeAndActivity :exec
+DELETE FROM notifications
+WHERE account_id = $1
+  AND group_key IS NULL
+  AND type = $2
+  AND activity_type = $3
+  AND activity_id = $4;

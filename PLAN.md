@@ -196,15 +196,15 @@
 **Goal:** Implement all missing v2 API endpoints
 
 ### Task 3.1: Grouped Notifications
-- [ ] Create `internal/api/v2/notifications.go`
-- [ ] Implement `GET /api/v2/notifications` (grouped by group_key)
-  - [ ] Group notifications by type and source
-  - [ ] Return grouped format
-- [ ] Implement `GET /api/v2/notifications/{group_key}`
-- [ ] Implement `POST /api/v2/notifications/{group_key}/dismiss`
-- [ ] Implement `GET /api/v2/notifications/{group_key}/accounts`
-- [ ] Implement `GET /api/v2/notifications/unread_count`
-- [ ] Add tests
+- [x] Create `internal/api/v2/notifications.go`
+- [x] Implement `GET /api/v2/notifications` (grouped by group_key)
+  - [x] Group notifications by type and source
+  - [x] Return grouped format
+- [x] Implement `GET /api/v2/notifications/{group_key}`
+- [x] Implement `POST /api/v2/notifications/{group_key}/dismiss`
+- [x] Implement `GET /api/v2/notifications/{group_key}/accounts`
+- [x] Implement `GET /api/v2/notifications/unread_count`
+- [x] Add tests
 
 ### Task 3.2: v2 Notification Policy
 - [ ] Implement `GET /api/v2/notifications/policy`

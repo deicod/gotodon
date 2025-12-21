@@ -155,6 +155,8 @@ type Querier interface {
 	DeleteNotificationPolicy(ctx context.Context, accountID int64) error
 	DeleteNotificationRequest(ctx context.Context, id int64) error
 	DeleteNotificationRequestByAccounts(ctx context.Context, arg DeleteNotificationRequestByAccountsParams) error
+	DeleteNotificationsByGroupKey(ctx context.Context, arg DeleteNotificationsByGroupKeyParams) error
+	DeleteNotificationsByTypeAndActivity(ctx context.Context, arg DeleteNotificationsByTypeAndActivityParams) error
 	DeleteOAuthApplication(ctx context.Context, id int64) error
 	DeletePreviewCard(ctx context.Context, id int64) error
 	DeletePushSubscription(ctx context.Context, accessTokenID pgtype.Int8) error
@@ -363,6 +365,8 @@ type Querier interface {
 	ListNotificationPermissions(ctx context.Context, arg ListNotificationPermissionsParams) ([]NotificationPermission, error)
 	ListNotificationRequests(ctx context.Context, arg ListNotificationRequestsParams) ([]NotificationRequest, error)
 	ListNotifications(ctx context.Context, arg ListNotificationsParams) ([]Notification, error)
+	ListNotificationsByGroupKey(ctx context.Context, arg ListNotificationsByGroupKeyParams) ([]Notification, error)
+	ListNotificationsByTypeAndActivity(ctx context.Context, arg ListNotificationsByTypeAndActivityParams) ([]Notification, error)
 	ListOAuthApplicationsByOwner(ctx context.Context, arg ListOAuthApplicationsByOwnerParams) ([]OauthApplication, error)
 	ListPendingTrendingStatuses(ctx context.Context, arg ListPendingTrendingStatusesParams) ([]Status, error)
 	ListRuleTranslations(ctx context.Context, ruleID int64) ([]RuleTranslation, error)

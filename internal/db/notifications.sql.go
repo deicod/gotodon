@@ -138,6 +138,48 @@ func (q *Queries) DeleteNotification(ctx context.Context, arg DeleteNotification
 	return err
 }
 
+const deleteNotificationsByGroupKey = `-- name: DeleteNotificationsByGroupKey :exec
+DELETE FROM notifications
+WHERE account_id = $1
+  AND group_key = $2
+`
+
+type DeleteNotificationsByGroupKeyParams struct {
+	AccountID int64       `db:"account_id" json:"account_id"`
+	GroupKey  pgtype.Text `db:"group_key" json:"group_key"`
+}
+
+func (q *Queries) DeleteNotificationsByGroupKey(ctx context.Context, arg DeleteNotificationsByGroupKeyParams) error {
+	_, err := q.db.Exec(ctx, deleteNotificationsByGroupKey, arg.AccountID, arg.GroupKey)
+	return err
+}
+
+const deleteNotificationsByTypeAndActivity = `-- name: DeleteNotificationsByTypeAndActivity :exec
+DELETE FROM notifications
+WHERE account_id = $1
+  AND group_key IS NULL
+  AND type = $2
+  AND activity_type = $3
+  AND activity_id = $4
+`
+
+type DeleteNotificationsByTypeAndActivityParams struct {
+	AccountID    int64       `db:"account_id" json:"account_id"`
+	Type         pgtype.Text `db:"type" json:"type"`
+	ActivityType string      `db:"activity_type" json:"activity_type"`
+	ActivityID   int64       `db:"activity_id" json:"activity_id"`
+}
+
+func (q *Queries) DeleteNotificationsByTypeAndActivity(ctx context.Context, arg DeleteNotificationsByTypeAndActivityParams) error {
+	_, err := q.db.Exec(ctx, deleteNotificationsByTypeAndActivity,
+		arg.AccountID,
+		arg.Type,
+		arg.ActivityType,
+		arg.ActivityID,
+	)
+	return err
+}
+
 const getNotification = `-- name: GetNotification :one
 SELECT id, activity_id, activity_type, created_at, updated_at, account_id, from_account_id, type, filtered, group_key FROM notifications WHERE id = $1 AND account_id = $2
 `
@@ -189,6 +231,102 @@ func (q *Queries) ListNotifications(ctx context.Context, arg ListNotificationsPa
 		arg.Offset,
 		arg.Column4,
 		arg.Column5,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Notification{}
+	for rows.Next() {
+		var i Notification
+		if err := rows.Scan(
+			&i.ID,
+			&i.ActivityID,
+			&i.ActivityType,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.AccountID,
+			&i.FromAccountID,
+			&i.Type,
+			&i.Filtered,
+			&i.GroupKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNotificationsByGroupKey = `-- name: ListNotificationsByGroupKey :many
+SELECT id, activity_id, activity_type, created_at, updated_at, account_id, from_account_id, type, filtered, group_key FROM notifications
+WHERE account_id = $1
+  AND group_key = $2
+ORDER BY id DESC
+`
+
+type ListNotificationsByGroupKeyParams struct {
+	AccountID int64       `db:"account_id" json:"account_id"`
+	GroupKey  pgtype.Text `db:"group_key" json:"group_key"`
+}
+
+func (q *Queries) ListNotificationsByGroupKey(ctx context.Context, arg ListNotificationsByGroupKeyParams) ([]Notification, error) {
+	rows, err := q.db.Query(ctx, listNotificationsByGroupKey, arg.AccountID, arg.GroupKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Notification{}
+	for rows.Next() {
+		var i Notification
+		if err := rows.Scan(
+			&i.ID,
+			&i.ActivityID,
+			&i.ActivityType,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.AccountID,
+			&i.FromAccountID,
+			&i.Type,
+			&i.Filtered,
+			&i.GroupKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNotificationsByTypeAndActivity = `-- name: ListNotificationsByTypeAndActivity :many
+SELECT id, activity_id, activity_type, created_at, updated_at, account_id, from_account_id, type, filtered, group_key FROM notifications
+WHERE account_id = $1
+  AND group_key IS NULL
+  AND type = $2
+  AND activity_type = $3
+  AND activity_id = $4
+ORDER BY id DESC
+`
+
+type ListNotificationsByTypeAndActivityParams struct {
+	AccountID    int64       `db:"account_id" json:"account_id"`
+	Type         pgtype.Text `db:"type" json:"type"`
+	ActivityType string      `db:"activity_type" json:"activity_type"`
+	ActivityID   int64       `db:"activity_id" json:"activity_id"`
+}
+
+func (q *Queries) ListNotificationsByTypeAndActivity(ctx context.Context, arg ListNotificationsByTypeAndActivityParams) ([]Notification, error) {
+	rows, err := q.db.Query(ctx, listNotificationsByTypeAndActivity,
+		arg.AccountID,
+		arg.Type,
+		arg.ActivityType,
+		arg.ActivityID,
 	)
 	if err != nil {
 		return nil, err
