@@ -243,7 +243,7 @@
 - [x] Implement approve/reject for statuses
 
 ### Task 4.6: Account Deletion
-- [ ] Implement `DELETE /api/v1/admin/accounts/{id}`
+- [x] Implement `DELETE /api/v1/admin/accounts/{id}`
 
 ---
 

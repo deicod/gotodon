@@ -35,6 +35,14 @@ func TestAccountsHandler_GetAll(t *testing.T) {
 	h.GetAll(rec, req)
 }
 
+func TestAccountsHandler_Delete(t *testing.T) {
+	t.Skip("Skipping test requiring database connection")
+	h := NewAccountsHandler(nil)
+
+	req, rec := mockAdminRequest(http.MethodDelete, "/api/v1/admin/accounts/1", "")
+	h.Delete(rec, req)
+}
+
 func TestAccountsHandler_RequireAdmin(t *testing.T) {
 	t.Skip("Skipping test requiring database connection")
 	h := NewAccountsHandler(nil)

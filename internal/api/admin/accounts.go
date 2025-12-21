@@ -356,10 +356,36 @@ func (h *AccountsHandler) Unsensitize(w http.ResponseWriter, r *http.Request) {
 	h.Get(w, r)
 }
 
+// Delete handles DELETE /api/v1/admin/accounts/:id
+func (h *AccountsHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
+	}
+
+	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	if _, err := h.queries.AdminGetAccount(r.Context(), accountID); err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	if err := h.queries.AdminDeleteAccount(r.Context(), accountID); err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+
+	web.JSON(w, http.StatusOK, map[string]any{})
+}
+
 // RegisterRoutes registers admin account routes
 func (h *AccountsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/admin/accounts", h.GetAll)
 	mux.HandleFunc("GET /api/v1/admin/accounts/{id}", h.Get)
+	mux.HandleFunc("DELETE /api/v1/admin/accounts/{id}", h.Delete)
 	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/action", h.TakeAction)
 	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/approve", h.Approve)
 	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/reject", h.Reject)
