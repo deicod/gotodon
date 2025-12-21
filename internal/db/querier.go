@@ -396,6 +396,7 @@ type Querier interface {
 	SearchAccountsV2(ctx context.Context, arg SearchAccountsV2Params) ([]Account, error)
 	SearchHashtags(ctx context.Context, arg SearchHashtagsParams) ([]Tag, error)
 	SearchStatuses(ctx context.Context, arg SearchStatusesParams) ([]SearchStatusesRow, error)
+	SumNotificationRequestNotifications(ctx context.Context, accountID int64) (int64, error)
 	SuspendAccount(ctx context.Context, arg SuspendAccountParams) error
 	UnpinStatus(ctx context.Context, arg UnpinStatusParams) error
 	UnsuspendAccount(ctx context.Context, id int64) error

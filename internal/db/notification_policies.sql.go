@@ -467,6 +467,17 @@ func (q *Queries) ListNotificationRequests(ctx context.Context, arg ListNotifica
 	return items, nil
 }
 
+const sumNotificationRequestNotifications = `-- name: SumNotificationRequestNotifications :one
+SELECT COALESCE(SUM(notifications_count), 0)::bigint FROM notification_requests WHERE account_id = $1
+`
+
+func (q *Queries) SumNotificationRequestNotifications(ctx context.Context, accountID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, sumNotificationRequestNotifications, accountID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const updateNotificationPolicy = `-- name: UpdateNotificationPolicy :one
 UPDATE notification_policies SET
     for_not_following = $2,

@@ -207,8 +207,8 @@
 - [x] Add tests
 
 ### Task 3.2: v2 Notification Policy
-- [ ] Implement `GET /api/v2/notifications/policy`
-- [ ] Implement `PUT /api/v2/notifications/policy`
+- [x] Implement `GET /api/v2/notifications/policy`
+- [x] Implement `PUT /api/v2/notifications/policy`
 
 ---
 

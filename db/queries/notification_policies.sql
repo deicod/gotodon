@@ -87,6 +87,9 @@ LIMIT $2 OFFSET $3;
 -- name: CountNotificationRequests :one
 SELECT COUNT(*) FROM notification_requests WHERE account_id = $1;
 
+-- name: SumNotificationRequestNotifications :one
+SELECT COALESCE(SUM(notifications_count), 0)::bigint FROM notification_requests WHERE account_id = $1;
+
 -- name: CreateNotificationRequest :one
 INSERT INTO notification_requests (
     account_id, from_account_id, last_status_id, notifications_count

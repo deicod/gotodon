@@ -85,6 +85,73 @@ func TestNotificationsHandler_UnreadCount_MockMode(t *testing.T) {
 	}
 }
 
+func TestNotificationsHandler_GetPolicy_MockMode(t *testing.T) {
+	h := NewNotificationsHandler(nil, nil)
+
+	req, rec := mockNotificationRequest(http.MethodGet, "/api/v2/notifications/policy", "", 12345)
+	h.GetPolicy(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var policy NotificationPolicy
+	if err := json.Unmarshal(rec.Body.Bytes(), &policy); err != nil {
+		t.Fatalf("Failed to unmarshal response: %v", err)
+	}
+
+	if policy.ForNotFollowing != "accept" {
+		t.Errorf("for_not_following = %q, want 'accept'", policy.ForNotFollowing)
+	}
+	if policy.ForPrivateMentions != "filter" {
+		t.Errorf("for_private_mentions = %q, want 'filter'", policy.ForPrivateMentions)
+	}
+	if policy.Summary.PendingRequestsCount != 0 {
+		t.Errorf("pending_requests_count = %d, want 0", policy.Summary.PendingRequestsCount)
+	}
+
+	req, rec = mockNotificationRequest(http.MethodGet, "/api/v2/notifications/policy", "", 0)
+	h.GetPolicy(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestNotificationsHandler_UpdatePolicy_MockMode(t *testing.T) {
+	h := NewNotificationsHandler(nil, nil)
+
+	body := `{"for_not_following":"filter","for_new_accounts":"drop"}`
+	req, rec := mockNotificationRequest(http.MethodPut, "/api/v2/notifications/policy", body, 12345)
+	h.UpdatePolicy(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var policy NotificationPolicy
+	if err := json.Unmarshal(rec.Body.Bytes(), &policy); err != nil {
+		t.Fatalf("Failed to unmarshal response: %v", err)
+	}
+
+	if policy.ForNotFollowing != "filter" {
+		t.Errorf("for_not_following = %q, want 'filter'", policy.ForNotFollowing)
+	}
+	if policy.ForNewAccounts != "drop" {
+		t.Errorf("for_new_accounts = %q, want 'drop'", policy.ForNewAccounts)
+	}
+}
+
+func TestNotificationsHandler_UpdatePolicy_InvalidValue(t *testing.T) {
+	h := NewNotificationsHandler(nil, nil)
+
+	req, rec := mockNotificationRequest(http.MethodPut, "/api/v2/notifications/policy", `{"for_not_following":"nope"}`, 12345)
+	h.UpdatePolicy(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+}
+
 func TestNotificationsHandler_Get_MockMode(t *testing.T) {
 	h := NewNotificationsHandler(nil, nil)
 

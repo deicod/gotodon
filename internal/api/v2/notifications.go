@@ -62,6 +62,19 @@ type GroupedNotificationsResponse struct {
 	NotificationGroups []NotificationGroup `json:"notification_groups"`
 }
 
+// NotificationPolicy represents a user's notification filtering policy.
+type NotificationPolicy struct {
+	ForNotFollowing    string `json:"for_not_following"`
+	ForNotFollowers    string `json:"for_not_followers"`
+	ForNewAccounts     string `json:"for_new_accounts"`
+	ForPrivateMentions string `json:"for_private_mentions"`
+	ForLimitedAccounts string `json:"for_limited_accounts"`
+	Summary            struct {
+		PendingRequestsCount      int64 `json:"pending_requests_count"`
+		PendingNotificationsCount int64 `json:"pending_notifications_count"`
+	} `json:"summary"`
+}
+
 type notificationGroupData struct {
 	groupKey           string
 	notificationType   string
@@ -100,6 +113,42 @@ func (h *NotificationsHandler) groupKeyForNotification(dbNotif db.Notification) 
 		return fmt.Sprintf("%s:%d", notifType, dbNotif.FromAccountID)
 	}
 	return fmt.Sprintf("ungrouped-%d", dbNotif.ID)
+}
+
+func defaultNotificationPolicy() NotificationPolicy {
+	return NotificationPolicy{
+		ForNotFollowing:    "accept",
+		ForNotFollowers:    "accept",
+		ForNewAccounts:     "accept",
+		ForPrivateMentions: "filter",
+		ForLimitedAccounts: "filter",
+	}
+}
+
+func policyIntToString(v int32) string {
+	switch v {
+	case 0:
+		return "accept"
+	case 1:
+		return "filter"
+	case 2:
+		return "drop"
+	default:
+		return "accept"
+	}
+}
+
+func policyStringToInt(v string) (int32, bool) {
+	switch v {
+	case "accept":
+		return 0, true
+	case "filter":
+		return 1, true
+	case "drop":
+		return 2, true
+	default:
+		return 0, false
+	}
 }
 
 func parseGroupKey(groupKey string) (string, string, int64, bool) {
@@ -339,6 +388,159 @@ func (h *NotificationsHandler) listNotificationsForGroup(ctx context.Context, ac
 	})
 
 	return notifications, nil
+}
+
+// GetPolicy handles GET /api/v2/notifications/policy
+func (h *NotificationsHandler) GetPolicy(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	policy := defaultNotificationPolicy()
+
+	if h.useDB() {
+		ctx := r.Context()
+		dbPolicy, err := h.queries.GetNotificationPolicy(ctx, accountID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		if err == nil {
+			policy.ForNotFollowing = policyIntToString(dbPolicy.ForNotFollowing)
+			policy.ForNotFollowers = policyIntToString(dbPolicy.ForNotFollowers)
+			policy.ForNewAccounts = policyIntToString(dbPolicy.ForNewAccounts)
+			policy.ForPrivateMentions = policyIntToString(dbPolicy.ForPrivateMentions)
+			policy.ForLimitedAccounts = policyIntToString(dbPolicy.ForLimitedAccounts)
+		}
+
+		pendingCount, err := h.queries.CountNotificationRequests(ctx, accountID)
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		pendingNotifications, err := h.queries.SumNotificationRequestNotifications(ctx, accountID)
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		policy.Summary.PendingRequestsCount = pendingCount
+		policy.Summary.PendingNotificationsCount = pendingNotifications
+	}
+
+	web.JSON(w, http.StatusOK, policy)
+}
+
+// UpdatePolicy handles PUT /api/v2/notifications/policy
+func (h *NotificationsHandler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	var req struct {
+		ForNotFollowing    *string `json:"for_not_following" form:"for_not_following"`
+		ForNotFollowers    *string `json:"for_not_followers" form:"for_not_followers"`
+		ForNewAccounts     *string `json:"for_new_accounts" form:"for_new_accounts"`
+		ForPrivateMentions *string `json:"for_private_mentions" form:"for_private_mentions"`
+		ForLimitedAccounts *string `json:"for_limited_accounts" form:"for_limited_accounts"`
+	}
+	if err := web.Bind(r, &req); err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	policy := defaultNotificationPolicy()
+
+	if h.useDB() {
+		ctx := r.Context()
+		dbPolicy, err := h.queries.GetNotificationPolicy(ctx, accountID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		if err == nil {
+			policy.ForNotFollowing = policyIntToString(dbPolicy.ForNotFollowing)
+			policy.ForNotFollowers = policyIntToString(dbPolicy.ForNotFollowers)
+			policy.ForNewAccounts = policyIntToString(dbPolicy.ForNewAccounts)
+			policy.ForPrivateMentions = policyIntToString(dbPolicy.ForPrivateMentions)
+			policy.ForLimitedAccounts = policyIntToString(dbPolicy.ForLimitedAccounts)
+		}
+	}
+
+	if req.ForNotFollowing != nil {
+		if _, ok := policyStringToInt(*req.ForNotFollowing); !ok {
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: for_not_following is invalid")
+			return
+		}
+		policy.ForNotFollowing = *req.ForNotFollowing
+	}
+	if req.ForNotFollowers != nil {
+		if _, ok := policyStringToInt(*req.ForNotFollowers); !ok {
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: for_not_followers is invalid")
+			return
+		}
+		policy.ForNotFollowers = *req.ForNotFollowers
+	}
+	if req.ForNewAccounts != nil {
+		if _, ok := policyStringToInt(*req.ForNewAccounts); !ok {
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: for_new_accounts is invalid")
+			return
+		}
+		policy.ForNewAccounts = *req.ForNewAccounts
+	}
+	if req.ForPrivateMentions != nil {
+		if _, ok := policyStringToInt(*req.ForPrivateMentions); !ok {
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: for_private_mentions is invalid")
+			return
+		}
+		policy.ForPrivateMentions = *req.ForPrivateMentions
+	}
+	if req.ForLimitedAccounts != nil {
+		if _, ok := policyStringToInt(*req.ForLimitedAccounts); !ok {
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: for_limited_accounts is invalid")
+			return
+		}
+		policy.ForLimitedAccounts = *req.ForLimitedAccounts
+	}
+
+	if h.useDB() {
+		ctx := r.Context()
+		forNotFollowing, _ := policyStringToInt(policy.ForNotFollowing)
+		forNotFollowers, _ := policyStringToInt(policy.ForNotFollowers)
+		forNewAccounts, _ := policyStringToInt(policy.ForNewAccounts)
+		forPrivateMentions, _ := policyStringToInt(policy.ForPrivateMentions)
+		forLimitedAccounts, _ := policyStringToInt(policy.ForLimitedAccounts)
+
+		if _, err := h.queries.UpsertNotificationPolicy(ctx, db.UpsertNotificationPolicyParams{
+			AccountID:          accountID,
+			ForNotFollowing:    forNotFollowing,
+			ForNotFollowers:    forNotFollowers,
+			ForNewAccounts:     forNewAccounts,
+			ForPrivateMentions: forPrivateMentions,
+			ForLimitedAccounts: forLimitedAccounts,
+		}); err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+
+		pendingCount, err := h.queries.CountNotificationRequests(ctx, accountID)
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		pendingNotifications, err := h.queries.SumNotificationRequestNotifications(ctx, accountID)
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		policy.Summary.PendingRequestsCount = pendingCount
+		policy.Summary.PendingNotificationsCount = pendingNotifications
+	}
+
+	web.JSON(w, http.StatusOK, policy)
 }
 
 // List handles GET /api/v2/notifications
@@ -599,6 +801,8 @@ func stringPtr(s string) *string {
 func (h *NotificationsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v2/notifications", h.List)
 	mux.HandleFunc("GET /api/v2/notifications/unread_count", h.UnreadCount)
+	mux.HandleFunc("GET /api/v2/notifications/policy", h.GetPolicy)
+	mux.HandleFunc("PUT /api/v2/notifications/policy", h.UpdatePolicy)
 	mux.HandleFunc("GET /api/v2/notifications/{group_key}", h.Get)
 	mux.HandleFunc("POST /api/v2/notifications/{group_key}/dismiss", h.Dismiss)
 	mux.HandleFunc("GET /api/v2/notifications/{group_key}/accounts", h.Accounts)
