@@ -71,6 +71,19 @@ func TestDomainBlocksHandler_CRUD(t *testing.T) {
 	h.GetAll(rec2, req2)
 }
 
+func TestDomainAllowsHandler_CRUD(t *testing.T) {
+	t.Skip("Skipping test requiring database connection")
+	h := NewDomainAllowsHandler(nil)
+
+	// Create
+	req1, rec1 := mockAdminRequest(http.MethodPost, "/api/v1/admin/domain_allows", `{"domain":"allowed.example.com"}`)
+	h.Create(rec1, req1)
+
+	// GetAll
+	req2, rec2 := mockAdminRequest(http.MethodGet, "/api/v1/admin/domain_allows", "")
+	h.GetAll(rec2, req2)
+}
+
 func TestInstanceHandler_GetUpdate(t *testing.T) {
 	t.Skip("Skipping test requiring database connection for auth check")
 	// Although InstanceHandler logic is simple, it now calls requireAdmin which fails without DB.

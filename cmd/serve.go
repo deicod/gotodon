@@ -270,6 +270,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	adminAccountsHandler := admin.NewAccountsHandler(queries)
 	adminAccountsHandler.RegisterRoutes(mux)
 
+	adminDomainAllowsHandler := admin.NewDomainAllowsHandler(queries)
+	adminDomainAllowsHandler.RegisterRoutes(mux)
+
 	adminDomainBlocksHandler := admin.NewDomainBlocksHandler(queries)
 	adminDomainBlocksHandler.RegisterRoutes(mux)
 

@@ -217,11 +217,11 @@
 **Goal:** Complete admin API implementation
 
 ### Task 4.1: Domain Allows
-- [ ] Create `internal/api/admin/domain_allows.go`
-- [ ] Implement `GET /api/v1/admin/domain_allows`
-- [ ] Implement `GET /api/v1/admin/domain_allows/{id}`
-- [ ] Implement `POST /api/v1/admin/domain_allows`
-- [ ] Implement `DELETE /api/v1/admin/domain_allows/{id}`
+- [x] Create `internal/api/admin/domain_allows.go`
+- [x] Implement `GET /api/v1/admin/domain_allows`
+- [x] Implement `GET /api/v1/admin/domain_allows/{id}`
+- [x] Implement `POST /api/v1/admin/domain_allows`
+- [x] Implement `DELETE /api/v1/admin/domain_allows/{id}`
 
 ### Task 4.2: IP Blocks
 - [ ] Create `internal/api/admin/ip_blocks.go`
