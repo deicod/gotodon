@@ -18,6 +18,7 @@ type Querier interface {
 	AddStatusTags(ctx context.Context, arg AddStatusTagsParams) error
 	AdminApproveAccount(ctx context.Context, accountID int64) error
 	AdminAssignReport(ctx context.Context, arg AdminAssignReportParams) error
+	AdminCreateCanonicalEmailBlock(ctx context.Context, arg AdminCreateCanonicalEmailBlockParams) (CanonicalEmailBlock, error)
 	AdminCreateCustomEmoji(ctx context.Context, arg AdminCreateCustomEmojiParams) (CustomEmoji, error)
 	AdminCreateDomainBlock(ctx context.Context, arg AdminCreateDomainBlockParams) (DomainBlock, error)
 	AdminCreateIpBlock(ctx context.Context, arg AdminCreateIpBlockParams) (AdminCreateIpBlockRow, error)
@@ -29,16 +30,20 @@ type Querier interface {
 	// For rejection, we usually want to delete the account entirely.
 	// Let's change this to delete from accounts.
 	AdminDeleteAccount(ctx context.Context, id int64) error
+	AdminDeleteCanonicalEmailBlock(ctx context.Context, id int64) error
 	AdminDeleteDomainBlock(ctx context.Context, id int64) error
 	AdminDeleteIpBlock(ctx context.Context, id int64) error
 	AdminDisableAccount(ctx context.Context, accountID int64) error
 	AdminEnableAccount(ctx context.Context, accountID int64) error
 	AdminGetAccount(ctx context.Context, id int64) (AdminGetAccountRow, error)
+	AdminGetCanonicalEmailBlock(ctx context.Context, id int64) (CanonicalEmailBlock, error)
+	AdminGetCanonicalEmailBlockByHash(ctx context.Context, canonicalEmailHash string) (CanonicalEmailBlock, error)
 	AdminGetDomainBlock(ctx context.Context, id int64) (DomainBlock, error)
 	AdminGetIpBlock(ctx context.Context, id int64) (AdminGetIpBlockRow, error)
 	AdminGetIpBlockByIP(ctx context.Context, ip string) (AdminGetIpBlockByIPRow, error)
 	AdminGetReport(ctx context.Context, id int64) (Report, error)
 	AdminListAccounts(ctx context.Context, arg AdminListAccountsParams) ([]AdminListAccountsRow, error)
+	AdminListCanonicalEmailBlocks(ctx context.Context, arg AdminListCanonicalEmailBlocksParams) ([]CanonicalEmailBlock, error)
 	AdminListCustomEmojis(ctx context.Context, arg AdminListCustomEmojisParams) ([]CustomEmoji, error)
 	AdminListDomainBlocks(ctx context.Context, arg AdminListDomainBlocksParams) ([]DomainBlock, error)
 	AdminListIpBlocks(ctx context.Context, arg AdminListIpBlocksParams) ([]AdminListIpBlocksRow, error)

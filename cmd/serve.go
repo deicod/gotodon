@@ -279,6 +279,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	adminIpBlocksHandler := admin.NewIpBlocksHandler(queries)
 	adminIpBlocksHandler.RegisterRoutes(mux)
 
+	adminCanonicalEmailBlocksHandler := admin.NewCanonicalEmailBlocksHandler(queries)
+	adminCanonicalEmailBlocksHandler.RegisterRoutes(mux)
+
 	adminReportsHandler := admin.NewReportsHandler(queries)
 	adminReportsHandler.RegisterRoutes(mux)
 

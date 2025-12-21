@@ -165,6 +165,14 @@ type Bookmark struct {
 	StatusID  int64              `db:"status_id" json:"status_id"`
 }
 
+type CanonicalEmailBlock struct {
+	ID                 int64              `db:"id" json:"id"`
+	CanonicalEmailHash string             `db:"canonical_email_hash" json:"canonical_email_hash"`
+	ReferenceAccountID pgtype.Int8        `db:"reference_account_id" json:"reference_account_id"`
+	CreatedAt          pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
 type Conversation struct {
 	ID              int64              `db:"id" json:"id"`
 	Uri             pgtype.Text        `db:"uri" json:"uri"`

@@ -228,9 +228,9 @@
 - [x] Implement CRUD for `/api/v1/admin/ip_blocks`
 
 ### Task 4.3: Canonical Email Blocks
-- [ ] Create `internal/api/admin/canonical_email_blocks.go`
-- [ ] Implement CRUD for `/api/v1/admin/canonical_email_blocks`
-- [ ] Implement `POST /api/v1/admin/canonical_email_blocks/test`
+- [x] Create `internal/api/admin/canonical_email_blocks.go`
+- [x] Implement CRUD for `/api/v1/admin/canonical_email_blocks`
+- [x] Implement `POST /api/v1/admin/canonical_email_blocks/test`
 
 ### Task 4.4: Admin Tags
 - [ ] Implement `GET /api/v1/admin/tags`
