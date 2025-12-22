@@ -13,6 +13,7 @@ type Config struct {
 	Server      ServerConfig      `mapstructure:"server"`
 	Database    DatabaseConfig    `mapstructure:"database"`
 	Redis       RedisConfig       `mapstructure:"redis"`
+	Workers     WorkersConfig     `mapstructure:"workers"`
 	Secrets     SecretsConfig     `mapstructure:"secrets"`
 	Instance    InstanceConfig    `mapstructure:"instance"`
 	Translation TranslationConfig `mapstructure:"translation"`
@@ -58,6 +59,13 @@ type RedisConfig struct {
 // Addr returns the Redis address.
 func (c *RedisConfig) Addr() string {
 	return fmt.Sprintf("%s:%d", c.Host, c.Port)
+}
+
+// WorkersConfig holds background worker configuration.
+type WorkersConfig struct {
+	Enabled     bool           `mapstructure:"enabled"`
+	Concurrency int            `mapstructure:"concurrency"`
+	Queues      map[string]int `mapstructure:"queues"`
 }
 
 // SecretsConfig holds secret keys for encryption and signing.
@@ -107,6 +115,12 @@ func Load() (*Config, error) {
 	v.SetDefault("redis.host", "localhost")
 	v.SetDefault("redis.port", 6379)
 	v.SetDefault("redis.database", 0)
+	v.SetDefault("workers.enabled", true)
+	v.SetDefault("workers.queues", map[string]int{
+		"critical": 6,
+		"default":  3,
+		"low":      1,
+	})
 	v.SetDefault("instance.registrations_mode", "open")
 
 	// Config file settings
@@ -130,6 +144,8 @@ func Load() (*Config, error) {
 	_ = v.BindEnv("redis.host", "REDIS_HOST")
 	_ = v.BindEnv("redis.port", "REDIS_PORT")
 	_ = v.BindEnv("redis.password", "REDIS_PASSWORD")
+	_ = v.BindEnv("workers.enabled", "WORKERS_ENABLED")
+	_ = v.BindEnv("workers.concurrency", "WORKERS_CONCURRENCY")
 	_ = v.BindEnv("instance.local_domain", "LOCAL_DOMAIN")
 	_ = v.BindEnv("instance.web_domain", "WEB_DOMAIN")
 	_ = v.BindEnv("secrets.secret_key_base", "SECRET_KEY_BASE")

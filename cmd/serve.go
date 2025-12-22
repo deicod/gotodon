@@ -29,6 +29,7 @@ import (
 	"github.com/deicod/gotodon/internal/media"
 	"github.com/deicod/gotodon/internal/streaming"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/internal/workers"
 	"github.com/deicod/gotodon/pkg/activitypub"
 )
 
@@ -122,13 +123,37 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		logger.Warn("Redis unavailable, streaming API will not function correctly across instances")
 	}
 
-	deliveryQueue := federation.NewDeliveryQueue(federation.NewDeliveryService().DeliverActivity, federation.DefaultDeliveryQueueConfig())
-	deliveryQueue.Start()
-	go func() {
-		<-ctx.Done()
-		_ = deliveryQueue.Stop(context.Background())
-	}()
-	outgoingService := federation.NewOutgoingService(queries, cfg.Instance.LocalDomain, deliveryQueue)
+	deliveryService := federation.NewDeliveryService()
+	var (
+		deliveryEnqueuer      federation.DeliveryEnqueuer
+		workerManager         *workers.Manager
+		remoteAccountEnqueuer *workers.RemoteAccountEnqueuer
+		remoteStatusEnqueuer  *workers.RemoteStatusEnqueuer
+	)
+	if cfg.Workers.Enabled && rdb != nil {
+		workerManager, err = workers.NewManager(cfg, logger)
+		if err != nil {
+			return fmt.Errorf("initializing workers: %w", err)
+		}
+		deliveryEnqueuer = workers.NewDeliveryEnqueuer(workerManager.Client())
+		remoteAccountEnqueuer = workers.NewRemoteAccountEnqueuer(workerManager.Client())
+		remoteStatusEnqueuer = workers.NewRemoteStatusEnqueuer(workerManager.Client())
+	} else {
+		if !cfg.Workers.Enabled {
+			logger.Warn("Workers disabled by config; using in-process delivery queue")
+		} else {
+			logger.Warn("Workers disabled: Redis unavailable; using in-process delivery queue")
+		}
+		deliveryQueue := federation.NewDeliveryQueue(deliveryService.DeliverActivity, federation.DefaultDeliveryQueueConfig())
+		deliveryQueue.Start()
+		go func() {
+			<-ctx.Done()
+			_ = deliveryQueue.Stop(context.Background())
+		}()
+		deliveryEnqueuer = deliveryQueue
+	}
+
+	outgoingService := federation.NewOutgoingService(queries, cfg.Instance.LocalDomain, deliveryEnqueuer)
 
 	var pubSubHandler http.Handler
 	if streamingHub != nil {
@@ -150,6 +175,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	// Register v1 handlers
 	accountsHandler := v1.NewAccountsHandler(queries, pool, cfg, outgoingService)
+	if remoteAccountEnqueuer != nil {
+		accountsHandler.SetRemoteAccountRefresher(remoteAccountEnqueuer)
+	}
 	accountsHandler.RegisterRoutes(mux)
 
 	// Statuses
@@ -278,7 +306,11 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	createService := federation.NewCreateService(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher())
 	remoteStatusFetcher := federation.NewRemoteStatusFetcher(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher())
 	createService.SetStatusFetcher(remoteStatusFetcher)
-	statusesHandler.SetThreadFetcher(remoteStatusFetcher)
+	if remoteStatusEnqueuer != nil {
+		statusesHandler.SetThreadFetcher(remoteStatusEnqueuer)
+	} else {
+		statusesHandler.SetThreadFetcher(remoteStatusFetcher)
+	}
 	announceService := federation.NewAnnounceService(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher(), nil)
 	likeService := federation.NewLikeService(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher())
 	blockService := federation.NewBlockService(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher())
@@ -295,6 +327,36 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	federationHandler.RegisterInboxHandler(activitypub.TypeUpdate, updateService.HandleUpdate)
 	federationHandler.RegisterInboxHandler(activitypub.TypeDelete, deleteService.HandleDelete)
 	federationHandler.RegisterRoutes(mux)
+
+	if workerManager != nil {
+		remoteAccountResolver := federation.NewRemoteActorResolver(queries, cfg.Instance.LocalDomain)
+		if err := workerManager.Register(
+			&workers.DeliveryRegistrar{Store: queries, Deliver: deliveryService.DeliverActivity},
+			&workers.RemoteAccountRegistrar{Resolver: remoteAccountResolver},
+			&workers.RemoteStatusRegistrar{Fetcher: remoteStatusFetcher, Lookup: queries},
+		); err != nil {
+			return fmt.Errorf("registering workers: %w", err)
+		}
+		startErr := make(chan error, 1)
+		go func() {
+			startErr <- workerManager.Start()
+		}()
+		select {
+		case err := <-startErr:
+			if err != nil {
+				return fmt.Errorf("starting workers: %w", err)
+			}
+		default:
+		}
+		go func() {
+			<-ctx.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := workerManager.Shutdown(shutdownCtx); err != nil {
+				logger.Error("Failed to stop workers", "error", err)
+			}
+		}()
+	}
 
 	// Admin API
 	// Admin Handlers

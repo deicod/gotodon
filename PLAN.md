@@ -371,26 +371,32 @@
 **Goal:** Async job processing for reliability
 
 ### Task 6.1: Choose Job Queue
-- [ ] Evaluate River (PostgreSQL)
-- [ ] Evaluate Asynq (Redis)
-- [ ] Make decision and document reasoning
+- [x] Evaluate River (PostgreSQL)
+  - Pros: Uses Postgres already in the stack; enqueue can participate in DB transactions.
+  - Cons: Adds queue load to the primary database; requires queue tables/migrations and ongoing vacuum/tuning.
+- [x] Evaluate Asynq (Redis)
+  - Pros: Redis is already required for streaming/timelines; keeps job throughput off Postgres; supports retries and scheduled jobs.
+  - Cons: Requires Redis availability for job processing; separate persistence from Postgres.
+- [x] Make decision and document reasoning
+  - Decision: Asynq (Redis). Redis is already a required dependency, and keeping background job throughput out of Postgres reduces contention while still providing scheduling and retry support for delivery/media/scheduled-status workloads.
+  - Note: Revisit this choice once Asynq v0.26.0 is released.
 
 ### Task 6.2: Worker Infrastructure
-- [ ] Install chosen library
-- [ ] Create `internal/workers/worker.go`
-- [ ] Add worker startup to `serve.go`
-- [ ] Create job registration system
+- [x] Install chosen library
+- [x] Create `internal/workers/worker.go`
+- [x] Add worker startup to `serve.go`
+- [x] Create job registration system
 
 ### Task 6.3: Delivery Jobs
-- [ ] Create `DeliverActivityJob`
-  - [ ] Accept: activity, recipient inbox
-  - [ ] Sign and POST activity
-  - [ ] Handle retries
+- [x] Create `DeliverActivityJob`
+  - [x] Accept: activity, recipient inbox
+  - [x] Sign and POST activity
+  - [x] Handle retries
 
 ### Task 6.4: Remote Processing Jobs
-- [ ] Create `ProcessRemoteAccountJob`
-  - [ ] Fetch and store remote actor
-- [ ] Create `FetchRemoteStatusJob`
+- [x] Create `ProcessRemoteAccountJob`
+  - [x] Fetch and store remote actor
+- [x] Create `FetchRemoteStatusJob`
 
 ### Task 6.5: Scheduled Status Job
 - [ ] Create `ScheduledStatusJob`

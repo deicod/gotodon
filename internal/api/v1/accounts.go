@@ -41,6 +41,14 @@ func NewAccountsHandler(queries db.Querier, pool *pgxpool.Pool, cfg *config.Conf
 	return &AccountsHandler{queries: queries, pool: pool, cfg: cfg, outgoing: outgoing, resolver: resolver}
 }
 
+// SetRemoteAccountRefresher enables background refresh for stale remote accounts.
+func (h *AccountsHandler) SetRemoteAccountRefresher(refresher federation.RemoteAccountRefresher) {
+	if h == nil || h.resolver == nil {
+		return
+	}
+	h.resolver.SetRefresher(refresher)
+}
+
 func (h *AccountsHandler) useDB() bool {
 	return h.queries != nil
 }

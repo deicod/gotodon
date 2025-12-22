@@ -33,6 +33,11 @@ type WebFingerLookup interface {
 	Lookup(ctx context.Context, acct string) (*activitypub.WebFingerResponse, error)
 }
 
+// RemoteAccountRefresher enqueues background refresh for a remote actor.
+type RemoteAccountRefresher interface {
+	EnqueueRemoteAccount(ctx context.Context, actorURI string) error
+}
+
 type actorPayloadFetcher interface {
 	FetchActorPayload(ctx context.Context, actorURI string) (actorPayload, error)
 }
@@ -43,6 +48,7 @@ type RemoteActorResolver struct {
 	localDomain string
 	webfinger   WebFingerLookup
 	fetcher     actorPayloadFetcher
+	refresher   RemoteAccountRefresher
 	now         func() time.Time
 	staleAfter  time.Duration
 }
@@ -58,6 +64,14 @@ func NewRemoteActorResolver(store RemoteActorStore, localDomain string) *RemoteA
 		now:         time.Now,
 		staleAfter:  defaultActorRefresh,
 	}
+}
+
+// SetRefresher configures optional background refresh for stale actors.
+func (r *RemoteActorResolver) SetRefresher(refresher RemoteAccountRefresher) {
+	if r == nil {
+		return
+	}
+	r.refresher = refresher
 }
 
 // ResolveAccount resolves an acct or actor URI into a cached account.
@@ -97,6 +111,9 @@ func (r *RemoteActorResolver) ResolveAccount(ctx context.Context, acct string) (
 		cached = account
 		cachedFound = true
 		if !r.isStale(account) {
+			return account, nil
+		}
+		if r.tryAsyncRefresh(ctx, account.Uri) {
 			return account, nil
 		}
 	} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -151,6 +168,9 @@ func (r *RemoteActorResolver) resolveByActorURI(ctx context.Context, actorURI, p
 		cached = account
 		cachedFound = true
 		if !r.isStale(account) {
+			return account, nil
+		}
+		if r.tryAsyncRefresh(ctx, account.Uri) {
 			return account, nil
 		}
 	} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -244,6 +264,23 @@ func (r *RemoteActorResolver) resolveByActorURI(ctx context.Context, actorURI, p
 		return db.Account{}, err
 	}
 	return account, nil
+}
+
+func (r *RemoteActorResolver) tryAsyncRefresh(ctx context.Context, actorURI string) bool {
+	if r == nil || r.refresher == nil {
+		return false
+	}
+	actorURI = strings.TrimSpace(actorURI)
+	if actorURI == "" {
+		return false
+	}
+	if r.localDomain != "" && strings.EqualFold(activitypub.ExtractDomain(actorURI), r.localDomain) {
+		return false
+	}
+	if err := r.refresher.EnqueueRemoteAccount(ctx, actorURI); err != nil {
+		return false
+	}
+	return true
 }
 
 func (r *RemoteActorResolver) upsertAccount(ctx context.Context, cachedFound bool, account db.Account, payload actorPayload, username, domain, actorURI, profileURL string) (db.Account, error) {

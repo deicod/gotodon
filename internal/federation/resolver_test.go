@@ -46,6 +46,18 @@ func (s *resolverActorFetcher) FetchActorPayload(ctx context.Context, actorURI s
 	return s.payload, nil
 }
 
+type resolverRefresher struct {
+	calls   int
+	lastURI string
+	err     error
+}
+
+func (r *resolverRefresher) EnqueueRemoteAccount(ctx context.Context, actorURI string) error {
+	r.calls++
+	r.lastURI = actorURI
+	return r.err
+}
+
 type resolverStore struct {
 	accounts     map[int64]db.Account
 	byURI        map[string]int64
@@ -262,6 +274,68 @@ func TestRemoteActorResolver_ResolveCreatesAccount(t *testing.T) {
 	}
 	if fetcher.calls != 1 {
 		t.Fatalf("fetcher calls = %d, want 1", fetcher.calls)
+	}
+}
+
+func TestRemoteActorResolver_RefreshesStaleAccountAsync(t *testing.T) {
+	store := newResolverStore()
+	account := db.Account{
+		ID:        1,
+		Username:  "alice",
+		Domain:    pgtype.Text{String: "remote.test", Valid: true},
+		Uri:       "https://remote.test/users/alice",
+		PublicKey: "pk",
+		LastWebfingeredAt: pgtype.Timestamptz{
+			Time:  time.Now().Add(-48 * time.Hour),
+			Valid: true,
+		},
+	}
+	store.accounts[account.ID] = account
+	store.byURI[account.Uri] = account.ID
+	store.byHandle[handleKey(account.Username, account.Domain)] = account.ID
+
+	webfinger := &stubWebFinger{
+		resp: &activitypub.WebFingerResponse{
+			Links: []activitypub.WebFingerLink{
+				{Rel: activitypub.WebFingerRelSelf, Type: activitypub.ActivityPubContentType, Href: account.Uri},
+			},
+		},
+	}
+	fetcher := &resolverActorFetcher{
+		payload: actorPayload{
+			ID:                account.Uri,
+			Type:              activitypub.TypePerson,
+			PreferredUsername: "alice",
+			Inbox:             "https://remote.test/inbox",
+			HasPublicKey:      true,
+			PublicKey:         "pk",
+		},
+	}
+	refresher := &resolverRefresher{}
+
+	resolver := NewRemoteActorResolver(store, "local.test")
+	resolver.webfinger = webfinger
+	resolver.fetcher = fetcher
+	resolver.SetRefresher(refresher)
+
+	got, err := resolver.ResolveAccount(context.Background(), "alice@remote.test")
+	if err != nil {
+		t.Fatalf("ResolveAccount error: %v", err)
+	}
+	if got.ID != account.ID {
+		t.Fatalf("account.ID = %d, want %d", got.ID, account.ID)
+	}
+	if refresher.calls != 1 {
+		t.Fatalf("refresher.calls = %d, want 1", refresher.calls)
+	}
+	if refresher.lastURI != account.Uri {
+		t.Fatalf("refresher.lastURI = %q, want %q", refresher.lastURI, account.Uri)
+	}
+	if webfinger.calls != 0 {
+		t.Fatalf("webfinger.calls = %d, want 0", webfinger.calls)
+	}
+	if fetcher.calls != 0 {
+		t.Fatalf("fetcher.calls = %d, want 0", fetcher.calls)
 	}
 }
 
