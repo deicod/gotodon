@@ -360,9 +360,9 @@
 - [x] Refresh stale actor data (>24h old)
 
 ### Task 5.17: Remote Content Fetching
-- [ ] Fetch remote statuses when needed
-- [ ] Fetch thread context
-- [ ] Handle media attachments
+- [x] Fetch remote statuses when needed
+- [x] Fetch thread context
+- [x] Handle media attachments
 
 ---
 

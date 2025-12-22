@@ -442,6 +442,8 @@ type Querier interface {
 	UpdateScheduledStatus(ctx context.Context, arg UpdateScheduledStatusParams) (ScheduledStatus, error)
 	UpdateSessionActivation(ctx context.Context, arg UpdateSessionActivationParams) (SessionActivation, error)
 	UpdateStatus(ctx context.Context, arg UpdateStatusParams) (Status, error)
+	UpdateStatusFetchedRepliesAt(ctx context.Context, arg UpdateStatusFetchedRepliesAtParams) error
+	UpdateStatusInReplyTo(ctx context.Context, arg UpdateStatusInReplyToParams) (int64, error)
 	UpdateStatusTimestamps(ctx context.Context, arg UpdateStatusTimestampsParams) error
 	UpdateStatusTrendAllowed(ctx context.Context, arg UpdateStatusTrendAllowedParams) (StatusTrend, error)
 	UpdateStatusURI(ctx context.Context, arg UpdateStatusURIParams) error

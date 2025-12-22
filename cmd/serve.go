@@ -122,7 +122,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		logger.Warn("Redis unavailable, streaming API will not function correctly across instances")
 	}
 
-	deliveryQueue := federation.NewDeliveryQueue(federation.NewDeliveryService().DeliverActivity, federation.DeliveryQueueConfig{})
+	deliveryQueue := federation.NewDeliveryQueue(federation.NewDeliveryService().DeliverActivity, federation.DefaultDeliveryQueueConfig())
 	deliveryQueue.Start()
 	go func() {
 		<-ctx.Done()
@@ -276,6 +276,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	followResponseService := federation.NewFollowResponseService(queries, cfg.Instance.LocalDomain)
 	undoService := federation.NewUndoService(queries, cfg.Instance.LocalDomain)
 	createService := federation.NewCreateService(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher())
+	remoteStatusFetcher := federation.NewRemoteStatusFetcher(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher())
+	createService.SetStatusFetcher(remoteStatusFetcher)
+	statusesHandler.SetThreadFetcher(remoteStatusFetcher)
 	announceService := federation.NewAnnounceService(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher(), nil)
 	likeService := federation.NewLikeService(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher())
 	blockService := federation.NewBlockService(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher())

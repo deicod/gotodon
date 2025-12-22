@@ -122,6 +122,14 @@ func (s *createStore) GetStatusByURI(ctx context.Context, uri pgtype.Text) (db.S
 	return status, nil
 }
 
+func (s *createStore) GetStatusByID(ctx context.Context, id int64) (db.Status, error) {
+	status, ok := s.statusesByID[id]
+	if !ok {
+		return db.Status{}, pgx.ErrNoRows
+	}
+	return status, nil
+}
+
 func (s *createStore) CreateStatus(ctx context.Context, arg db.CreateStatusParams) (db.Status, error) {
 	s.nextStatusID++
 	now := time.Now().UTC()
@@ -177,6 +185,37 @@ func (s *createStore) UpdateStatusTimestamps(ctx context.Context, arg db.UpdateS
 	}
 	status.CreatedAt = arg.CreatedAt
 	status.UpdatedAt = arg.UpdatedAt
+	s.statusesByID[arg.ID] = status
+	if status.Uri.Valid {
+		s.statusesByURI[status.Uri.String] = status
+	}
+	return nil
+}
+
+func (s *createStore) UpdateStatusInReplyTo(ctx context.Context, arg db.UpdateStatusInReplyToParams) (int64, error) {
+	status, ok := s.statusesByID[arg.ID]
+	if !ok {
+		return 0, pgx.ErrNoRows
+	}
+	if status.InReplyToID.Valid {
+		return 0, nil
+	}
+	status.InReplyToID = arg.InReplyToID
+	status.InReplyToAccountID = arg.InReplyToAccountID
+	status.Reply = true
+	s.statusesByID[arg.ID] = status
+	if status.Uri.Valid {
+		s.statusesByURI[status.Uri.String] = status
+	}
+	return 1, nil
+}
+
+func (s *createStore) UpdateStatusFetchedRepliesAt(ctx context.Context, arg db.UpdateStatusFetchedRepliesAtParams) error {
+	status, ok := s.statusesByID[arg.ID]
+	if !ok {
+		return pgx.ErrNoRows
+	}
+	status.FetchedRepliesAt = arg.FetchedRepliesAt
 	s.statusesByID[arg.ID] = status
 	if status.Uri.Valid {
 		s.statusesByURI[status.Uri.String] = status
@@ -417,6 +456,58 @@ func TestCreateService_DeduplicatesByURI(t *testing.T) {
 	}
 }
 
+func TestCreateService_FetchesMissingParent(t *testing.T) {
+	store := newCreateStore()
+	actorURI := "https://remote.example/users/alice"
+	actor := &activitypub.Actor{
+		Object: activitypub.Object{
+			ID:   actorURI,
+			Type: activitypub.TypePerson,
+		},
+		PreferredUsername: "alice",
+		Inbox:             "https://remote.example/inbox",
+		PublicKey:         &activitypub.PublicKey{PublicKeyPem: "remote-public"},
+	}
+
+	fetcher := &stubStatusFetcher{store: store}
+	service := NewCreateService(store, "local.test", stubActorFetcher{actor: actor})
+	service.SetStatusFetcher(fetcher)
+
+	parentURI := "https://remote.example/statuses/parent"
+	childURI := "https://remote.example/statuses/child"
+	activity := &activitypub.Activity{
+		Type:  activitypub.TypeCreate,
+		Actor: actorURI,
+		ActivityObject: map[string]any{
+			"id":           childURI,
+			"type":         activitypub.TypeNote,
+			"content":      "child",
+			"attributedTo": actorURI,
+			"inReplyTo":    parentURI,
+		},
+	}
+
+	if err := service.HandleCreate(context.Background(), activity); err != nil {
+		t.Fatalf("HandleCreate() error = %v", err)
+	}
+	if fetcher.calls == 0 {
+		t.Fatal("expected status fetcher to be called")
+	}
+	child, ok := store.statusesByURI[childURI]
+	if !ok {
+		t.Fatal("expected child status to be created")
+	}
+	if !child.InReplyToID.Valid || child.InReplyToID.Int64 != fetcher.status.ID {
+		t.Fatalf("inReplyToID = %v, want %d", child.InReplyToID, fetcher.status.ID)
+	}
+	if !child.InReplyToAccountID.Valid || child.InReplyToAccountID.Int64 != fetcher.status.AccountID {
+		t.Fatalf("inReplyToAccountID = %v, want %d", child.InReplyToAccountID, fetcher.status.AccountID)
+	}
+	if store.replyCounts[fetcher.status.ID] != 1 {
+		t.Fatalf("reply count = %d, want 1", store.replyCounts[fetcher.status.ID])
+	}
+}
+
 func TestCreateService_ActorMismatch(t *testing.T) {
 	store := newCreateStore()
 	actorURI := "https://remote.example/users/alice"
@@ -440,6 +531,39 @@ func TestCreateService_ActorMismatch(t *testing.T) {
 	if inboxErr.Status != httpStatusBadRequest {
 		t.Fatalf("status = %d, want %d", inboxErr.Status, httpStatusBadRequest)
 	}
+}
+
+type stubStatusFetcher struct {
+	store  *createStore
+	status db.Status
+	calls  int
+	err    error
+}
+
+func (s *stubStatusFetcher) FetchStatus(ctx context.Context, uri string) (db.Status, error) {
+	s.calls++
+	if s.err != nil {
+		return db.Status{}, s.err
+	}
+	if s.store == nil {
+		return db.Status{}, errors.New("store missing")
+	}
+	status, err := s.store.GetStatusByURI(ctx, pgtype.Text{String: uri, Valid: true})
+	if err == nil {
+		s.status = status
+		return status, nil
+	}
+
+	created, err := s.store.CreateStatus(ctx, db.CreateStatusParams{
+		Uri:       pgtype.Text{String: uri, Valid: true},
+		AccountID: 42,
+		Local:     pgtype.Bool{Bool: false, Valid: true},
+	})
+	if err != nil {
+		return db.Status{}, err
+	}
+	s.status = created
+	return created, nil
 }
 
 func TestVisibilityFromRecipients(t *testing.T) {

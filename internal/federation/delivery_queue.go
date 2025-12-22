@@ -38,6 +38,18 @@ type DeliveryQueueConfig struct {
 	QueueRetryDelay time.Duration
 }
 
+// DefaultDeliveryQueueConfig returns the baseline queue configuration.
+func DefaultDeliveryQueueConfig() DeliveryQueueConfig {
+	return DeliveryQueueConfig{
+		QueueSize:       defaultDeliveryQueueSize,
+		WorkerCount:     defaultDeliveryWorkerCount,
+		MaxRetries:      defaultDeliveryMaxRetries,
+		BaseBackoff:     defaultDeliveryBaseBackoff,
+		MaxBackoff:      defaultDeliveryMaxBackoff,
+		QueueRetryDelay: defaultDeliveryQueueRetryDelay,
+	}
+}
+
 // DeliveryQueue handles asynchronous delivery with retries.
 type DeliveryQueue struct {
 	deliver ActivityDelivery

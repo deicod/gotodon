@@ -37,11 +37,21 @@ type CreateStore interface {
 	CreateRemoteMediaAttachment(ctx context.Context, arg db.CreateRemoteMediaAttachmentParams) (db.MediaAttachment, error)
 }
 
+// StatusFetcher retrieves remote statuses referenced by incoming activities.
+type StatusFetcher interface {
+	FetchStatus(ctx context.Context, uri string) (db.Status, error)
+}
+
+type createOptions struct {
+	skipMentions bool
+}
+
 // CreateService processes incoming Create Note activities.
 type CreateService struct {
-	store       CreateStore
-	fetcher     activitypub.ActorFetcher
-	localDomain string
+	store         CreateStore
+	fetcher       activitypub.ActorFetcher
+	localDomain   string
+	statusFetcher StatusFetcher
 }
 
 // NewCreateService creates a Create service for incoming notes.
@@ -53,8 +63,17 @@ func NewCreateService(store CreateStore, localDomain string, fetcher activitypub
 	}
 }
 
+// SetStatusFetcher configures the optional status fetcher for missing replies.
+func (s *CreateService) SetStatusFetcher(fetcher StatusFetcher) {
+	s.statusFetcher = fetcher
+}
+
 // HandleCreate processes a Create activity with a Note object.
 func (s *CreateService) HandleCreate(ctx context.Context, activity *activitypub.Activity) error {
+	return s.handleCreate(ctx, activity, createOptions{})
+}
+
+func (s *CreateService) handleCreate(ctx context.Context, activity *activitypub.Activity, opts createOptions) error {
 	if activity == nil {
 		return &apihandler.InboxError{Status: httpStatusBadRequest, Message: "Invalid create activity"}
 	}
@@ -130,7 +149,15 @@ func (s *CreateService) HandleCreate(ctx context.Context, activity *activitypub.
 	inReplyToURI := extractObjectURI(note.InReplyTo)
 	if inReplyToURI != "" {
 		parent, err := s.store.GetStatusByURI(ctx, pgtype.Text{String: inReplyToURI, Valid: true})
-		if err == nil {
+		parentFound := err == nil
+		if errors.Is(err, pgx.ErrNoRows) && s.statusFetcher != nil && !isLocalURI(inReplyToURI, s.localDomain) {
+			if _, fetchErr := s.statusFetcher.FetchStatus(ctx, inReplyToURI); fetchErr == nil {
+				parent, err = s.store.GetStatusByURI(ctx, pgtype.Text{String: inReplyToURI, Valid: true})
+				parentFound = err == nil
+			}
+		}
+
+		if parentFound {
 			inReplyToID = pgtype.Int8{Int64: parent.ID, Valid: true}
 			inReplyToAccountID = pgtype.Int8{Int64: parent.AccountID, Valid: true}
 		} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -203,8 +230,10 @@ func (s *CreateService) HandleCreate(ctx context.Context, activity *activitypub.
 	}
 
 	recipients := mergeRecipients(to, cc)
-	if err := s.processMentions(ctx, author.ID, status.ID, recipients, note.Tags); err != nil {
-		return err
+	if !opts.skipMentions {
+		if err := s.processMentions(ctx, author.ID, status.ID, recipients, note.Tags); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -530,6 +559,7 @@ type notePayload struct {
 	URL          any
 	Tags         []any
 	Attachments  []any
+	Replies      any
 	ContentMap   map[string]any
 	Language     string
 }
@@ -552,6 +582,7 @@ func parseCreateNote(value any) (*notePayload, error) {
 			URL:          note.URL,
 			Tags:         tagsToAny(note.Tag),
 			Attachments:  note.Attachment,
+			Replies:      note.Replies,
 		}, nil
 	case *activitypub.Object:
 		if note == nil {
@@ -572,6 +603,7 @@ func parseCreateNote(value any) (*notePayload, error) {
 			URL:          note.URL,
 			Tags:         tagsToAny(note.Tag),
 			Attachments:  note.Attachment,
+			Replies:      note.Replies,
 		}, nil
 	case map[string]any:
 		payload := &notePayload{
@@ -589,6 +621,7 @@ func parseCreateNote(value any) (*notePayload, error) {
 			URL:          note["url"],
 			Tags:         sliceValue(note["tag"]),
 			Attachments:  sliceValue(note["attachment"]),
+			Replies:      note["replies"],
 		}
 		if contentMap, ok := note["contentMap"].(map[string]any); ok {
 			payload.ContentMap = contentMap

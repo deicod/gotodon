@@ -963,6 +963,46 @@ func (q *Queries) UpdateStatus(ctx context.Context, arg UpdateStatusParams) (Sta
 	return i, err
 }
 
+const updateStatusFetchedRepliesAt = `-- name: UpdateStatusFetchedRepliesAt :exec
+UPDATE statuses SET
+    fetched_replies_at = $2,
+    updated_at = now()
+WHERE id = $1
+`
+
+type UpdateStatusFetchedRepliesAtParams struct {
+	ID               int64              `db:"id" json:"id"`
+	FetchedRepliesAt pgtype.Timestamptz `db:"fetched_replies_at" json:"fetched_replies_at"`
+}
+
+func (q *Queries) UpdateStatusFetchedRepliesAt(ctx context.Context, arg UpdateStatusFetchedRepliesAtParams) error {
+	_, err := q.db.Exec(ctx, updateStatusFetchedRepliesAt, arg.ID, arg.FetchedRepliesAt)
+	return err
+}
+
+const updateStatusInReplyTo = `-- name: UpdateStatusInReplyTo :execrows
+UPDATE statuses SET
+    in_reply_to_id = $2,
+    in_reply_to_account_id = $3,
+    reply = true,
+    updated_at = now()
+WHERE id = $1 AND in_reply_to_id IS NULL
+`
+
+type UpdateStatusInReplyToParams struct {
+	ID                 int64       `db:"id" json:"id"`
+	InReplyToID        pgtype.Int8 `db:"in_reply_to_id" json:"in_reply_to_id"`
+	InReplyToAccountID pgtype.Int8 `db:"in_reply_to_account_id" json:"in_reply_to_account_id"`
+}
+
+func (q *Queries) UpdateStatusInReplyTo(ctx context.Context, arg UpdateStatusInReplyToParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateStatusInReplyTo, arg.ID, arg.InReplyToID, arg.InReplyToAccountID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateStatusTimestamps = `-- name: UpdateStatusTimestamps :exec
 UPDATE statuses SET
     created_at = $2,

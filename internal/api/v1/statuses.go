@@ -59,6 +59,7 @@ type StatusesHandler struct {
 	publisher streaming.Publisher
 	cfg       *config.Config
 	outgoing  federation.OutgoingDeliverer
+	threader  federation.ThreadFetcher
 }
 
 // NewStatusesHandler creates a new statuses handler
@@ -70,6 +71,11 @@ func NewStatusesHandler(queries db.Querier, pool *pgxpool.Pool, publisher stream
 		cfg:       cfg,
 		outgoing:  outgoing,
 	}
+}
+
+// SetThreadFetcher enables remote thread resolution for context requests.
+func (h *StatusesHandler) SetThreadFetcher(fetcher federation.ThreadFetcher) {
+	h.threader = fetcher
 }
 
 func (h *StatusesHandler) useDB() bool {
@@ -1242,6 +1248,11 @@ func (h *StatusesHandler) Context(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	if h.useDB() {
+		if h.threader != nil {
+			if status, err := h.queries.GetStatusByID(ctx, id); err == nil {
+				_ = h.threader.FetchThread(ctx, status)
+			}
+		}
 		// Get ancestors
 		ancestors, err := h.queries.GetStatusAncestors(ctx, id)
 		if err != nil {

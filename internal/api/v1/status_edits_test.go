@@ -148,6 +148,63 @@ func TestStatusesHandler_Source_MockMode(t *testing.T) {
 	}
 }
 
+func TestStatusesHandler_Context_MockMode(t *testing.T) {
+	h := NewStatusesHandler(nil, nil, nil, nil, nil)
+
+	tests := []struct {
+		name       string
+		statusID   string
+		wantCode   int
+		wantLength int
+	}{
+		{
+			name:       "valid status ID returns empty context in mock mode",
+			statusID:   "123456789",
+			wantCode:   http.StatusOK,
+			wantLength: 0,
+		},
+		{
+			name:     "empty status ID returns not found",
+			statusID: "",
+			wantCode: http.StatusNotFound,
+		},
+		{
+			name:     "invalid status ID returns not found",
+			statusID: "invalid",
+			wantCode: http.StatusNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, rec := mockStatusRequest(http.MethodGet, "/api/v1/statuses/"+tt.statusID+"/context", 12345)
+			req.SetPathValue("id", tt.statusID)
+
+			h.Context(rec, req)
+
+			if rec.Code != tt.wantCode {
+				t.Errorf("status = %d, want %d", rec.Code, tt.wantCode)
+			}
+
+			if tt.wantCode == http.StatusOK {
+				var payload struct {
+					Ancestors   []Status `json:"ancestors"`
+					Descendants []Status `json:"descendants"`
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+					t.Fatalf("Failed to unmarshal response: %v", err)
+				}
+				if len(payload.Ancestors) != tt.wantLength {
+					t.Errorf("ancestors length = %d, want %d", len(payload.Ancestors), tt.wantLength)
+				}
+				if len(payload.Descendants) != tt.wantLength {
+					t.Errorf("descendants length = %d, want %d", len(payload.Descendants), tt.wantLength)
+				}
+			}
+		})
+	}
+}
+
 func TestStatusEditStruct(t *testing.T) {
 	now := time.Now()
 	edit := StatusEdit{

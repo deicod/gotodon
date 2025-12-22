@@ -45,6 +45,20 @@ UPDATE statuses SET
     updated_at = $3
 WHERE id = $1;
 
+-- name: UpdateStatusInReplyTo :execrows
+UPDATE statuses SET
+    in_reply_to_id = $2,
+    in_reply_to_account_id = $3,
+    reply = true,
+    updated_at = now()
+WHERE id = $1 AND in_reply_to_id IS NULL;
+
+-- name: UpdateStatusFetchedRepliesAt :exec
+UPDATE statuses SET
+    fetched_replies_at = $2,
+    updated_at = now()
+WHERE id = $1;
+
 -- name: DeleteStatus :exec
 UPDATE statuses SET deleted_at = now(), updated_at = now()
 WHERE id = $1;
