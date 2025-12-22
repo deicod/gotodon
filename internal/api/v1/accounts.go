@@ -3,8 +3,10 @@ package v1
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -16,19 +18,27 @@ import (
 	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/federation"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/activitypub"
 )
 
 // AccountsHandler handles account-related endpoints
 type AccountsHandler struct {
-	queries db.Querier
-	pool    *pgxpool.Pool
-	cfg     *config.Config
+	queries  db.Querier
+	pool     *pgxpool.Pool
+	cfg      *config.Config
+	outgoing federation.OutgoingDeliverer
+	resolver *federation.RemoteActorResolver
 }
 
 // NewAccountsHandler creates a new accounts handler
-func NewAccountsHandler(queries db.Querier, pool *pgxpool.Pool, cfg *config.Config) *AccountsHandler {
-	return &AccountsHandler{queries: queries, pool: pool, cfg: cfg}
+func NewAccountsHandler(queries db.Querier, pool *pgxpool.Pool, cfg *config.Config, outgoing federation.OutgoingDeliverer) *AccountsHandler {
+	var resolver *federation.RemoteActorResolver
+	if queries != nil && cfg != nil {
+		resolver = federation.NewRemoteActorResolver(queries, cfg.Instance.LocalDomain)
+	}
+	return &AccountsHandler{queries: queries, pool: pool, cfg: cfg, outgoing: outgoing, resolver: resolver}
 }
 
 func (h *AccountsHandler) useDB() bool {
@@ -657,17 +667,44 @@ func (h *AccountsHandler) Follow(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		var followID int64
 		// Create follow (or follow request if locked)
 		if targetAcc.Locked {
-			_, _ = h.queries.CreateFollowRequest(ctx, db.CreateFollowRequestParams{
+			followReq, err := h.queries.CreateFollowRequest(ctx, db.CreateFollowRequestParams{
 				AccountID:       accountID,
 				TargetAccountID: targetID,
 			})
+			if err != nil {
+				if pgErr, ok := err.(*pgconn.PgError); ok && pgErr.Code == "23505" {
+					// Already requested; keep followID empty.
+				} else {
+					web.JSONError(w, http.StatusInternalServerError, "Failed to create follow request")
+					return
+				}
+			} else {
+				followID = followReq.ID
+			}
 		} else {
-			_, _ = h.queries.CreateFollow(ctx, db.CreateFollowParams{
+			follow, err := h.queries.CreateFollow(ctx, db.CreateFollowParams{
 				AccountID:       accountID,
 				TargetAccountID: targetID,
 			})
+			if err != nil {
+				if pgErr, ok := err.(*pgconn.PgError); ok && pgErr.Code == "23505" {
+					// Already following; keep followID empty.
+				} else {
+					web.JSONError(w, http.StatusInternalServerError, "Failed to create follow")
+					return
+				}
+			} else {
+				followID = follow.ID
+			}
+		}
+
+		if followID > 0 && h.outgoing != nil {
+			if err := h.outgoing.DeliverFollow(ctx, accountID, targetID, followID); err != nil {
+				fmt.Printf("Failed to deliver Follow activity: %v\n", err)
+			}
 		}
 
 		// Return relationship
@@ -699,13 +736,42 @@ func (h *AccountsHandler) Unfollow(w http.ResponseWriter, r *http.Request) {
 
 	if h.useDB() {
 		ctx := r.Context()
+		var followID int64
+		if h.outgoing != nil {
+			follow, err := h.queries.GetFollow(ctx, db.GetFollowParams{
+				AccountID:       accountID,
+				TargetAccountID: targetID,
+			})
+			if err == nil {
+				followID = follow.ID
+			} else {
+				req, err := h.queries.GetFollowRequest(ctx, db.GetFollowRequestParams{
+					AccountID:       accountID,
+					TargetAccountID: targetID,
+				})
+				if err == nil {
+					followID = req.ID
+				}
+			}
+		}
+
 		_ = h.queries.DeleteFollow(ctx, db.DeleteFollowParams{
+			AccountID:       accountID,
+			TargetAccountID: targetID,
+		})
+		_ = h.queries.DeleteFollowRequest(ctx, db.DeleteFollowRequestParams{
 			AccountID:       accountID,
 			TargetAccountID: targetID,
 		})
 
 		rel := h.getRelationship(ctx, accountID, targetID)
 		web.JSON(w, http.StatusOK, rel)
+
+		if followID > 0 && h.outgoing != nil {
+			if err := h.outgoing.DeliverUndoFollow(ctx, accountID, targetID, followID); err != nil {
+				fmt.Printf("Failed to deliver Undo Follow activity: %v\n", err)
+			}
+		}
 		return
 	}
 
@@ -1062,7 +1128,7 @@ func (h *AccountsHandler) RemoveFromFollowers(w http.ResponseWriter, r *http.Req
 
 // Lookup handles GET /api/v1/accounts/lookup
 func (h *AccountsHandler) Lookup(w http.ResponseWriter, r *http.Request) {
-	acct := web.QueryParam(r, "acct")
+	acct := strings.TrimSpace(web.QueryParam(r, "acct"))
 	if acct == "" {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
@@ -1071,29 +1137,7 @@ func (h *AccountsHandler) Lookup(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	if h.useDB() {
-		// Check if acct contains @ for remote account
-		if idx := len(acct) - 1; idx > 0 {
-			for i, c := range acct {
-				if c == '@' && i > 0 {
-					// Remote account: username@domain
-					username := acct[:i]
-					domain := acct[i+1:]
-					dbAcc, err := h.queries.GetAccountByUsernameAndDomain(ctx, db.GetAccountByUsernameAndDomainParams{
-						Username: username,
-						Domain:   domain,
-					})
-					if err != nil {
-						web.JSONError(w, http.StatusNotFound, "Record not found")
-						return
-					}
-					web.JSON(w, http.StatusOK, h.dbAccountWithStats(ctx, dbAcc))
-					return
-				}
-			}
-		}
-
-		// Local account
-		dbAcc, err := h.queries.GetAccountByUsername(ctx, acct)
+		dbAcc, err := h.lookupAccount(ctx, acct)
 		if err != nil {
 			web.JSONError(w, http.StatusNotFound, "Record not found")
 			return
@@ -1113,6 +1157,32 @@ func (h *AccountsHandler) Lookup(w http.ResponseWriter, r *http.Request) {
 		Emojis:       []CustomEmoji{},
 		Fields:       []Field{},
 	})
+}
+
+func (h *AccountsHandler) lookupAccount(ctx context.Context, acct string) (db.Account, error) {
+	if isRemoteLookup(acct) {
+		if h.resolver != nil {
+			return h.resolver.ResolveAccount(ctx, acct)
+		}
+		if strings.HasPrefix(acct, "http://") || strings.HasPrefix(acct, "https://") {
+			return h.queries.GetAccountByURI(ctx, acct)
+		}
+		username, domain, err := activitypub.ParseAcct(acct)
+		if err != nil {
+			return db.Account{}, err
+		}
+		return h.queries.GetAccountByUsernameAndDomain(ctx, db.GetAccountByUsernameAndDomainParams{
+			Username: username,
+			Domain:   domain,
+		})
+	}
+	return h.queries.GetAccountByUsername(ctx, acct)
+}
+
+func isRemoteLookup(acct string) bool {
+	return strings.Contains(acct, "@") ||
+		strings.HasPrefix(acct, "http://") ||
+		strings.HasPrefix(acct, "https://")
 }
 
 // RegisterRoutes registers the accounts routes

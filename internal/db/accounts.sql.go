@@ -933,32 +933,34 @@ UPDATE accounts SET
     header_remote_url = COALESCE($18, header_remote_url),
     avatar_file_name = COALESCE($19, avatar_file_name),
     header_file_name = COALESCE($20, header_file_name),
+    last_webfingered_at = COALESCE($21, last_webfingered_at),
     updated_at = now()
 WHERE id = $1
 RETURNING id, username, domain, private_key, public_key, created_at, updated_at, note, display_name, uri, url, avatar_file_name, avatar_content_type, avatar_file_size, avatar_updated_at, header_file_name, header_content_type, header_file_size, header_updated_at, avatar_remote_url, locked, header_remote_url, last_webfingered_at, inbox_url, outbox_url, shared_inbox_url, followers_url, following_url, protocol, memorial, moved_to_account_id, featured_collection_url, fields, actor_type, discoverable, also_known_as, silenced_at, suspended_at, hide_collections, avatar_storage_schema_version, header_storage_schema_version, suspension_origin, sensitized_at, trendable, reviewed_at, requested_review_at, indexable, attribution_domains
 `
 
 type UpdateAccountParams struct {
-	ID                    int64       `db:"id" json:"id"`
-	DisplayName           pgtype.Text `db:"display_name" json:"display_name"`
-	Note                  pgtype.Text `db:"note" json:"note"`
-	Locked                pgtype.Bool `db:"locked" json:"locked"`
-	Discoverable          pgtype.Bool `db:"discoverable" json:"discoverable"`
-	Indexable             pgtype.Bool `db:"indexable" json:"indexable"`
-	Fields                []byte      `db:"fields" json:"fields"`
-	Url                   pgtype.Text `db:"url" json:"url"`
-	PublicKey             pgtype.Text `db:"public_key" json:"public_key"`
-	ActorType             pgtype.Text `db:"actor_type" json:"actor_type"`
-	InboxUrl              pgtype.Text `db:"inbox_url" json:"inbox_url"`
-	OutboxUrl             pgtype.Text `db:"outbox_url" json:"outbox_url"`
-	SharedInboxUrl        pgtype.Text `db:"shared_inbox_url" json:"shared_inbox_url"`
-	FollowersUrl          pgtype.Text `db:"followers_url" json:"followers_url"`
-	FollowingUrl          pgtype.Text `db:"following_url" json:"following_url"`
-	FeaturedCollectionUrl pgtype.Text `db:"featured_collection_url" json:"featured_collection_url"`
-	AvatarRemoteUrl       pgtype.Text `db:"avatar_remote_url" json:"avatar_remote_url"`
-	HeaderRemoteUrl       pgtype.Text `db:"header_remote_url" json:"header_remote_url"`
-	AvatarFileName        pgtype.Text `db:"avatar_file_name" json:"avatar_file_name"`
-	HeaderFileName        pgtype.Text `db:"header_file_name" json:"header_file_name"`
+	ID                    int64              `db:"id" json:"id"`
+	DisplayName           pgtype.Text        `db:"display_name" json:"display_name"`
+	Note                  pgtype.Text        `db:"note" json:"note"`
+	Locked                pgtype.Bool        `db:"locked" json:"locked"`
+	Discoverable          pgtype.Bool        `db:"discoverable" json:"discoverable"`
+	Indexable             pgtype.Bool        `db:"indexable" json:"indexable"`
+	Fields                []byte             `db:"fields" json:"fields"`
+	Url                   pgtype.Text        `db:"url" json:"url"`
+	PublicKey             pgtype.Text        `db:"public_key" json:"public_key"`
+	ActorType             pgtype.Text        `db:"actor_type" json:"actor_type"`
+	InboxUrl              pgtype.Text        `db:"inbox_url" json:"inbox_url"`
+	OutboxUrl             pgtype.Text        `db:"outbox_url" json:"outbox_url"`
+	SharedInboxUrl        pgtype.Text        `db:"shared_inbox_url" json:"shared_inbox_url"`
+	FollowersUrl          pgtype.Text        `db:"followers_url" json:"followers_url"`
+	FollowingUrl          pgtype.Text        `db:"following_url" json:"following_url"`
+	FeaturedCollectionUrl pgtype.Text        `db:"featured_collection_url" json:"featured_collection_url"`
+	AvatarRemoteUrl       pgtype.Text        `db:"avatar_remote_url" json:"avatar_remote_url"`
+	HeaderRemoteUrl       pgtype.Text        `db:"header_remote_url" json:"header_remote_url"`
+	AvatarFileName        pgtype.Text        `db:"avatar_file_name" json:"avatar_file_name"`
+	HeaderFileName        pgtype.Text        `db:"header_file_name" json:"header_file_name"`
+	LastWebfingeredAt     pgtype.Timestamptz `db:"last_webfingered_at" json:"last_webfingered_at"`
 }
 
 func (q *Queries) UpdateAccount(ctx context.Context, arg UpdateAccountParams) (Account, error) {
@@ -983,6 +985,7 @@ func (q *Queries) UpdateAccount(ctx context.Context, arg UpdateAccountParams) (A
 		arg.HeaderRemoteUrl,
 		arg.AvatarFileName,
 		arg.HeaderFileName,
+		arg.LastWebfingeredAt,
 	)
 	var i Account
 	err := row.Scan(

@@ -4,6 +4,7 @@ package v1
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -13,18 +14,20 @@ import (
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/federation"
 	"github.com/deicod/gotodon/internal/web"
 )
 
 // FollowRequestsHandler handles follow request endpoints
 type FollowRequestsHandler struct {
-	queries db.Querier
-	cfg     *config.Config
+	queries  db.Querier
+	cfg      *config.Config
+	outgoing federation.OutgoingDeliverer
 }
 
 // NewFollowRequestsHandler creates a new follow requests handler
-func NewFollowRequestsHandler(queries db.Querier, cfg *config.Config) *FollowRequestsHandler {
-	return &FollowRequestsHandler{queries: queries, cfg: cfg}
+func NewFollowRequestsHandler(queries db.Querier, cfg *config.Config, outgoing federation.OutgoingDeliverer) *FollowRequestsHandler {
+	return &FollowRequestsHandler{queries: queries, cfg: cfg, outgoing: outgoing}
 }
 
 func (h *FollowRequestsHandler) useDB() bool {
@@ -77,6 +80,18 @@ func (h *FollowRequestsHandler) Authorize(w http.ResponseWriter, r *http.Request
 
 	ctx := r.Context()
 	if h.useDB() {
+		var followReq db.FollowRequest
+		var hasFollowReq bool
+		if h.outgoing != nil {
+			followReq, err = h.queries.GetFollowRequest(ctx, db.GetFollowRequestParams{
+				AccountID:       targetID,
+				TargetAccountID: accountID,
+			})
+			if err == nil {
+				hasFollowReq = true
+			}
+		}
+
 		// Accept: Create Follow record
 		_, err = h.queries.CreateFollow(ctx, db.CreateFollowParams{
 			AccountID:       targetID,  // They follow me
@@ -101,6 +116,12 @@ func (h *FollowRequestsHandler) Authorize(w http.ResponseWriter, r *http.Request
 			AccountID:       targetID,
 			TargetAccountID: accountID,
 		})
+
+		if hasFollowReq && h.outgoing != nil {
+			if err := h.outgoing.DeliverFollowResponse(ctx, followReq, true); err != nil {
+				fmt.Printf("Failed to deliver Accept activity: %v\n", err)
+			}
+		}
 
 		web.JSON(w, http.StatusOK, relationshipAPI(targetID, true, false, false, false))
 		return
@@ -129,10 +150,28 @@ func (h *FollowRequestsHandler) Reject(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	if h.useDB() {
+		var followReq db.FollowRequest
+		var hasFollowReq bool
+		if h.outgoing != nil {
+			followReq, err = h.queries.GetFollowRequest(ctx, db.GetFollowRequestParams{
+				AccountID:       targetID,
+				TargetAccountID: accountID,
+			})
+			if err == nil {
+				hasFollowReq = true
+			}
+		}
+
 		_ = h.queries.DeleteFollowRequest(ctx, db.DeleteFollowRequestParams{
 			AccountID:       targetID,  // Them
 			TargetAccountID: accountID, // Me
 		})
+
+		if hasFollowReq && h.outgoing != nil {
+			if err := h.outgoing.DeliverFollowResponse(ctx, followReq, false); err != nil {
+				fmt.Printf("Failed to deliver Reject activity: %v\n", err)
+			}
+		}
 
 		web.JSON(w, http.StatusOK, relationshipAPI(targetID, false, false, false, false))
 		return

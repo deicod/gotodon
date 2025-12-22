@@ -27,7 +27,7 @@ func mockStatusRequest(method, path string, accountID int64) (*http.Request, *ht
 }
 
 func TestStatusesHandler_History_MockMode(t *testing.T) {
-	h := NewStatusesHandler(nil, nil, nil, nil)
+	h := NewStatusesHandler(nil, nil, nil, nil, nil)
 
 	tests := []struct {
 		name       string
@@ -80,7 +80,7 @@ func TestStatusesHandler_History_MockMode(t *testing.T) {
 }
 
 func TestStatusesHandler_Source_MockMode(t *testing.T) {
-	h := NewStatusesHandler(nil, nil, nil, nil)
+	h := NewStatusesHandler(nil, nil, nil, nil, nil)
 
 	tests := []struct {
 		name        string
@@ -248,7 +248,7 @@ func TestFormatContent(t *testing.T) {
 }
 
 func TestStatusesHandler_History_EmptyID(t *testing.T) {
-	h := NewStatusesHandler(nil, nil, nil, nil)
+	h := NewStatusesHandler(nil, nil, nil, nil, nil)
 
 	req, rec := mockStatusRequest(http.MethodGet, "/api/v1/statuses//history", 12345)
 	req.SetPathValue("id", "")
@@ -261,7 +261,7 @@ func TestStatusesHandler_History_EmptyID(t *testing.T) {
 }
 
 func TestStatusesHandler_Source_RequiresAuth(t *testing.T) {
-	h := NewStatusesHandler(nil, nil, nil, nil)
+	h := NewStatusesHandler(nil, nil, nil, nil, nil)
 
 	// Request without authentication context
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/statuses/123/source", nil)
@@ -285,7 +285,7 @@ func TestStatusesHandler_Source_RequiresAuth(t *testing.T) {
 }
 
 func TestStatusesHandler_Translate_MockMode(t *testing.T) {
-	h := NewStatusesHandler(nil, nil, nil, nil)
+	h := NewStatusesHandler(nil, nil, nil, nil, nil)
 
 	tests := []struct {
 		name     string
@@ -351,7 +351,7 @@ func TestTranslationStruct(t *testing.T) {
 }
 
 func TestStatusesHandler_Quotes_MockMode(t *testing.T) {
-	h := NewStatusesHandler(nil, nil, nil, nil)
+	h := NewStatusesHandler(nil, nil, nil, nil, nil)
 
 	tests := []struct {
 		name     string
@@ -390,7 +390,7 @@ func TestStatusesHandler_Quotes_MockMode(t *testing.T) {
 }
 
 func TestStatusesHandler_RevokeQuote_MockMode(t *testing.T) {
-	h := NewStatusesHandler(nil, nil, nil, nil)
+	h := NewStatusesHandler(nil, nil, nil, nil, nil)
 
 	tests := []struct {
 		name      string

@@ -18,6 +18,7 @@ import (
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/federation"
 	"github.com/deicod/gotodon/internal/streaming"
 	"github.com/deicod/gotodon/internal/translation"
 	"github.com/deicod/gotodon/internal/web"
@@ -57,15 +58,17 @@ type StatusesHandler struct {
 	pool      *pgxpool.Pool
 	publisher streaming.Publisher
 	cfg       *config.Config
+	outgoing  federation.OutgoingDeliverer
 }
 
 // NewStatusesHandler creates a new statuses handler
-func NewStatusesHandler(queries db.Querier, pool *pgxpool.Pool, publisher streaming.Publisher, cfg *config.Config) *StatusesHandler {
+func NewStatusesHandler(queries db.Querier, pool *pgxpool.Pool, publisher streaming.Publisher, cfg *config.Config, outgoing federation.OutgoingDeliverer) *StatusesHandler {
 	return &StatusesHandler{
 		queries:   queries,
 		pool:      pool,
 		publisher: publisher,
 		cfg:       cfg,
+		outgoing:  outgoing,
 	}
 }
 
@@ -631,6 +634,12 @@ func (h *StatusesHandler) Create(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		if h.outgoing != nil {
+			if err := h.outgoing.DeliverStatusCreate(ctx, dbStatus.ID); err != nil {
+				fmt.Printf("Failed to deliver Create activity: %v\n", err)
+			}
+		}
+
 		web.JSON(w, http.StatusOK, apiStatus)
 		return
 	}
@@ -752,6 +761,32 @@ func (h *StatusesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		var mentionAccounts []db.Account
+		if h.outgoing != nil {
+			mentions, err := qtx.GetMentionsByStatusID(ctx, id)
+			if err != nil {
+				fmt.Printf("Failed to load mentions for delete: %v\n", err)
+			} else if len(mentions) > 0 {
+				seen := make(map[int64]bool)
+				ids := make([]int64, 0, len(mentions))
+				for _, mention := range mentions {
+					if mention.AccountID == 0 || seen[mention.AccountID] {
+						continue
+					}
+					seen[mention.AccountID] = true
+					ids = append(ids, mention.AccountID)
+				}
+				if len(ids) > 0 {
+					accounts, err := qtx.GetAccountsByIDs(ctx, ids)
+					if err != nil {
+						fmt.Printf("Failed to load mention accounts for delete: %v\n", err)
+					} else {
+						mentionAccounts = accounts
+					}
+				}
+			}
+		}
+
 		if err := qtx.DeleteStatus(ctx, id); err != nil {
 			web.JSONError(w, http.StatusInternalServerError, "Failed to delete status")
 			return
@@ -767,6 +802,12 @@ func (h *StatusesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		if err := tx.Commit(ctx); err != nil {
 			web.JSONError(w, http.StatusInternalServerError, "Failed to commit transaction")
 			return
+		}
+
+		if h.outgoing != nil {
+			if err := h.outgoing.DeliverStatusDelete(ctx, dbStatus, mentionAccounts); err != nil {
+				fmt.Printf("Failed to deliver Delete activity: %v\n", err)
+			}
 		}
 
 		web.JSON(w, http.StatusOK, map[string]any{
@@ -828,7 +869,7 @@ func (h *StatusesHandler) Favourite(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Create favourite
-		_, err = h.queries.CreateFavourite(ctx, db.CreateFavouriteParams{
+		favourite, err := h.queries.CreateFavourite(ctx, db.CreateFavouriteParams{
 			AccountID: accountID,
 			StatusID:  id,
 		})
@@ -848,6 +889,12 @@ func (h *StatusesHandler) Favourite(w http.ResponseWriter, r *http.Request) {
 		if err := h.queries.IncrementStatusFavourites(ctx, id); err != nil {
 			// Try to rollback favourite creation? Or just log.
 			fmt.Printf("Failed to increment favourites count: %v\n", err)
+		}
+
+		if h.outgoing != nil {
+			if err := h.outgoing.DeliverLike(ctx, favourite); err != nil {
+				fmt.Printf("Failed to deliver Like activity: %v\n", err)
+			}
 		}
 
 		status := SerializeStatus(ctx, h.queries, h.cfg, dbStatus)
@@ -887,6 +934,18 @@ func (h *StatusesHandler) Unfavourite(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		var favourite db.Favourite
+		var hasFavourite bool
+		if h.outgoing != nil {
+			favourite, err = h.queries.GetFavourite(ctx, db.GetFavouriteParams{
+				AccountID: accountID,
+				StatusID:  id,
+			})
+			if err == nil {
+				hasFavourite = true
+			}
+		}
+
 		// Delete favourite
 		err = h.queries.DeleteFavourite(ctx, db.DeleteFavouriteParams{
 			AccountID: accountID,
@@ -905,6 +964,12 @@ func (h *StatusesHandler) Unfavourite(w http.ResponseWriter, r *http.Request) {
 		status := SerializeStatus(ctx, h.queries, h.cfg, dbStatus)
 		status.Favourited = false
 		web.JSON(w, http.StatusOK, status)
+
+		if hasFavourite && h.outgoing != nil {
+			if err := h.outgoing.DeliverUndoLike(ctx, favourite); err != nil {
+				fmt.Printf("Failed to deliver Undo Like activity: %v\n", err)
+			}
+		}
 		return
 	}
 
@@ -937,6 +1002,12 @@ func (h *StatusesHandler) Reblog(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		actor, err := h.queries.GetAccountByID(ctx, accountID)
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to fetch account")
+			return
+		}
+
 		// Create reblog status
 		reblogStatus, err := h.queries.CreateStatus(ctx, db.CreateStatusParams{
 			AccountID:  accountID,
@@ -949,6 +1020,16 @@ func (h *StatusesHandler) Reblog(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		reblogURI := fmt.Sprintf("https://%s/users/%s/statuses/%d", h.cfg.Instance.LocalDomain, actor.Username, reblogStatus.ID)
+		if err := h.queries.UpdateStatusURI(ctx, db.UpdateStatusURIParams{
+			ID:  reblogStatus.ID,
+			Uri: pgtype.Text{String: reblogURI, Valid: true},
+		}); err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to update reblog URI")
+			return
+		}
+		reblogStatus.Uri = pgtype.Text{String: reblogURI, Valid: true}
+
 		_ = h.queries.IncrementStatusReblogs(ctx, id)
 
 		original := SerializeStatus(ctx, h.queries, h.cfg, originalStatus)
@@ -957,6 +1038,12 @@ func (h *StatusesHandler) Reblog(w http.ResponseWriter, r *http.Request) {
 		reblog := SerializeStatus(ctx, h.queries, h.cfg, reblogStatus)
 		reblog.Reblog = &original
 		reblog.Reblogged = true
+
+		if h.outgoing != nil {
+			if err := h.outgoing.DeliverAnnounce(ctx, reblogStatus.ID); err != nil {
+				fmt.Printf("Failed to deliver Announce activity: %v\n", err)
+			}
+		}
 
 		web.JSON(w, http.StatusOK, reblog)
 		return
@@ -994,7 +1081,7 @@ func (h *StatusesHandler) Reblog(w http.ResponseWriter, r *http.Request) {
 // Unreblog handles POST /api/v1/statuses/:id/unreblog
 func (h *StatusesHandler) Unreblog(w http.ResponseWriter, r *http.Request) {
 	idStr := web.Param(r, "id")
-	_, ok := middleware.GetAccountID(r.Context())
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
 		return
@@ -1015,6 +1102,18 @@ func (h *StatusesHandler) Unreblog(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		var reblogStatus db.Status
+		var hasReblog bool
+		if h.outgoing != nil {
+			reblogStatus, err = h.queries.GetReblogByAccountAndOriginal(ctx, db.GetReblogByAccountAndOriginalParams{
+				AccountID:  accountID,
+				ReblogOfID: pgtype.Int8{Int64: id, Valid: true},
+			})
+			if err == nil {
+				hasReblog = true
+			}
+		}
+
 		if err := h.queries.DecrementStatusReblogs(ctx, id); err != nil {
 			fmt.Printf("Failed to decrement reblogs count: %v\n", err)
 		}
@@ -1022,6 +1121,12 @@ func (h *StatusesHandler) Unreblog(w http.ResponseWriter, r *http.Request) {
 		status := SerializeStatus(ctx, h.queries, h.cfg, dbStatus)
 		status.Reblogged = false
 		web.JSON(w, http.StatusOK, status)
+
+		if hasReblog && h.outgoing != nil {
+			if err := h.outgoing.DeliverUndoAnnounce(ctx, reblogStatus); err != nil {
+				fmt.Printf("Failed to deliver Undo Announce activity: %v\n", err)
+			}
+		}
 		return
 	}
 
@@ -1422,6 +1527,11 @@ func (h *StatusesHandler) Edit(w http.ResponseWriter, r *http.Request) {
 		}
 
 		s := SerializeStatus(r.Context(), h.queries, h.cfg, updatedStatus)
+		if h.outgoing != nil {
+			if err := h.outgoing.DeliverStatusUpdate(r.Context(), statusID); err != nil {
+				fmt.Printf("Failed to deliver Update activity: %v\n", err)
+			}
+		}
 		web.JSON(w, http.StatusOK, s)
 		return
 	}

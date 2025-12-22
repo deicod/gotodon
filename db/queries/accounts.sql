@@ -49,6 +49,7 @@ UPDATE accounts SET
     header_remote_url = COALESCE(sqlc.narg('header_remote_url'), header_remote_url),
     avatar_file_name = COALESCE(sqlc.narg('avatar_file_name'), avatar_file_name),
     header_file_name = COALESCE(sqlc.narg('header_file_name'), header_file_name),
+    last_webfingered_at = COALESCE(sqlc.narg('last_webfingered_at'), last_webfingered_at),
     updated_at = now()
 WHERE id = $1
 RETURNING *;

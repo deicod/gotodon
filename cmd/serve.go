@@ -122,6 +122,14 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		logger.Warn("Redis unavailable, streaming API will not function correctly across instances")
 	}
 
+	deliveryQueue := federation.NewDeliveryQueue(federation.NewDeliveryService().DeliverActivity, federation.DeliveryQueueConfig{})
+	deliveryQueue.Start()
+	go func() {
+		<-ctx.Done()
+		_ = deliveryQueue.Stop(context.Background())
+	}()
+	outgoingService := federation.NewOutgoingService(queries, cfg.Instance.LocalDomain, deliveryQueue)
+
 	var pubSubHandler http.Handler
 	if streamingHub != nil {
 		wsHandler := streaming.NewWSHandler(streamingHub.Hub)
@@ -141,11 +149,11 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	// Internal handlers
 
 	// Register v1 handlers
-	accountsHandler := v1.NewAccountsHandler(queries, pool, cfg)
+	accountsHandler := v1.NewAccountsHandler(queries, pool, cfg, outgoingService)
 	accountsHandler.RegisterRoutes(mux)
 
 	// Statuses
-	statusesHandler := v1.NewStatusesHandler(queries, pool, streamingHub, cfg)
+	statusesHandler := v1.NewStatusesHandler(queries, pool, streamingHub, cfg, outgoingService)
 	statusesHandler.RegisterRoutes(mux)
 
 	timelinesHandler := v1.NewTimelinesHandler(queries, cfg)
@@ -204,7 +212,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	conversationsHandler := v1.NewConversationsHandler(queries, cfg)
 	conversationsHandler.RegisterRoutes(mux)
 
-	followRequestsHandler := v1.NewFollowRequestsHandler(queries, cfg)
+	followRequestsHandler := v1.NewFollowRequestsHandler(queries, cfg, outgoingService)
 	followRequestsHandler.RegisterRoutes(mux)
 
 	domainBlocksHandler := v1.NewDomainBlocksHandler(queries, cfg)

@@ -32,7 +32,7 @@ func mockAccountsRequest(method, path string, body string, accountID int64) (*ht
 }
 
 func TestAccountsHandler_SetNote_MockMode(t *testing.T) {
-	h := NewAccountsHandler(nil, nil, nil)
+	h := NewAccountsHandler(nil, nil, nil, nil)
 
 	tests := []struct {
 		name      string
@@ -130,7 +130,7 @@ func TestRelationshipStruct(t *testing.T) {
 }
 
 func TestAccountsHandler_SetNote_RequiresAuth(t *testing.T) {
-	h := NewAccountsHandler(nil, nil, nil)
+	h := NewAccountsHandler(nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/123/note", strings.NewReader(`{"comment":"test"}`))
 	req.SetPathValue("id", "123")
@@ -154,7 +154,7 @@ func TestAccountsHandler_SetNote_RequiresAuth(t *testing.T) {
 }
 
 func TestAccountsHandler_RemoveFromFollowers_MockMode(t *testing.T) {
-	h := NewAccountsHandler(nil, nil, nil)
+	h := NewAccountsHandler(nil, nil, nil, nil)
 
 	tests := []struct {
 		name      string
@@ -207,7 +207,7 @@ func TestAccountsHandler_RemoveFromFollowers_MockMode(t *testing.T) {
 }
 
 func TestAccountsHandler_Lookup_MockMode(t *testing.T) {
-	h := NewAccountsHandler(nil, nil, nil)
+	h := NewAccountsHandler(nil, nil, nil, nil)
 
 	tests := []struct {
 		name     string

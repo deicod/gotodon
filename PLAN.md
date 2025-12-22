@@ -338,26 +338,26 @@
 - [x] Batch deliveries to same inbox
 
 ### Task 5.14: Activity Delivery - Queue
-- [ ] Implement delivery queue with retries
-- [ ] Handle failed deliveries gracefully
-- [ ] Exponential backoff for retries
+- [x] Implement delivery queue with retries
+- [x] Handle failed deliveries gracefully
+- [x] Exponential backoff for retries
 
 ### Task 5.15: Deliver Outgoing Activities
-- [ ] Deliver `Create` for new posts
-- [ ] Deliver `Update` for edited posts
-- [ ] Deliver `Delete` for deleted posts
-- [ ] Deliver `Follow` when following remote user
-- [ ] Deliver `Undo Follow` when unfollowing
-- [ ] Deliver `Like` for favourites
-- [ ] Deliver `Announce` for boosts
-- [ ] Deliver `Accept`/`Reject` for follow responses
+- [x] Deliver `Create` for new posts
+- [x] Deliver `Update` for edited posts
+- [x] Deliver `Delete` for deleted posts
+- [x] Deliver `Follow` when following remote user
+- [x] Deliver `Undo Follow` when unfollowing
+- [x] Deliver `Like` for favourites
+- [x] Deliver `Announce` for boosts
+- [x] Deliver `Accept`/`Reject` for follow responses
 
 ### Task 5.16: Remote Actor Resolution
-- [ ] Create `internal/federation/resolver.go`
-- [ ] Implement WebFinger client
-- [ ] Fetch remote actor profiles
-- [ ] Cache actors in database
-- [ ] Refresh stale actor data (>24h old)
+- [x] Create `internal/federation/resolver.go`
+- [x] Implement WebFinger client
+- [x] Fetch remote actor profiles
+- [x] Cache actors in database
+- [x] Refresh stale actor data (>24h old)
 
 ### Task 5.17: Remote Content Fetching
 - [ ] Fetch remote statuses when needed
