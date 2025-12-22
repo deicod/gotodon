@@ -25,6 +25,7 @@ import (
 	v2 "github.com/deicod/gotodon/internal/api/v2"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/federation"
 	"github.com/deicod/gotodon/internal/media"
 	"github.com/deicod/gotodon/internal/streaming"
 	"github.com/deicod/gotodon/internal/web"
@@ -263,6 +264,8 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	// ActivityPub Federation
 	federationHandler := activitypubapi.NewFederationHandler(queries, cfg.Instance.LocalDomain)
+	followService := federation.NewFollowService(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher(), nil)
+	federationHandler.RegisterInboxHandler(activitypub.TypeFollow, followService.HandleFollow)
 	federationHandler.RegisterRoutes(mux)
 
 	// Admin API

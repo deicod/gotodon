@@ -43,13 +43,13 @@ func VerifyHTTPSignature(fetcher activitypub.ActorFetcher) func(http.Handler) ht
 				return
 			}
 
-			var activity activitypub.Activity
-			if err := json.Unmarshal(body, &activity); err != nil {
+			var raw map[string]any
+			if err := json.Unmarshal(body, &raw); err != nil {
 				web.JSONError(w, http.StatusBadRequest, "Invalid activity payload")
 				return
 			}
 
-			actorURI := extractActorURI(&activity)
+			actorURI := extractActorURI(raw["actor"])
 			if actorURI == "" {
 				web.JSONError(w, http.StatusBadRequest, "Missing activity actor")
 				return
@@ -76,12 +76,12 @@ func VerifyHTTPSignature(fetcher activitypub.ActorFetcher) func(http.Handler) ht
 	}
 }
 
-func extractActorURI(activity *activitypub.Activity) string {
-	switch actor := activity.Actor.(type) {
+func extractActorURI(actor any) string {
+	switch value := actor.(type) {
 	case string:
-		return actor
+		return value
 	case map[string]any:
-		if id, ok := actor["id"].(string); ok {
+		if id, ok := value["id"].(string); ok {
 			return id
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -160,5 +161,197 @@ func TestFederationHandler_PostInbox_DigestMismatch(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestFederationHandler_PostInbox_RoutesActivity(t *testing.T) {
+	priv, pub, err := activitypub.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair() error = %v", err)
+	}
+	privateKeyPEM := activitypub.EncodePrivateKey(priv)
+	publicKeyPEM, err := activitypub.EncodePublicKey(pub)
+	if err != nil {
+		t.Fatalf("EncodePublicKey() error = %v", err)
+	}
+
+	actorURI := "https://remote.example/users/alice"
+	activity := activitypub.Activity{
+		Type:           activitypub.TypeFollow,
+		Actor:          actorURI,
+		ActivityObject: "https://example.com/users/bob",
+	}
+	body, err := json.Marshal(activity)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	req := signedInboxRequest(t, body, actorURI+"#main-key", privateKeyPEM)
+
+	handled := false
+	handler := &FederationHandler{
+		domain: "example.com",
+		actorFetcher: stubActorFetcher{actor: &activitypub.Actor{
+			PublicKey: &activitypub.PublicKey{
+				ID:           actorURI + "#main-key",
+				Owner:        actorURI,
+				PublicKeyPem: publicKeyPEM,
+			},
+		}},
+	}
+	handler.RegisterInboxHandler(activitypub.TypeFollow, func(ctx context.Context, activity *activitypub.Activity) error {
+		handled = true
+		if activity.Type != activitypub.TypeFollow {
+			t.Errorf("activity type = %q, want %q", activity.Type, activitypub.TypeFollow)
+		}
+		return nil
+	})
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusAccepted)
+	}
+	if !handled {
+		t.Fatal("expected handler to be called")
+	}
+}
+
+func TestFederationHandler_PostInbox_ArrayTypeRoutes(t *testing.T) {
+	priv, pub, err := activitypub.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair() error = %v", err)
+	}
+	privateKeyPEM := activitypub.EncodePrivateKey(priv)
+	publicKeyPEM, err := activitypub.EncodePublicKey(pub)
+	if err != nil {
+		t.Fatalf("EncodePublicKey() error = %v", err)
+	}
+
+	actorURI := "https://remote.example/users/alice"
+	body := []byte(fmt.Sprintf(`{"type":["Activity","Follow"],"actor":"%s","object":"https://example.com/users/bob"}`, actorURI))
+	req := signedInboxRequest(t, body, actorURI+"#main-key", privateKeyPEM)
+
+	handled := false
+	handler := &FederationHandler{
+		domain: "example.com",
+		actorFetcher: stubActorFetcher{actor: &activitypub.Actor{
+			PublicKey: &activitypub.PublicKey{
+				ID:           actorURI + "#main-key",
+				Owner:        actorURI,
+				PublicKeyPem: publicKeyPEM,
+			},
+		}},
+	}
+	handler.RegisterInboxHandler(activitypub.TypeFollow, func(ctx context.Context, activity *activitypub.Activity) error {
+		handled = true
+		if activity.Type != activitypub.TypeFollow {
+			t.Errorf("activity type = %q, want %q", activity.Type, activitypub.TypeFollow)
+		}
+		return nil
+	})
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusAccepted)
+	}
+	if !handled {
+		t.Fatal("expected handler to be called")
+	}
+}
+
+func TestFederationHandler_PostInbox_MissingType(t *testing.T) {
+	priv, pub, err := activitypub.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair() error = %v", err)
+	}
+	privateKeyPEM := activitypub.EncodePrivateKey(priv)
+	publicKeyPEM, err := activitypub.EncodePublicKey(pub)
+	if err != nil {
+		t.Fatalf("EncodePublicKey() error = %v", err)
+	}
+
+	actorURI := "https://remote.example/users/alice"
+	body := []byte(`{"actor":"` + actorURI + `","object":"https://example.com/users/bob"}`)
+
+	req := signedInboxRequest(t, body, actorURI+"#main-key", privateKeyPEM)
+
+	handler := &FederationHandler{
+		domain: "example.com",
+		actorFetcher: stubActorFetcher{actor: &activitypub.Actor{
+			PublicKey: &activitypub.PublicKey{
+				ID:           actorURI + "#main-key",
+				Owner:        actorURI,
+				PublicKeyPem: publicKeyPEM,
+			},
+		}},
+	}
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestFederationHandler_PostInbox_HandlerErrorStatus(t *testing.T) {
+	priv, pub, err := activitypub.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair() error = %v", err)
+	}
+	privateKeyPEM := activitypub.EncodePrivateKey(priv)
+	publicKeyPEM, err := activitypub.EncodePublicKey(pub)
+	if err != nil {
+		t.Fatalf("EncodePublicKey() error = %v", err)
+	}
+
+	actorURI := "https://remote.example/users/alice"
+	activity := activitypub.Activity{
+		Type:           activitypub.TypeFollow,
+		Actor:          actorURI,
+		ActivityObject: "https://example.com/users/bob",
+	}
+	body, err := json.Marshal(activity)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	req := signedInboxRequest(t, body, actorURI+"#main-key", privateKeyPEM)
+
+	handler := &FederationHandler{
+		domain: "example.com",
+		actorFetcher: stubActorFetcher{actor: &activitypub.Actor{
+			PublicKey: &activitypub.PublicKey{
+				ID:           actorURI + "#main-key",
+				Owner:        actorURI,
+				PublicKeyPem: publicKeyPEM,
+			},
+		}},
+	}
+	handler.RegisterInboxHandler(activitypub.TypeFollow, func(ctx context.Context, activity *activitypub.Activity) error {
+		return &InboxError{Status: http.StatusUnprocessableEntity, Message: "Unprocessable activity"}
+	})
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
 	}
 }

@@ -2,8 +2,13 @@
 package activitypub
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
@@ -13,22 +18,50 @@ import (
 
 // FederationHandler handles ActivityPub federation endpoints
 type FederationHandler struct {
-	queries      *db.Queries
-	domain       string
-	actorFetcher activitypub.ActorFetcher
+	queries       *db.Queries
+	domain        string
+	actorFetcher  activitypub.ActorFetcher
+	inboxHandlers map[string]InboxHandler
+}
+
+// InboxHandler processes a specific ActivityPub activity type.
+type InboxHandler func(ctx context.Context, activity *activitypub.Activity) error
+
+// InboxError allows handlers to return specific HTTP status codes.
+type InboxError struct {
+	Status  int
+	Message string
+}
+
+func (e *InboxError) Error() string {
+	return e.Message
 }
 
 // NewFederationHandler creates a new federation handler
 func NewFederationHandler(queries *db.Queries, domain string) *FederationHandler {
 	return &FederationHandler{
-		queries:      queries,
-		domain:       domain,
-		actorFetcher: newActorFetcher(queries, domain),
+		queries:       queries,
+		domain:        domain,
+		actorFetcher:  newActorFetcher(queries, domain),
+		inboxHandlers: make(map[string]InboxHandler),
 	}
 }
 
 func (h *FederationHandler) useDB() bool {
 	return h.queries != nil
+}
+
+// ActorFetcher exposes the resolver used for signature verification and inbox handlers.
+func (h *FederationHandler) ActorFetcher() activitypub.ActorFetcher {
+	return h.actorFetcher
+}
+
+// RegisterInboxHandler registers a handler for a specific activity type.
+func (h *FederationHandler) RegisterInboxHandler(activityType string, handler InboxHandler) {
+	if h.inboxHandlers == nil {
+		h.inboxHandlers = make(map[string]InboxHandler)
+	}
+	h.inboxHandlers[activityType] = handler
 }
 
 // GetActor handles GET /users/:username - returns the actor profile
@@ -220,8 +253,35 @@ func (h *FederationHandler) GetFollowing(w http.ResponseWriter, r *http.Request)
 
 // PostInbox handles POST /users/:username/inbox and POST /inbox
 func (h *FederationHandler) PostInbox(w http.ResponseWriter, r *http.Request) {
-	// For now, accept the activity and return 202 Accepted
-	// Full implementation would verify signatures and process activities
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	_ = r.Body.Close()
+
+	if len(body) == 0 {
+		web.JSONError(w, http.StatusBadRequest, "Missing activity payload")
+		return
+	}
+
+	activity, err := parseInboxActivity(body)
+	if err != nil {
+		h.writeInboxError(w, err)
+		return
+	}
+
+	handler, exists := h.inboxHandlers[activity.Type]
+	if !exists {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	if err := handler(r.Context(), activity); err != nil {
+		h.writeInboxError(w, err)
+		return
+	}
+
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -237,6 +297,107 @@ func (h *FederationHandler) RegisterRoutes(mux *http.ServeMux) {
 	inboxHandler := middleware.VerifyHTTPSignature(h.actorFetcher)(http.HandlerFunc(h.PostInbox))
 	mux.Handle("POST /inbox", inboxHandler)
 	mux.Handle("POST /users/{username}/inbox", inboxHandler)
+}
+
+func (h *FederationHandler) writeInboxError(w http.ResponseWriter, err error) {
+	var inboxErr *InboxError
+	if errors.As(err, &inboxErr) && inboxErr != nil {
+		web.JSONError(w, inboxErr.Status, inboxErr.Message)
+		return
+	}
+	web.JSONError(w, http.StatusInternalServerError, "Failed to process activity")
+}
+
+func parseInboxActivity(body []byte) (*activitypub.Activity, error) {
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, &InboxError{Status: http.StatusBadRequest, Message: "Invalid activity payload"}
+	}
+
+	activityType, err := extractActivityType(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	raw["type"] = activityType
+	normalized, err := json.Marshal(raw)
+	if err != nil {
+		return nil, &InboxError{Status: http.StatusBadRequest, Message: "Invalid activity payload"}
+	}
+
+	var activity activitypub.Activity
+	if err := json.Unmarshal(normalized, &activity); err != nil {
+		return nil, &InboxError{Status: http.StatusBadRequest, Message: "Invalid activity payload"}
+	}
+	activity.Type = activityType
+
+	if extractActorURI(&activity) == "" {
+		return nil, &InboxError{Status: http.StatusBadRequest, Message: "Missing activity actor"}
+	}
+
+	return &activity, nil
+}
+
+func extractActivityType(raw map[string]any) (string, error) {
+	val, ok := raw["type"]
+	if !ok {
+		return "", &InboxError{Status: http.StatusBadRequest, Message: "Missing activity type"}
+	}
+
+	switch t := val.(type) {
+	case string:
+		if t == "" {
+			return "", &InboxError{Status: http.StatusBadRequest, Message: "Missing activity type"}
+		}
+		return t, nil
+	case []any:
+		var fallback string
+		for _, item := range t {
+			s, ok := item.(string)
+			if !ok || s == "" {
+				continue
+			}
+			if fallback == "" {
+				fallback = s
+			}
+			if !strings.EqualFold(s, "Activity") {
+				return s, nil
+			}
+		}
+		if fallback != "" {
+			return fallback, nil
+		}
+	case []string:
+		var fallback string
+		for _, s := range t {
+			if s == "" {
+				continue
+			}
+			if fallback == "" {
+				fallback = s
+			}
+			if !strings.EqualFold(s, "Activity") {
+				return s, nil
+			}
+		}
+		if fallback != "" {
+			return fallback, nil
+		}
+	}
+
+	return "", &InboxError{Status: http.StatusBadRequest, Message: "Invalid activity type"}
+}
+
+func extractActorURI(activity *activitypub.Activity) string {
+	switch actor := activity.Actor.(type) {
+	case string:
+		return actor
+	case map[string]any:
+		if id, ok := actor["id"].(string); ok {
+			return id
+		}
+	}
+	return ""
 }
 
 // Helper to format account ID
