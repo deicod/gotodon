@@ -545,6 +545,50 @@ func (q *Queries) GetPublicTimeline(ctx context.Context, arg GetPublicTimelinePa
 	return items, nil
 }
 
+const getReblogByAccountAndOriginal = `-- name: GetReblogByAccountAndOriginal :one
+SELECT id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at FROM statuses
+WHERE account_id = $1 AND reblog_of_id = $2 AND deleted_at IS NULL
+ORDER BY id DESC
+LIMIT 1
+`
+
+type GetReblogByAccountAndOriginalParams struct {
+	AccountID  int64       `db:"account_id" json:"account_id"`
+	ReblogOfID pgtype.Int8 `db:"reblog_of_id" json:"reblog_of_id"`
+}
+
+func (q *Queries) GetReblogByAccountAndOriginal(ctx context.Context, arg GetReblogByAccountAndOriginalParams) (Status, error) {
+	row := q.db.QueryRow(ctx, getReblogByAccountAndOriginal, arg.AccountID, arg.ReblogOfID)
+	var i Status
+	err := row.Scan(
+		&i.ID,
+		&i.Uri,
+		&i.Text,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.InReplyToID,
+		&i.ReblogOfID,
+		&i.Url,
+		&i.Sensitive,
+		&i.Visibility,
+		&i.SpoilerText,
+		&i.Reply,
+		&i.Language,
+		&i.ConversationID,
+		&i.Local,
+		&i.AccountID,
+		&i.ApplicationID,
+		&i.InReplyToAccountID,
+		&i.PollID,
+		&i.DeletedAt,
+		&i.EditedAt,
+		&i.Trendable,
+		&i.OrderedMediaAttachmentIds,
+		&i.FetchedRepliesAt,
+	)
+	return i, err
+}
+
 const getStatusAncestors = `-- name: GetStatusAncestors :many
 WITH RECURSIVE ancestors AS (
   SELECT id, in_reply_to_id FROM statuses WHERE id = $1 AND deleted_at IS NULL
@@ -919,6 +963,24 @@ func (q *Queries) UpdateStatus(ctx context.Context, arg UpdateStatusParams) (Sta
 	return i, err
 }
 
+const updateStatusTimestamps = `-- name: UpdateStatusTimestamps :exec
+UPDATE statuses SET
+    created_at = $2,
+    updated_at = $3
+WHERE id = $1
+`
+
+type UpdateStatusTimestampsParams struct {
+	ID        int64              `db:"id" json:"id"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+func (q *Queries) UpdateStatusTimestamps(ctx context.Context, arg UpdateStatusTimestampsParams) error {
+	_, err := q.db.Exec(ctx, updateStatusTimestamps, arg.ID, arg.CreatedAt, arg.UpdatedAt)
+	return err
+}
+
 const updateStatusURI = `-- name: UpdateStatusURI :exec
 UPDATE statuses SET uri = $1, updated_at = now()
 WHERE id = $2
@@ -931,5 +993,22 @@ type UpdateStatusURIParams struct {
 
 func (q *Queries) UpdateStatusURI(ctx context.Context, arg UpdateStatusURIParams) error {
 	_, err := q.db.Exec(ctx, updateStatusURI, arg.Uri, arg.ID)
+	return err
+}
+
+const updateStatusURL = `-- name: UpdateStatusURL :exec
+UPDATE statuses SET
+    url = $2,
+    updated_at = now()
+WHERE id = $1
+`
+
+type UpdateStatusURLParams struct {
+	ID  int64       `db:"id" json:"id"`
+	Url pgtype.Text `db:"url" json:"url"`
+}
+
+func (q *Queries) UpdateStatusURL(ctx context.Context, arg UpdateStatusURLParams) error {
+	_, err := q.db.Exec(ctx, updateStatusURL, arg.ID, arg.Url)
 	return err
 }

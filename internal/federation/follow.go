@@ -3,17 +3,17 @@ package federation
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/url"
 	"path"
 	"strings"
 
-	apihandler "github.com/deicod/gotodon/internal/api/activitypub"
-	"github.com/deicod/gotodon/internal/db"
-	"github.com/deicod/gotodon/pkg/activitypub"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+
+	apihandler "github.com/deicod/gotodon/internal/api/activitypub"
+	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/pkg/activitypub"
 )
 
 // FollowStore describes the persistence needed to handle incoming follows.
@@ -394,15 +394,7 @@ func actorInbox(actor *activitypub.Actor) string {
 }
 
 func defaultDelivery(ctx context.Context, localActor db.Account, inbox string, activity *activitypub.Activity) error {
-	if !localActor.PrivateKey.Valid {
-		return fmt.Errorf("missing private key")
-	}
-	keyID := fmt.Sprintf("%s#main-key", localActor.Uri)
-	outbox, err := activitypub.NewOutboxHandler(keyID, localActor.PrivateKey.String)
-	if err != nil {
-		return err
-	}
-	return outbox.DeliverActivity(ctx, inbox, activity)
+	return NewDeliveryService().DeliverActivity(ctx, localActor, inbox, activity)
 }
 
 func isUniqueViolation(err error) bool {

@@ -106,7 +106,7 @@ func (s *DeepLService) Translate(ctx context.Context, text, targetLang string) (
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrTranslationFailed, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%w: status %d", ErrTranslationFailed, resp.StatusCode)
@@ -172,7 +172,7 @@ func (s *LibreTranslateService) Translate(ctx context.Context, text, targetLang 
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrTranslationFailed, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%w: status %d", ErrTranslationFailed, resp.StatusCode)

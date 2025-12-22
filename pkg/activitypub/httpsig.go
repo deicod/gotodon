@@ -97,9 +97,17 @@ func (s *HTTPSigner) buildSignatureString(req *http.Request, headers []string) s
 		var value string
 		switch h {
 		case "(request-target)":
-			value = fmt.Sprintf("(request-target): %s %s", strings.ToLower(req.Method), req.URL.Path)
+			path := req.URL.Path
+			if path == "" {
+				path = "/"
+			}
+			value = fmt.Sprintf("(request-target): %s %s", strings.ToLower(req.Method), path)
 		case "host":
-			value = fmt.Sprintf("host: %s", req.Host)
+			host := req.Host
+			if host == "" {
+				host = req.URL.Host
+			}
+			value = fmt.Sprintf("host: %s", host)
 		default:
 			value = fmt.Sprintf("%s: %s", strings.ToLower(h), req.Header.Get(h))
 		}
@@ -201,7 +209,11 @@ func (v *HTTPVerifier) buildSignatureString(req *http.Request, headers []string)
 		var value string
 		switch h {
 		case "(request-target)":
-			value = fmt.Sprintf("(request-target): %s %s", strings.ToLower(req.Method), req.URL.Path)
+			path := req.URL.Path
+			if path == "" {
+				path = "/"
+			}
+			value = fmt.Sprintf("(request-target): %s %s", strings.ToLower(req.Method), path)
 		case "host":
 			host := req.Host
 			if host == "" {

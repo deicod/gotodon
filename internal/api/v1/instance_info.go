@@ -6,10 +6,11 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // InstanceInfoHandler handles instance information endpoints

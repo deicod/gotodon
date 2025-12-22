@@ -36,6 +36,17 @@ UPDATE accounts SET
     discoverable = COALESCE(sqlc.narg('discoverable'), discoverable),
     indexable = COALESCE(sqlc.narg('indexable'), indexable),
     fields = COALESCE(sqlc.narg('fields'), fields),
+    url = COALESCE(sqlc.narg('url'), url),
+    public_key = COALESCE(sqlc.narg('public_key'), public_key),
+    actor_type = COALESCE(sqlc.narg('actor_type'), actor_type),
+    inbox_url = COALESCE(sqlc.narg('inbox_url'), inbox_url),
+    outbox_url = COALESCE(sqlc.narg('outbox_url'), outbox_url),
+    shared_inbox_url = COALESCE(sqlc.narg('shared_inbox_url'), shared_inbox_url),
+    followers_url = COALESCE(sqlc.narg('followers_url'), followers_url),
+    following_url = COALESCE(sqlc.narg('following_url'), following_url),
+    featured_collection_url = COALESCE(sqlc.narg('featured_collection_url'), featured_collection_url),
+    avatar_remote_url = COALESCE(sqlc.narg('avatar_remote_url'), avatar_remote_url),
+    header_remote_url = COALESCE(sqlc.narg('header_remote_url'), header_remote_url),
     avatar_file_name = COALESCE(sqlc.narg('avatar_file_name'), avatar_file_name),
     header_file_name = COALESCE(sqlc.narg('header_file_name'), header_file_name),
     updated_at = now()
@@ -119,4 +130,3 @@ UPDATE accounts SET
     updated_at = now()
 WHERE id = $1
 RETURNING *;
-

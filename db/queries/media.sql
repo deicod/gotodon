@@ -6,6 +6,14 @@ INSERT INTO media_attachments (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
 ) RETURNING *;
 
+-- name: CreateRemoteMediaAttachment :one
+INSERT INTO media_attachments (
+    account_id, status_id, remote_url, thumbnail_remote_url, type, description,
+    blurhash, file_content_type, file_meta, processing
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+) RETURNING *;
+
 -- name: GetMediaAttachment :one
 SELECT * FROM media_attachments WHERE id = $1;
 

@@ -4,6 +4,12 @@ SELECT * FROM statuses WHERE id = $1 AND deleted_at IS NULL;
 -- name: GetStatusByURI :one
 SELECT * FROM statuses WHERE uri = $1 AND deleted_at IS NULL;
 
+-- name: GetReblogByAccountAndOriginal :one
+SELECT * FROM statuses
+WHERE account_id = $1 AND reblog_of_id = $2 AND deleted_at IS NULL
+ORDER BY id DESC
+LIMIT 1;
+
 -- name: GetStatusesByIDs :many
 SELECT * FROM statuses WHERE id = ANY(@ids::bigint[]) AND deleted_at IS NULL;
 
@@ -26,6 +32,18 @@ UPDATE statuses SET
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;
+
+-- name: UpdateStatusURL :exec
+UPDATE statuses SET
+    url = $2,
+    updated_at = now()
+WHERE id = $1;
+
+-- name: UpdateStatusTimestamps :exec
+UPDATE statuses SET
+    created_at = $2,
+    updated_at = $3
+WHERE id = $1;
 
 -- name: DeleteStatus :exec
 UPDATE statuses SET deleted_at = now(), updated_at = now()
@@ -148,4 +166,3 @@ WHERE id = $2;
 -- name: CountStatusesInRange :one
 SELECT COUNT(*) FROM statuses 
 WHERE created_at >= $1 AND created_at < $2 AND deleted_at IS NULL;
-

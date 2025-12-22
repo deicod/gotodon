@@ -8,9 +8,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/pkg/activitypub"
-	"github.com/jackc/pgx/v5"
 )
 
 type actorFetcher struct {

@@ -1875,10 +1875,7 @@ func (h *StatusesHandler) getPollForStatus(ctx context.Context, pollID int64, ac
 		expiresAt = &dbPoll.ExpiresAt.Time
 	}
 
-	expired := false
-	if expiresAt != nil && time.Now().After(*expiresAt) {
-		expired = true
-	}
+	expired := expiresAt != nil && time.Now().After(*expiresAt)
 
 	// Check if user voted (if authenticated)
 	voted := false

@@ -252,90 +252,90 @@
 **Goal:** Full federation with other ActivityPub servers
 
 ### Task 5.1: HTTP Signature Verification
-- [ ] Wire up existing `pkg/activitypub/httpsig.go`
-- [ ] Add signature verification middleware
-- [ ] Verify signatures on incoming POST requests to inbox
-- [ ] Handle signature verification failures gracefully
+- [x] Wire up existing `pkg/activitypub/httpsig.go`
+- [x] Add signature verification middleware
+- [x] Verify signatures on incoming POST requests to inbox
+- [x] Handle signature verification failures gracefully
 
 ### Task 5.2: Inbox Activity Routing
-- [ ] Modify `PostInbox` in `handler.go`
-- [ ] Parse incoming JSON-LD activities
-- [ ] Route to appropriate handler based on activity type
-- [ ] Return proper HTTP status codes
+- [x] Modify `PostInbox` in `handler.go`
+- [x] Parse incoming JSON-LD activities
+- [x] Route to appropriate handler based on activity type
+- [x] Return proper HTTP status codes
 
 ### Task 5.3: Follow Handling
-- [ ] Create `internal/federation/follow.go`
-- [ ] Process incoming `Follow` activities
-  - [ ] Validate actor exists
-  - [ ] Check if auto-accept or require approval
-  - [ ] Create follow_request or follow record
-- [ ] Send `Accept` activity for approved follows
-- [ ] Send `Reject` activity for rejected follows
-- [ ] Handle locked accounts (require approval)
+- [x] Create `internal/federation/follow.go`
+- [x] Process incoming `Follow` activities
+  - [x] Validate actor exists
+  - [x] Check if auto-accept or require approval
+  - [x] Create follow_request or follow record
+- [x] Send `Accept` activity for approved follows
+- [x] Send `Reject` activity for rejected follows
+- [x] Handle locked accounts (require approval)
 
 ### Task 5.4: Accept/Reject Handling
-- [ ] Process incoming `Accept` activities
-  - [ ] Convert our follow_request to follow
-- [ ] Process incoming `Reject` activities
-  - [ ] Remove our follow_request
+- [x] Process incoming `Accept` activities
+  - [x] Convert our follow_request to follow
+- [x] Process incoming `Reject` activities
+  - [x] Remove our follow_request
 
 ### Task 5.5: Undo Handling
-- [ ] Process `Undo Follow` (unfollow)
-- [ ] Process `Undo Like` (unfavourite)
-- [ ] Process `Undo Announce` (unboost)
-- [ ] Process `Undo Block`
+- [x] Process `Undo Follow` (unfollow)
+- [x] Process `Undo Like` (unfavourite)
+- [x] Process `Undo Announce` (unboost)
+- [x] Process `Undo Block`
 
 ### Task 5.6: Create Activity Handling
-- [ ] Create `internal/federation/create.go`
-- [ ] Process incoming `Create Note` (new posts)
-  - [ ] Fetch actor if not known
-  - [ ] Parse Note content
-  - [ ] Store in statuses table
-  - [ ] Process mentions
-  - [ ] Process attachments
-  - [ ] Generate notifications
-- [ ] Handle replies (in_reply_to)
-- [ ] Handle visibility (public/unlisted/private/direct)
+- [x] Create `internal/federation/create.go`
+- [x] Process incoming `Create Note` (new posts)
+  - [x] Fetch actor if not known
+  - [x] Parse Note content
+  - [x] Store in statuses table
+  - [x] Process mentions
+  - [x] Process attachments
+  - [x] Generate notifications
+- [x] Handle replies (in_reply_to)
+- [x] Handle visibility (public/unlisted/private/direct)
 
 ### Task 5.7: Update Activity Handling
-- [ ] Process `Update Note` (post edits)
-  - [ ] Create status_edit record
-  - [ ] Update status content
-- [ ] Process `Update Person` (profile updates)
-  - [ ] Update account fields
+- [x] Process `Update Note` (post edits)
+  - [x] Create status_edit record
+  - [x] Update status content
+- [x] Process `Update Person` (profile updates)
+  - [x] Update account fields
 
 ### Task 5.8: Delete Activity Handling
-- [ ] Process `Delete Note`
-  - [ ] Mark status as deleted
-  - [ ] Create tombstone record
-- [ ] Process `Delete Person` (account deletion)
+- [x] Process `Delete Note`
+  - [x] Mark status as deleted
+  - [x] Create tombstone record
+- [x] Process `Delete Person` (account deletion)
 
 ### Task 5.9: Announce Handling (Boosts)
-- [ ] Process incoming `Announce` activities
-  - [ ] Fetch original post if needed
-  - [ ] Create reblog record
-  - [ ] Update reblog count
-  - [ ] Generate notification
+- [x] Process incoming `Announce` activities
+  - [x] Fetch original post if needed
+  - [x] Create reblog record
+  - [x] Update reblog count
+  - [x] Generate notification
 
 ### Task 5.10: Like Handling (Favourites)
-- [ ] Process incoming `Like` activities
-  - [ ] Create favourite record
-  - [ ] Update favourite count
-  - [ ] Generate notification
+- [x] Process incoming `Like` activities
+  - [x] Create favourite record
+  - [x] Update favourite count
+  - [x] Generate notification
 
 ### Task 5.11: Block Handling
-- [ ] Process incoming `Block` activities
-- [ ] Hide content appropriately
+- [x] Process incoming `Block` activities
+- [x] Hide content appropriately
 
 ### Task 5.12: Activity Delivery - Signing
-- [ ] Create `internal/federation/delivery.go`
-- [ ] Implement HTTP signature signing for outgoing requests
-- [ ] Use account's private key
+- [x] Create `internal/federation/delivery.go`
+- [x] Implement HTTP signature signing for outgoing requests
+- [x] Use account's private key
 
 ### Task 5.13: Activity Delivery - Resolution
-- [ ] Resolve recipient inboxes from followers
-- [ ] Use shared inbox when available
-- [ ] Batch deliveries to same inbox
+- [x] Resolve recipient inboxes from followers
+- [x] Use shared inbox when available
+- [x] Batch deliveries to same inbox
 
 ### Task 5.14: Activity Delivery - Queue
 - [ ] Implement delivery queue with retries

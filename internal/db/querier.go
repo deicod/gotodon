@@ -132,6 +132,7 @@ type Querier interface {
 	CreatePreviewCardProvider(ctx context.Context, arg CreatePreviewCardProviderParams) (PreviewCardProvider, error)
 	CreatePushSubscription(ctx context.Context, arg CreatePushSubscriptionParams) (WebPushSubscription, error)
 	CreateQuote(ctx context.Context, arg CreateQuoteParams) (Quote, error)
+	CreateRemoteMediaAttachment(ctx context.Context, arg CreateRemoteMediaAttachmentParams) (MediaAttachment, error)
 	CreateReport(ctx context.Context, arg CreateReportParams) (Report, error)
 	CreateRule(ctx context.Context, arg CreateRuleParams) (Rule, error)
 	CreateScheduledStatus(ctx context.Context, arg CreateScheduledStatusParams) (ScheduledStatus, error)
@@ -297,6 +298,7 @@ type Querier interface {
 	GetQuoteByStatusID(ctx context.Context, statusID int64) (Quote, error)
 	GetQuotesByQuotedStatusID(ctx context.Context, arg GetQuotesByQuotedStatusIDParams) ([]Quote, error)
 	GetQuotesByStatusIDs(ctx context.Context, statusIds []int64) ([]Quote, error)
+	GetReblogByAccountAndOriginal(ctx context.Context, arg GetReblogByAccountAndOriginalParams) (Status, error)
 	GetRebloggers(ctx context.Context, arg GetRebloggersParams) ([]Account, error)
 	GetRelationship(ctx context.Context, arg GetRelationshipParams) (GetRelationshipRow, error)
 	// Rules queries
@@ -440,8 +442,10 @@ type Querier interface {
 	UpdateScheduledStatus(ctx context.Context, arg UpdateScheduledStatusParams) (ScheduledStatus, error)
 	UpdateSessionActivation(ctx context.Context, arg UpdateSessionActivationParams) (SessionActivation, error)
 	UpdateStatus(ctx context.Context, arg UpdateStatusParams) (Status, error)
+	UpdateStatusTimestamps(ctx context.Context, arg UpdateStatusTimestampsParams) error
 	UpdateStatusTrendAllowed(ctx context.Context, arg UpdateStatusTrendAllowedParams) (StatusTrend, error)
 	UpdateStatusURI(ctx context.Context, arg UpdateStatusURIParams) error
+	UpdateStatusURL(ctx context.Context, arg UpdateStatusURLParams) error
 	UpdateTagTrendAllowed(ctx context.Context, arg UpdateTagTrendAllowedParams) (TagTrend, error)
 	UpdateUserSettings(ctx context.Context, arg UpdateUserSettingsParams) error
 	UpdateWebAuthnCredentialNickname(ctx context.Context, arg UpdateWebAuthnCredentialNicknameParams) (WebauthnCredential, error)

@@ -5,12 +5,13 @@ import (
 	"errors"
 	"testing"
 
-	apihandler "github.com/deicod/gotodon/internal/api/activitypub"
-	"github.com/deicod/gotodon/internal/db"
-	"github.com/deicod/gotodon/pkg/activitypub"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+
+	apihandler "github.com/deicod/gotodon/internal/api/activitypub"
+	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/pkg/activitypub"
 )
 
 type stubActorFetcher struct {

@@ -96,6 +96,70 @@ func (q *Queries) CreateMediaAttachment(ctx context.Context, arg CreateMediaAtta
 	return i, err
 }
 
+const createRemoteMediaAttachment = `-- name: CreateRemoteMediaAttachment :one
+INSERT INTO media_attachments (
+    account_id, status_id, remote_url, thumbnail_remote_url, type, description,
+    blurhash, file_content_type, file_meta, processing
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+) RETURNING id, status_id, file_file_name, file_content_type, file_file_size, file_updated_at, remote_url, created_at, updated_at, shortcode, type, file_meta, account_id, description, scheduled_status_id, blurhash, processing, file_storage_schema_version, thumbnail_file_name, thumbnail_content_type, thumbnail_file_size, thumbnail_updated_at, thumbnail_remote_url
+`
+
+type CreateRemoteMediaAttachmentParams struct {
+	AccountID          pgtype.Int8 `db:"account_id" json:"account_id"`
+	StatusID           pgtype.Int8 `db:"status_id" json:"status_id"`
+	RemoteUrl          string      `db:"remote_url" json:"remote_url"`
+	ThumbnailRemoteUrl pgtype.Text `db:"thumbnail_remote_url" json:"thumbnail_remote_url"`
+	Type               int32       `db:"type" json:"type"`
+	Description        pgtype.Text `db:"description" json:"description"`
+	Blurhash           pgtype.Text `db:"blurhash" json:"blurhash"`
+	FileContentType    pgtype.Text `db:"file_content_type" json:"file_content_type"`
+	FileMeta           []byte      `db:"file_meta" json:"file_meta"`
+	Processing         pgtype.Int4 `db:"processing" json:"processing"`
+}
+
+func (q *Queries) CreateRemoteMediaAttachment(ctx context.Context, arg CreateRemoteMediaAttachmentParams) (MediaAttachment, error) {
+	row := q.db.QueryRow(ctx, createRemoteMediaAttachment,
+		arg.AccountID,
+		arg.StatusID,
+		arg.RemoteUrl,
+		arg.ThumbnailRemoteUrl,
+		arg.Type,
+		arg.Description,
+		arg.Blurhash,
+		arg.FileContentType,
+		arg.FileMeta,
+		arg.Processing,
+	)
+	var i MediaAttachment
+	err := row.Scan(
+		&i.ID,
+		&i.StatusID,
+		&i.FileFileName,
+		&i.FileContentType,
+		&i.FileFileSize,
+		&i.FileUpdatedAt,
+		&i.RemoteUrl,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Shortcode,
+		&i.Type,
+		&i.FileMeta,
+		&i.AccountID,
+		&i.Description,
+		&i.ScheduledStatusID,
+		&i.Blurhash,
+		&i.Processing,
+		&i.FileStorageSchemaVersion,
+		&i.ThumbnailFileName,
+		&i.ThumbnailContentType,
+		&i.ThumbnailFileSize,
+		&i.ThumbnailUpdatedAt,
+		&i.ThumbnailRemoteUrl,
+	)
+	return i, err
+}
+
 const deleteMediaAttachment = `-- name: DeleteMediaAttachment :exec
 DELETE FROM media_attachments WHERE id = $1 AND account_id = $2
 `
