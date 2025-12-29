@@ -156,32 +156,9 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 	quotedStatusesMap := make(map[int64]Status)
 	if len(quotedStatusIDs) > 0 {
 		quotedDbStatuses, _ := q.GetStatusesByIDs(ctx, quotedStatusIDs)
-
-		// Bulk fetch accounts for quoted statuses to avoid N+1 queries
-		quotedAccountIDs := make([]int64, 0, len(quotedDbStatuses))
-		quotedAccountIDSeen := make(map[int64]bool)
-		for _, qs := range quotedDbStatuses {
-			if !quotedAccountIDSeen[qs.AccountID] {
-				quotedAccountIDs = append(quotedAccountIDs, qs.AccountID)
-				quotedAccountIDSeen[qs.AccountID] = true
-			}
-		}
-
-		quotedAccountsMap := make(map[int64]Account)
-		if len(quotedAccountIDs) > 0 {
-			quotedDbAccounts, _ := q.GetAccountsByIDs(ctx, quotedAccountIDs)
-			for _, a := range quotedDbAccounts {
-				quotedAccountsMap[a.ID] = SerializeAccount(cfg, a)
-			}
-		}
-
 		// Serialize quoted statuses (without recursing into their quotes to avoid infinite loops)
 		for _, qs := range quotedDbStatuses {
-			var accPtr *Account
-			if acc, ok := quotedAccountsMap[qs.AccountID]; ok {
-				accPtr = &acc
-			}
-			quotedStatusesMap[qs.ID] = SerializeStatusSimple(ctx, q, cfg, qs, accPtr)
+			quotedStatusesMap[qs.ID] = SerializeStatusSimple(ctx, q, cfg, qs)
 		}
 	}
 
@@ -297,16 +274,11 @@ func SerializeStatus(ctx context.Context, q db.Querier, cfg *config.Config, dbSt
 }
 
 // SerializeStatusSimple converts a status without recursing into quotes (to avoid infinite loops)
-func SerializeStatusSimple(ctx context.Context, q db.Querier, cfg *config.Config, dbStatus db.Status, preFetchedAccount *Account) Status {
+func SerializeStatusSimple(ctx context.Context, q db.Querier, cfg *config.Config, dbStatus db.Status) Status {
 	// Get account
-	var account Account
-	if preFetchedAccount != nil {
-		account = *preFetchedAccount
-	} else {
-		account = Account{ID: strconv.FormatInt(dbStatus.AccountID, 10), Username: "unknown"}
-		if acc, err := q.GetAccountByID(ctx, dbStatus.AccountID); err == nil {
-			account = SerializeAccount(cfg, acc)
-		}
+	account := Account{ID: strconv.FormatInt(dbStatus.AccountID, 10), Username: "unknown"}
+	if acc, err := q.GetAccountByID(ctx, dbStatus.AccountID); err == nil {
+		account = SerializeAccount(cfg, acc)
 	}
 
 	visibility := "public"

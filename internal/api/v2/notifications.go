@@ -317,7 +317,7 @@ func (h *NotificationsHandler) buildGroupedResponse(ctx context.Context, notific
 		}
 		statusMap := make(map[int64]v1.Status, len(dbStatuses))
 		for _, st := range dbStatuses {
-			statusMap[st.ID] = v1.SerializeStatusSimple(ctx, h.queries, h.cfg, st, nil)
+			statusMap[st.ID] = v1.SerializeStatusSimple(ctx, h.queries, h.cfg, st)
 		}
 		for _, id := range statusIDs {
 			if status, ok := statusMap[id]; ok {
