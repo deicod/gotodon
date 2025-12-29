@@ -12,61 +12,61 @@ import (
 )
 
 const createFilter = `-- name: CreateFilter :one
-INSERT INTO filters (
-    account_id, title, context, action, expires_at
+INSERT INTO custom_filters (
+    account_id, phrase, context, action, expires_at
 ) VALUES (
     $1, $2, $3, $4, $5
-) RETURNING id, account_id, title, context, action, expires_at, created_at, updated_at
+) RETURNING id, account_id, expires_at, phrase, context, created_at, updated_at, action
 `
 
 type CreateFilterParams struct {
 	AccountID int64              `db:"account_id" json:"account_id"`
-	Title     string             `db:"title" json:"title"`
+	Phrase    string             `db:"phrase" json:"phrase"`
 	Context   []string           `db:"context" json:"context"`
 	Action    int32              `db:"action" json:"action"`
 	ExpiresAt pgtype.Timestamptz `db:"expires_at" json:"expires_at"`
 }
 
-func (q *Queries) CreateFilter(ctx context.Context, arg CreateFilterParams) (Filter, error) {
+func (q *Queries) CreateFilter(ctx context.Context, arg CreateFilterParams) (CustomFilter, error) {
 	row := q.db.QueryRow(ctx, createFilter,
 		arg.AccountID,
-		arg.Title,
+		arg.Phrase,
 		arg.Context,
 		arg.Action,
 		arg.ExpiresAt,
 	)
-	var i Filter
+	var i CustomFilter
 	err := row.Scan(
 		&i.ID,
 		&i.AccountID,
-		&i.Title,
-		&i.Context,
-		&i.Action,
 		&i.ExpiresAt,
+		&i.Phrase,
+		&i.Context,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Action,
 	)
 	return i, err
 }
 
 const createFilterKeyword = `-- name: CreateFilterKeyword :one
-INSERT INTO filter_keywords (filter_id, keyword, whole_word)
+INSERT INTO custom_filter_keywords (custom_filter_id, keyword, whole_word)
 VALUES ($1, $2, $3)
-RETURNING id, filter_id, keyword, whole_word, created_at, updated_at
+RETURNING id, custom_filter_id, keyword, whole_word, created_at, updated_at
 `
 
 type CreateFilterKeywordParams struct {
-	FilterID  int64  `db:"filter_id" json:"filter_id"`
-	Keyword   string `db:"keyword" json:"keyword"`
-	WholeWord bool   `db:"whole_word" json:"whole_word"`
+	CustomFilterID int64  `db:"custom_filter_id" json:"custom_filter_id"`
+	Keyword        string `db:"keyword" json:"keyword"`
+	WholeWord      bool   `db:"whole_word" json:"whole_word"`
 }
 
-func (q *Queries) CreateFilterKeyword(ctx context.Context, arg CreateFilterKeywordParams) (FilterKeyword, error) {
-	row := q.db.QueryRow(ctx, createFilterKeyword, arg.FilterID, arg.Keyword, arg.WholeWord)
-	var i FilterKeyword
+func (q *Queries) CreateFilterKeyword(ctx context.Context, arg CreateFilterKeywordParams) (CustomFilterKeyword, error) {
+	row := q.db.QueryRow(ctx, createFilterKeyword, arg.CustomFilterID, arg.Keyword, arg.WholeWord)
+	var i CustomFilterKeyword
 	err := row.Scan(
 		&i.ID,
-		&i.FilterID,
+		&i.CustomFilterID,
 		&i.Keyword,
 		&i.WholeWord,
 		&i.CreatedAt,
@@ -76,22 +76,22 @@ func (q *Queries) CreateFilterKeyword(ctx context.Context, arg CreateFilterKeywo
 }
 
 const createFilterStatus = `-- name: CreateFilterStatus :one
-INSERT INTO filter_statuses (filter_id, status_id)
+INSERT INTO custom_filter_statuses (custom_filter_id, status_id)
 VALUES ($1, $2)
-RETURNING id, filter_id, status_id, created_at, updated_at
+RETURNING id, custom_filter_id, status_id, created_at, updated_at
 `
 
 type CreateFilterStatusParams struct {
-	FilterID int64 `db:"filter_id" json:"filter_id"`
-	StatusID int64 `db:"status_id" json:"status_id"`
+	CustomFilterID int64 `db:"custom_filter_id" json:"custom_filter_id"`
+	StatusID       int64 `db:"status_id" json:"status_id"`
 }
 
-func (q *Queries) CreateFilterStatus(ctx context.Context, arg CreateFilterStatusParams) (FilterStatus, error) {
-	row := q.db.QueryRow(ctx, createFilterStatus, arg.FilterID, arg.StatusID)
-	var i FilterStatus
+func (q *Queries) CreateFilterStatus(ctx context.Context, arg CreateFilterStatusParams) (CustomFilterStatus, error) {
+	row := q.db.QueryRow(ctx, createFilterStatus, arg.CustomFilterID, arg.StatusID)
+	var i CustomFilterStatus
 	err := row.Scan(
 		&i.ID,
-		&i.FilterID,
+		&i.CustomFilterID,
 		&i.StatusID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -100,7 +100,7 @@ func (q *Queries) CreateFilterStatus(ctx context.Context, arg CreateFilterStatus
 }
 
 const deleteFilter = `-- name: DeleteFilter :exec
-DELETE FROM filters WHERE id = $1 AND account_id = $2
+DELETE FROM custom_filters WHERE id = $1 AND account_id = $2
 `
 
 type DeleteFilterParams struct {
@@ -114,7 +114,7 @@ func (q *Queries) DeleteFilter(ctx context.Context, arg DeleteFilterParams) erro
 }
 
 const deleteFilterKeyword = `-- name: DeleteFilterKeyword :exec
-DELETE FROM filter_keywords WHERE id = $1
+DELETE FROM custom_filter_keywords WHERE id = $1
 `
 
 func (q *Queries) DeleteFilterKeyword(ctx context.Context, id int64) error {
@@ -123,7 +123,7 @@ func (q *Queries) DeleteFilterKeyword(ctx context.Context, id int64) error {
 }
 
 const deleteFilterStatus = `-- name: DeleteFilterStatus :exec
-DELETE FROM filter_statuses WHERE id = $1
+DELETE FROM custom_filter_statuses WHERE id = $1
 `
 
 func (q *Queries) DeleteFilterStatus(ctx context.Context, id int64) error {
@@ -132,7 +132,7 @@ func (q *Queries) DeleteFilterStatus(ctx context.Context, id int64) error {
 }
 
 const getFilter = `-- name: GetFilter :one
-SELECT id, account_id, title, context, action, expires_at, created_at, updated_at FROM filters WHERE id = $1 AND account_id = $2
+SELECT id, account_id, expires_at, phrase, context, created_at, updated_at, action FROM custom_filters WHERE id = $1 AND account_id = $2
 `
 
 type GetFilterParams struct {
@@ -140,29 +140,29 @@ type GetFilterParams struct {
 	AccountID int64 `db:"account_id" json:"account_id"`
 }
 
-func (q *Queries) GetFilter(ctx context.Context, arg GetFilterParams) (Filter, error) {
+func (q *Queries) GetFilter(ctx context.Context, arg GetFilterParams) (CustomFilter, error) {
 	row := q.db.QueryRow(ctx, getFilter, arg.ID, arg.AccountID)
-	var i Filter
+	var i CustomFilter
 	err := row.Scan(
 		&i.ID,
 		&i.AccountID,
-		&i.Title,
-		&i.Context,
-		&i.Action,
 		&i.ExpiresAt,
+		&i.Phrase,
+		&i.Context,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Action,
 	)
 	return i, err
 }
 
 const getFiltersForAccount = `-- name: GetFiltersForAccount :many
-SELECT f.id, f.account_id, f.title, f.context, f.action, f.expires_at, f.created_at, f.updated_at, 
+SELECT f.id, f.account_id, f.expires_at, f.phrase, f.context, f.created_at, f.updated_at, f.action, 
     array_agg(DISTINCT fk.id) FILTER (WHERE fk.id IS NOT NULL) as keyword_ids,
     array_agg(DISTINCT fs.id) FILTER (WHERE fs.id IS NOT NULL) as status_ids
-FROM filters f
-LEFT JOIN filter_keywords fk ON fk.filter_id = f.id
-LEFT JOIN filter_statuses fs ON fs.filter_id = f.id
+FROM custom_filters f
+LEFT JOIN custom_filter_keywords fk ON fk.custom_filter_id = f.id
+LEFT JOIN custom_filter_statuses fs ON fs.custom_filter_id = f.id
 WHERE f.account_id = $1
     AND (f.expires_at IS NULL OR f.expires_at > now())
 GROUP BY f.id
@@ -172,12 +172,12 @@ ORDER BY f.id DESC
 type GetFiltersForAccountRow struct {
 	ID         int64              `db:"id" json:"id"`
 	AccountID  int64              `db:"account_id" json:"account_id"`
-	Title      string             `db:"title" json:"title"`
-	Context    []string           `db:"context" json:"context"`
-	Action     int32              `db:"action" json:"action"`
 	ExpiresAt  pgtype.Timestamptz `db:"expires_at" json:"expires_at"`
+	Phrase     string             `db:"phrase" json:"phrase"`
+	Context    []string           `db:"context" json:"context"`
 	CreatedAt  pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt  pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	Action     int32              `db:"action" json:"action"`
 	KeywordIds interface{}        `db:"keyword_ids" json:"keyword_ids"`
 	StatusIds  interface{}        `db:"status_ids" json:"status_ids"`
 }
@@ -194,12 +194,12 @@ func (q *Queries) GetFiltersForAccount(ctx context.Context, accountID int64) ([]
 		if err := rows.Scan(
 			&i.ID,
 			&i.AccountID,
-			&i.Title,
-			&i.Context,
-			&i.Action,
 			&i.ExpiresAt,
+			&i.Phrase,
+			&i.Context,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Action,
 			&i.KeywordIds,
 			&i.StatusIds,
 		); err != nil {
@@ -214,21 +214,21 @@ func (q *Queries) GetFiltersForAccount(ctx context.Context, accountID int64) ([]
 }
 
 const listFilterKeywords = `-- name: ListFilterKeywords :many
-SELECT id, filter_id, keyword, whole_word, created_at, updated_at FROM filter_keywords WHERE filter_id = $1
+SELECT id, custom_filter_id, keyword, whole_word, created_at, updated_at FROM custom_filter_keywords WHERE custom_filter_id = $1
 `
 
-func (q *Queries) ListFilterKeywords(ctx context.Context, filterID int64) ([]FilterKeyword, error) {
-	rows, err := q.db.Query(ctx, listFilterKeywords, filterID)
+func (q *Queries) ListFilterKeywords(ctx context.Context, customFilterID int64) ([]CustomFilterKeyword, error) {
+	rows, err := q.db.Query(ctx, listFilterKeywords, customFilterID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []FilterKeyword{}
+	items := []CustomFilterKeyword{}
 	for rows.Next() {
-		var i FilterKeyword
+		var i CustomFilterKeyword
 		if err := rows.Scan(
 			&i.ID,
-			&i.FilterID,
+			&i.CustomFilterID,
 			&i.Keyword,
 			&i.WholeWord,
 			&i.CreatedAt,
@@ -245,21 +245,21 @@ func (q *Queries) ListFilterKeywords(ctx context.Context, filterID int64) ([]Fil
 }
 
 const listFilterStatuses = `-- name: ListFilterStatuses :many
-SELECT id, filter_id, status_id, created_at, updated_at FROM filter_statuses WHERE filter_id = $1
+SELECT id, custom_filter_id, status_id, created_at, updated_at FROM custom_filter_statuses WHERE custom_filter_id = $1
 `
 
-func (q *Queries) ListFilterStatuses(ctx context.Context, filterID int64) ([]FilterStatus, error) {
-	rows, err := q.db.Query(ctx, listFilterStatuses, filterID)
+func (q *Queries) ListFilterStatuses(ctx context.Context, customFilterID int64) ([]CustomFilterStatus, error) {
+	rows, err := q.db.Query(ctx, listFilterStatuses, customFilterID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []FilterStatus{}
+	items := []CustomFilterStatus{}
 	for rows.Next() {
-		var i FilterStatus
+		var i CustomFilterStatus
 		if err := rows.Scan(
 			&i.ID,
-			&i.FilterID,
+			&i.CustomFilterID,
 			&i.StatusID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -275,29 +275,29 @@ func (q *Queries) ListFilterStatuses(ctx context.Context, filterID int64) ([]Fil
 }
 
 const listFilters = `-- name: ListFilters :many
-SELECT id, account_id, title, context, action, expires_at, created_at, updated_at FROM filters 
+SELECT id, account_id, expires_at, phrase, context, created_at, updated_at, action FROM custom_filters 
 WHERE account_id = $1
 ORDER BY id DESC
 `
 
-func (q *Queries) ListFilters(ctx context.Context, accountID int64) ([]Filter, error) {
+func (q *Queries) ListFilters(ctx context.Context, accountID int64) ([]CustomFilter, error) {
 	rows, err := q.db.Query(ctx, listFilters, accountID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []Filter{}
+	items := []CustomFilter{}
 	for rows.Next() {
-		var i Filter
+		var i CustomFilter
 		if err := rows.Scan(
 			&i.ID,
 			&i.AccountID,
-			&i.Title,
-			&i.Context,
-			&i.Action,
 			&i.ExpiresAt,
+			&i.Phrase,
+			&i.Context,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Action,
 		); err != nil {
 			return nil, err
 		}
@@ -310,55 +310,55 @@ func (q *Queries) ListFilters(ctx context.Context, accountID int64) ([]Filter, e
 }
 
 const updateFilter = `-- name: UpdateFilter :one
-UPDATE filters SET
-    title = COALESCE($3, title),
+UPDATE custom_filters SET
+    phrase = COALESCE($3, phrase),
     context = COALESCE($4, context),
     action = COALESCE($5, action),
     expires_at = $6,
     updated_at = now()
 WHERE id = $1 AND account_id = $2
-RETURNING id, account_id, title, context, action, expires_at, created_at, updated_at
+RETURNING id, account_id, expires_at, phrase, context, created_at, updated_at, action
 `
 
 type UpdateFilterParams struct {
 	ID        int64              `db:"id" json:"id"`
 	AccountID int64              `db:"account_id" json:"account_id"`
-	Title     pgtype.Text        `db:"title" json:"title"`
+	Phrase    pgtype.Text        `db:"phrase" json:"phrase"`
 	Context   []string           `db:"context" json:"context"`
 	Action    pgtype.Int4        `db:"action" json:"action"`
 	ExpiresAt pgtype.Timestamptz `db:"expires_at" json:"expires_at"`
 }
 
-func (q *Queries) UpdateFilter(ctx context.Context, arg UpdateFilterParams) (Filter, error) {
+func (q *Queries) UpdateFilter(ctx context.Context, arg UpdateFilterParams) (CustomFilter, error) {
 	row := q.db.QueryRow(ctx, updateFilter,
 		arg.ID,
 		arg.AccountID,
-		arg.Title,
+		arg.Phrase,
 		arg.Context,
 		arg.Action,
 		arg.ExpiresAt,
 	)
-	var i Filter
+	var i CustomFilter
 	err := row.Scan(
 		&i.ID,
 		&i.AccountID,
-		&i.Title,
-		&i.Context,
-		&i.Action,
 		&i.ExpiresAt,
+		&i.Phrase,
+		&i.Context,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Action,
 	)
 	return i, err
 }
 
 const updateFilterKeyword = `-- name: UpdateFilterKeyword :one
-UPDATE filter_keywords SET
+UPDATE custom_filter_keywords SET
     keyword = COALESCE($2, keyword),
     whole_word = COALESCE($3, whole_word),
     updated_at = now()
 WHERE id = $1
-RETURNING id, filter_id, keyword, whole_word, created_at, updated_at
+RETURNING id, custom_filter_id, keyword, whole_word, created_at, updated_at
 `
 
 type UpdateFilterKeywordParams struct {
@@ -367,12 +367,12 @@ type UpdateFilterKeywordParams struct {
 	WholeWord pgtype.Bool `db:"whole_word" json:"whole_word"`
 }
 
-func (q *Queries) UpdateFilterKeyword(ctx context.Context, arg UpdateFilterKeywordParams) (FilterKeyword, error) {
+func (q *Queries) UpdateFilterKeyword(ctx context.Context, arg UpdateFilterKeywordParams) (CustomFilterKeyword, error) {
 	row := q.db.QueryRow(ctx, updateFilterKeyword, arg.ID, arg.Keyword, arg.WholeWord)
-	var i FilterKeyword
+	var i CustomFilterKeyword
 	err := row.Scan(
 		&i.ID,
-		&i.FilterID,
+		&i.CustomFilterID,
 		&i.Keyword,
 		&i.WholeWord,
 		&i.CreatedAt,

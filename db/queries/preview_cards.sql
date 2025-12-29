@@ -48,6 +48,12 @@ SELECT pc.* FROM preview_cards pc
 JOIN preview_cards_statuses pcs ON pcs.preview_card_id = pc.id
 WHERE pcs.status_id = $1;
 
+-- name: GetPreviewCardsByStatusIDs :many
+SELECT pcs.status_id, pc.* FROM preview_cards pc
+JOIN preview_cards_statuses pcs ON pcs.preview_card_id = pc.id
+WHERE pcs.status_id = ANY($1::bigint[])
+ORDER BY pcs.status_id, pc.id;
+
 -- name: AttachPreviewCardToStatus :exec
 INSERT INTO preview_cards_statuses (preview_card_id, status_id, url)
 VALUES ($1, $2, $3)

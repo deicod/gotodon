@@ -16,7 +16,7 @@ INSERT INTO scheduled_statuses (
     account_id, scheduled_at, params
 ) VALUES (
     $1, $2, $3
-) RETURNING id, account_id, scheduled_at, params, created_at, updated_at
+) RETURNING id, account_id, scheduled_at, params
 `
 
 type CreateScheduledStatusParams struct {
@@ -33,8 +33,6 @@ func (q *Queries) CreateScheduledStatus(ctx context.Context, arg CreateScheduled
 		&i.AccountID,
 		&i.ScheduledAt,
 		&i.Params,
-		&i.CreatedAt,
-		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -54,7 +52,7 @@ func (q *Queries) DeleteScheduledStatus(ctx context.Context, arg DeleteScheduled
 }
 
 const getScheduledStatus = `-- name: GetScheduledStatus :one
-SELECT id, account_id, scheduled_at, params, created_at, updated_at FROM scheduled_statuses WHERE id = $1 AND account_id = $2
+SELECT id, account_id, scheduled_at, params FROM scheduled_statuses WHERE id = $1 AND account_id = $2
 `
 
 type GetScheduledStatusParams struct {
@@ -70,14 +68,12 @@ func (q *Queries) GetScheduledStatus(ctx context.Context, arg GetScheduledStatus
 		&i.AccountID,
 		&i.ScheduledAt,
 		&i.Params,
-		&i.CreatedAt,
-		&i.UpdatedAt,
 	)
 	return i, err
 }
 
 const listDueScheduledStatuses = `-- name: ListDueScheduledStatuses :many
-SELECT id, account_id, scheduled_at, params, created_at, updated_at FROM scheduled_statuses 
+SELECT id, account_id, scheduled_at, params FROM scheduled_statuses 
 WHERE scheduled_at <= now() 
 ORDER BY scheduled_at ASC
 `
@@ -96,8 +92,6 @@ func (q *Queries) ListDueScheduledStatuses(ctx context.Context) ([]ScheduledStat
 			&i.AccountID,
 			&i.ScheduledAt,
 			&i.Params,
-			&i.CreatedAt,
-			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -110,7 +104,7 @@ func (q *Queries) ListDueScheduledStatuses(ctx context.Context) ([]ScheduledStat
 }
 
 const listScheduledStatuses = `-- name: ListScheduledStatuses :many
-SELECT id, account_id, scheduled_at, params, created_at, updated_at FROM scheduled_statuses 
+SELECT id, account_id, scheduled_at, params FROM scheduled_statuses 
 WHERE account_id = $1 
 ORDER BY scheduled_at ASC
 LIMIT $2 OFFSET $3
@@ -136,8 +130,6 @@ func (q *Queries) ListScheduledStatuses(ctx context.Context, arg ListScheduledSt
 			&i.AccountID,
 			&i.ScheduledAt,
 			&i.Params,
-			&i.CreatedAt,
-			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -154,7 +146,7 @@ UPDATE scheduled_statuses SET
     scheduled_at = COALESCE($3, scheduled_at),
     updated_at = now()
 WHERE id = $1 AND account_id = $2
-RETURNING id, account_id, scheduled_at, params, created_at, updated_at
+RETURNING id, account_id, scheduled_at, params
 `
 
 type UpdateScheduledStatusParams struct {
@@ -171,8 +163,6 @@ func (q *Queries) UpdateScheduledStatus(ctx context.Context, arg UpdateScheduled
 		&i.AccountID,
 		&i.ScheduledAt,
 		&i.Params,
-		&i.CreatedAt,
-		&i.UpdatedAt,
 	)
 	return i, err
 }

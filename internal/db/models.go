@@ -59,6 +59,7 @@ type Account struct {
 	RequestedReviewAt          pgtype.Timestamptz `db:"requested_review_at" json:"requested_review_at"`
 	Indexable                  bool               `db:"indexable" json:"indexable"`
 	AttributionDomains         []string           `db:"attribution_domains" json:"attribution_domains"`
+	IDScheme                   pgtype.Int4        `db:"id_scheme" json:"id_scheme"`
 }
 
 type AccountAlias struct {
@@ -66,6 +67,24 @@ type AccountAlias struct {
 	AccountID int64              `db:"account_id" json:"account_id"`
 	Acct      string             `db:"acct" json:"acct"`
 	Uri       string             `db:"uri" json:"uri"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type AccountConversation struct {
+	ID                    int64       `db:"id" json:"id"`
+	AccountID             int64       `db:"account_id" json:"account_id"`
+	ConversationID        int64       `db:"conversation_id" json:"conversation_id"`
+	ParticipantAccountIds []int64     `db:"participant_account_ids" json:"participant_account_ids"`
+	StatusIds             []int64     `db:"status_ids" json:"status_ids"`
+	LastStatusID          pgtype.Int8 `db:"last_status_id" json:"last_status_id"`
+	LockVersion           int32       `db:"lock_version" json:"lock_version"`
+	Unread                bool        `db:"unread" json:"unread"`
+}
+
+type AccountDeletionRequest struct {
+	ID        int64              `db:"id" json:"id"`
+	AccountID int64              `db:"account_id" json:"account_id"`
 	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
@@ -88,6 +107,15 @@ type AccountMigration struct {
 	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
+type AccountModerationNote struct {
+	ID              int64              `db:"id" json:"id"`
+	Content         string             `db:"content" json:"content"`
+	AccountID       int64              `db:"account_id" json:"account_id"`
+	TargetAccountID int64              `db:"target_account_id" json:"target_account_id"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
 type AccountNote struct {
 	ID              int64              `db:"id" json:"id"`
 	AccountID       int64              `db:"account_id" json:"account_id"`
@@ -105,6 +133,16 @@ type AccountPin struct {
 	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
+type AccountRelationshipSeveranceEvent struct {
+	ID                           int64              `db:"id" json:"id"`
+	AccountID                    int64              `db:"account_id" json:"account_id"`
+	RelationshipSeveranceEventID int64              `db:"relationship_severance_event_id" json:"relationship_severance_event_id"`
+	CreatedAt                    pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt                    pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	FollowersCount               int32              `db:"followers_count" json:"followers_count"`
+	FollowingCount               int32              `db:"following_count" json:"following_count"`
+}
+
 type AccountStat struct {
 	ID             int64              `db:"id" json:"id"`
 	AccountID      int64              `db:"account_id" json:"account_id"`
@@ -116,18 +154,75 @@ type AccountStat struct {
 	LastStatusAt   pgtype.Timestamptz `db:"last_status_at" json:"last_status_at"`
 }
 
+type AccountStatusesCleanupPolicy struct {
+	ID               int64              `db:"id" json:"id"`
+	AccountID        int64              `db:"account_id" json:"account_id"`
+	Enabled          bool               `db:"enabled" json:"enabled"`
+	MinStatusAge     int32              `db:"min_status_age" json:"min_status_age"`
+	KeepDirect       bool               `db:"keep_direct" json:"keep_direct"`
+	KeepPinned       bool               `db:"keep_pinned" json:"keep_pinned"`
+	KeepPolls        bool               `db:"keep_polls" json:"keep_polls"`
+	KeepMedia        bool               `db:"keep_media" json:"keep_media"`
+	KeepSelfFav      bool               `db:"keep_self_fav" json:"keep_self_fav"`
+	KeepSelfBookmark bool               `db:"keep_self_bookmark" json:"keep_self_bookmark"`
+	MinFavs          pgtype.Int4        `db:"min_favs" json:"min_favs"`
+	MinReblogs       pgtype.Int4        `db:"min_reblogs" json:"min_reblogs"`
+	CreatedAt        pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type AccountWarning struct {
+	ID              int64              `db:"id" json:"id"`
+	AccountID       pgtype.Int8        `db:"account_id" json:"account_id"`
+	TargetAccountID pgtype.Int8        `db:"target_account_id" json:"target_account_id"`
+	Action          int32              `db:"action" json:"action"`
+	Text            string             `db:"text" json:"text"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ReportID        pgtype.Int8        `db:"report_id" json:"report_id"`
+	StatusIds       []string           `db:"status_ids" json:"status_ids"`
+	OverruledAt     pgtype.Timestamptz `db:"overruled_at" json:"overruled_at"`
+}
+
+type AccountWarningPreset struct {
+	ID        int64              `db:"id" json:"id"`
+	Text      string             `db:"text" json:"text"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	Title     string             `db:"title" json:"title"`
+}
+
+type AccountsTag struct {
+	AccountID int64 `db:"account_id" json:"account_id"`
+	TagID     int64 `db:"tag_id" json:"tag_id"`
+}
+
+type AdminActionLog struct {
+	ID              int64              `db:"id" json:"id"`
+	AccountID       int64              `db:"account_id" json:"account_id"`
+	Action          string             `db:"action" json:"action"`
+	TargetType      pgtype.Text        `db:"target_type" json:"target_type"`
+	TargetID        pgtype.Int8        `db:"target_id" json:"target_id"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	HumanIdentifier pgtype.Text        `db:"human_identifier" json:"human_identifier"`
+	RouteParam      pgtype.Text        `db:"route_param" json:"route_param"`
+	Permalink       pgtype.Text        `db:"permalink" json:"permalink"`
+}
+
 type Announcement struct {
-	ID          int64              `db:"id" json:"id"`
-	Text        string             `db:"text" json:"text"`
-	Published   bool               `db:"published" json:"published"`
-	AllDay      bool               `db:"all_day" json:"all_day"`
-	ScheduledAt pgtype.Timestamptz `db:"scheduled_at" json:"scheduled_at"`
-	StartsAt    pgtype.Timestamptz `db:"starts_at" json:"starts_at"`
-	EndsAt      pgtype.Timestamptz `db:"ends_at" json:"ends_at"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
-	PublishedAt pgtype.Timestamptz `db:"published_at" json:"published_at"`
-	StatusIds   []int64            `db:"status_ids" json:"status_ids"`
+	ID                 int64              `db:"id" json:"id"`
+	Text               string             `db:"text" json:"text"`
+	Published          bool               `db:"published" json:"published"`
+	AllDay             bool               `db:"all_day" json:"all_day"`
+	ScheduledAt        pgtype.Timestamptz `db:"scheduled_at" json:"scheduled_at"`
+	StartsAt           pgtype.Timestamptz `db:"starts_at" json:"starts_at"`
+	EndsAt             pgtype.Timestamptz `db:"ends_at" json:"ends_at"`
+	CreatedAt          pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	PublishedAt        pgtype.Timestamptz `db:"published_at" json:"published_at"`
+	StatusIds          []int64            `db:"status_ids" json:"status_ids"`
+	NotificationSentAt pgtype.Timestamptz `db:"notification_sent_at" json:"notification_sent_at"`
 }
 
 type AnnouncementMute struct {
@@ -148,6 +243,38 @@ type AnnouncementReaction struct {
 	UpdatedAt      pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
+type AnnualReportStatusesPerAccountCount struct {
+	ID            int64 `db:"id" json:"id"`
+	Year          int32 `db:"year" json:"year"`
+	AccountID     int64 `db:"account_id" json:"account_id"`
+	StatusesCount int64 `db:"statuses_count" json:"statuses_count"`
+}
+
+type Appeal struct {
+	ID                  int64              `db:"id" json:"id"`
+	AccountID           int64              `db:"account_id" json:"account_id"`
+	AccountWarningID    int64              `db:"account_warning_id" json:"account_warning_id"`
+	Text                string             `db:"text" json:"text"`
+	ApprovedAt          pgtype.Timestamptz `db:"approved_at" json:"approved_at"`
+	ApprovedByAccountID pgtype.Int8        `db:"approved_by_account_id" json:"approved_by_account_id"`
+	RejectedAt          pgtype.Timestamptz `db:"rejected_at" json:"rejected_at"`
+	RejectedByAccountID pgtype.Int8        `db:"rejected_by_account_id" json:"rejected_by_account_id"`
+	CreatedAt           pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type Backup struct {
+	ID              int64              `db:"id" json:"id"`
+	UserID          pgtype.Int8        `db:"user_id" json:"user_id"`
+	DumpFileName    pgtype.Text        `db:"dump_file_name" json:"dump_file_name"`
+	DumpContentType pgtype.Text        `db:"dump_content_type" json:"dump_content_type"`
+	DumpUpdatedAt   pgtype.Timestamptz `db:"dump_updated_at" json:"dump_updated_at"`
+	Processed       bool               `db:"processed" json:"processed"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	DumpFileSize    pgtype.Int8        `db:"dump_file_size" json:"dump_file_size"`
+}
+
 type Block struct {
 	ID              int64              `db:"id" json:"id"`
 	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
@@ -163,6 +290,30 @@ type Bookmark struct {
 	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	AccountID int64              `db:"account_id" json:"account_id"`
 	StatusID  int64              `db:"status_id" json:"status_id"`
+}
+
+type BulkImport struct {
+	ID               int64              `db:"id" json:"id"`
+	Type             int32              `db:"type" json:"type"`
+	State            int32              `db:"state" json:"state"`
+	TotalItems       int32              `db:"total_items" json:"total_items"`
+	ImportedItems    int32              `db:"imported_items" json:"imported_items"`
+	ProcessedItems   int32              `db:"processed_items" json:"processed_items"`
+	FinishedAt       pgtype.Timestamptz `db:"finished_at" json:"finished_at"`
+	Overwrite        bool               `db:"overwrite" json:"overwrite"`
+	LikelyMismatched bool               `db:"likely_mismatched" json:"likely_mismatched"`
+	OriginalFilename string             `db:"original_filename" json:"original_filename"`
+	AccountID        int64              `db:"account_id" json:"account_id"`
+	CreatedAt        pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type BulkImportRow struct {
+	ID           int64              `db:"id" json:"id"`
+	BulkImportID int64              `db:"bulk_import_id" json:"bulk_import_id"`
+	Data         []byte             `db:"data" json:"data"`
+	CreatedAt    pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 type CanonicalEmailBlock struct {
@@ -183,11 +334,9 @@ type Conversation struct {
 }
 
 type ConversationMute struct {
-	ID             int64              `db:"id" json:"id"`
-	ConversationID int64              `db:"conversation_id" json:"conversation_id"`
-	AccountID      int64              `db:"account_id" json:"account_id"`
-	CreatedAt      pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID             int64 `db:"id" json:"id"`
+	ConversationID int64 `db:"conversation_id" json:"conversation_id"`
+	AccountID      int64 `db:"account_id" json:"account_id"`
 }
 
 type CustomEmoji struct {
@@ -206,6 +355,41 @@ type CustomEmoji struct {
 	VisibleInPicker           bool               `db:"visible_in_picker" json:"visible_in_picker"`
 	CategoryID                pgtype.Int8        `db:"category_id" json:"category_id"`
 	ImageStorageSchemaVersion pgtype.Int4        `db:"image_storage_schema_version" json:"image_storage_schema_version"`
+}
+
+type CustomEmojiCategory struct {
+	ID        int64              `db:"id" json:"id"`
+	Name      pgtype.Text        `db:"name" json:"name"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type CustomFilter struct {
+	ID        int64              `db:"id" json:"id"`
+	AccountID int64              `db:"account_id" json:"account_id"`
+	ExpiresAt pgtype.Timestamptz `db:"expires_at" json:"expires_at"`
+	Phrase    string             `db:"phrase" json:"phrase"`
+	Context   []string           `db:"context" json:"context"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	Action    int32              `db:"action" json:"action"`
+}
+
+type CustomFilterKeyword struct {
+	ID             int64              `db:"id" json:"id"`
+	CustomFilterID int64              `db:"custom_filter_id" json:"custom_filter_id"`
+	Keyword        string             `db:"keyword" json:"keyword"`
+	WholeWord      bool               `db:"whole_word" json:"whole_word"`
+	CreatedAt      pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type CustomFilterStatus struct {
+	ID             int64              `db:"id" json:"id"`
+	CustomFilterID int64              `db:"custom_filter_id" json:"custom_filter_id"`
+	StatusID       int64              `db:"status_id" json:"status_id"`
+	CreatedAt      pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 type DomainAllow struct {
@@ -228,6 +412,75 @@ type DomainBlock struct {
 	Obfuscate      bool               `db:"obfuscate" json:"obfuscate"`
 }
 
+type EmailDomainBlock struct {
+	ID                int64              `db:"id" json:"id"`
+	Domain            string             `db:"domain" json:"domain"`
+	CreatedAt         pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ParentID          pgtype.Int8        `db:"parent_id" json:"parent_id"`
+	AllowWithApproval bool               `db:"allow_with_approval" json:"allow_with_approval"`
+}
+
+type FaspBackfillRequest struct {
+	ID             int64              `db:"id" json:"id"`
+	Category       string             `db:"category" json:"category"`
+	MaxCount       int32              `db:"max_count" json:"max_count"`
+	Cursor         pgtype.Text        `db:"cursor" json:"cursor"`
+	Fulfilled      bool               `db:"fulfilled" json:"fulfilled"`
+	FaspProviderID int64              `db:"fasp_provider_id" json:"fasp_provider_id"`
+	CreatedAt      pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type FaspDebugCallback struct {
+	ID             int64              `db:"id" json:"id"`
+	FaspProviderID int64              `db:"fasp_provider_id" json:"fasp_provider_id"`
+	Ip             string             `db:"ip" json:"ip"`
+	RequestBody    string             `db:"request_body" json:"request_body"`
+	CreatedAt      pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type FaspFollowRecommendation struct {
+	ID                   int64              `db:"id" json:"id"`
+	RequestingAccountID  int64              `db:"requesting_account_id" json:"requesting_account_id"`
+	RecommendedAccountID int64              `db:"recommended_account_id" json:"recommended_account_id"`
+	CreatedAt            pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type FaspProvider struct {
+	ID                   int64              `db:"id" json:"id"`
+	Confirmed            bool               `db:"confirmed" json:"confirmed"`
+	Name                 string             `db:"name" json:"name"`
+	BaseUrl              string             `db:"base_url" json:"base_url"`
+	SignInUrl            pgtype.Text        `db:"sign_in_url" json:"sign_in_url"`
+	RemoteIdentifier     string             `db:"remote_identifier" json:"remote_identifier"`
+	ProviderPublicKeyPem string             `db:"provider_public_key_pem" json:"provider_public_key_pem"`
+	ServerPrivateKeyPem  string             `db:"server_private_key_pem" json:"server_private_key_pem"`
+	Capabilities         []byte             `db:"capabilities" json:"capabilities"`
+	PrivacyPolicy        []byte             `db:"privacy_policy" json:"privacy_policy"`
+	ContactEmail         pgtype.Text        `db:"contact_email" json:"contact_email"`
+	FediverseAccount     pgtype.Text        `db:"fediverse_account" json:"fediverse_account"`
+	CreatedAt            pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	DeliveryLastFailedAt pgtype.Timestamptz `db:"delivery_last_failed_at" json:"delivery_last_failed_at"`
+}
+
+type FaspSubscription struct {
+	ID                 int64              `db:"id" json:"id"`
+	Category           string             `db:"category" json:"category"`
+	SubscriptionType   string             `db:"subscription_type" json:"subscription_type"`
+	MaxBatchSize       int32              `db:"max_batch_size" json:"max_batch_size"`
+	ThresholdTimeframe pgtype.Int4        `db:"threshold_timeframe" json:"threshold_timeframe"`
+	ThresholdShares    pgtype.Int4        `db:"threshold_shares" json:"threshold_shares"`
+	ThresholdLikes     pgtype.Int4        `db:"threshold_likes" json:"threshold_likes"`
+	ThresholdReplies   pgtype.Int4        `db:"threshold_replies" json:"threshold_replies"`
+	FaspProviderID     int64              `db:"fasp_provider_id" json:"fasp_provider_id"`
+	CreatedAt          pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
 type Favourite struct {
 	ID        int64              `db:"id" json:"id"`
 	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
@@ -247,34 +500,6 @@ type FeaturedTag struct {
 	UpdatedAt     pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
-type Filter struct {
-	ID        int64              `db:"id" json:"id"`
-	AccountID int64              `db:"account_id" json:"account_id"`
-	Title     string             `db:"title" json:"title"`
-	Context   []string           `db:"context" json:"context"`
-	Action    int32              `db:"action" json:"action"`
-	ExpiresAt pgtype.Timestamptz `db:"expires_at" json:"expires_at"`
-	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
-}
-
-type FilterKeyword struct {
-	ID        int64              `db:"id" json:"id"`
-	FilterID  int64              `db:"filter_id" json:"filter_id"`
-	Keyword   string             `db:"keyword" json:"keyword"`
-	WholeWord bool               `db:"whole_word" json:"whole_word"`
-	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
-}
-
-type FilterStatus struct {
-	ID        int64              `db:"id" json:"id"`
-	FilterID  int64              `db:"filter_id" json:"filter_id"`
-	StatusID  int64              `db:"status_id" json:"status_id"`
-	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
-}
-
 type Follow struct {
 	ID              int64              `db:"id" json:"id"`
 	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
@@ -285,6 +510,21 @@ type Follow struct {
 	Uri             pgtype.Text        `db:"uri" json:"uri"`
 	Notify          bool               `db:"notify" json:"notify"`
 	Languages       []string           `db:"languages" json:"languages"`
+}
+
+type FollowRecommendationMute struct {
+	ID              int64              `db:"id" json:"id"`
+	AccountID       int64              `db:"account_id" json:"account_id"`
+	TargetAccountID int64              `db:"target_account_id" json:"target_account_id"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type FollowRecommendationSuppression struct {
+	ID        int64              `db:"id" json:"id"`
+	AccountID int64              `db:"account_id" json:"account_id"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 type FollowRequest struct {
@@ -310,6 +550,37 @@ type GeneratedAnnualReport struct {
 	UpdatedAt     pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
+type Identity struct {
+	ID        int64              `db:"id" json:"id"`
+	Provider  string             `db:"provider" json:"provider"`
+	Uid       string             `db:"uid" json:"uid"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	UserID    pgtype.Int8        `db:"user_id" json:"user_id"`
+}
+
+type InstanceModerationNote struct {
+	ID        int64              `db:"id" json:"id"`
+	Domain    string             `db:"domain" json:"domain"`
+	AccountID int64              `db:"account_id" json:"account_id"`
+	Content   pgtype.Text        `db:"content" json:"content"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type Invite struct {
+	ID         int64              `db:"id" json:"id"`
+	UserID     int64              `db:"user_id" json:"user_id"`
+	Code       string             `db:"code" json:"code"`
+	ExpiresAt  pgtype.Timestamptz `db:"expires_at" json:"expires_at"`
+	MaxUses    pgtype.Int4        `db:"max_uses" json:"max_uses"`
+	Uses       int32              `db:"uses" json:"uses"`
+	CreatedAt  pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	Autofollow bool               `db:"autofollow" json:"autofollow"`
+	Comment    pgtype.Text        `db:"comment" json:"comment"`
+}
+
 type IpBlock struct {
 	ID        int64              `db:"id" json:"id"`
 	Ip        netip.Addr         `db:"ip" json:"ip"`
@@ -331,12 +602,11 @@ type List struct {
 }
 
 type ListAccount struct {
-	ID        int64              `db:"id" json:"id"`
-	ListID    int64              `db:"list_id" json:"list_id"`
-	AccountID int64              `db:"account_id" json:"account_id"`
-	FollowID  pgtype.Int8        `db:"follow_id" json:"follow_id"`
-	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              int64       `db:"id" json:"id"`
+	ListID          int64       `db:"list_id" json:"list_id"`
+	AccountID       int64       `db:"account_id" json:"account_id"`
+	FollowID        pgtype.Int8 `db:"follow_id" json:"follow_id"`
+	FollowRequestID pgtype.Int8 `db:"follow_request_id" json:"follow_request_id"`
 }
 
 type LoginActivity struct {
@@ -449,6 +719,20 @@ type NotificationRequest struct {
 	UpdatedAt          pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
+type OauthAccessGrant struct {
+	ID                  int64              `db:"id" json:"id"`
+	Token               string             `db:"token" json:"token"`
+	ExpiresIn           int32              `db:"expires_in" json:"expires_in"`
+	RedirectUri         string             `db:"redirect_uri" json:"redirect_uri"`
+	CreatedAt           pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	RevokedAt           pgtype.Timestamptz `db:"revoked_at" json:"revoked_at"`
+	Scopes              pgtype.Text        `db:"scopes" json:"scopes"`
+	ApplicationID       int64              `db:"application_id" json:"application_id"`
+	ResourceOwnerID     int64              `db:"resource_owner_id" json:"resource_owner_id"`
+	CodeChallenge       pgtype.Text        `db:"code_challenge" json:"code_challenge"`
+	CodeChallengeMethod pgtype.Text        `db:"code_challenge_method" json:"code_challenge_method"`
+}
+
 type OauthAccessToken struct {
 	ID              int64              `db:"id" json:"id"`
 	Token           string             `db:"token" json:"token"`
@@ -479,13 +763,22 @@ type OauthApplication struct {
 	Confidential bool               `db:"confidential" json:"confidential"`
 }
 
+type PgheroSpaceStat struct {
+	ID         int64              `db:"id" json:"id"`
+	Database   pgtype.Text        `db:"database" json:"database"`
+	Schema     pgtype.Text        `db:"schema" json:"schema"`
+	Relation   pgtype.Text        `db:"relation" json:"relation"`
+	Size       pgtype.Int8        `db:"size" json:"size"`
+	CapturedAt pgtype.Timestamptz `db:"captured_at" json:"captured_at"`
+}
+
 type Poll struct {
 	ID            int64              `db:"id" json:"id"`
 	AccountID     pgtype.Int8        `db:"account_id" json:"account_id"`
 	StatusID      pgtype.Int8        `db:"status_id" json:"status_id"`
 	ExpiresAt     pgtype.Timestamptz `db:"expires_at" json:"expires_at"`
 	Options       []string           `db:"options" json:"options"`
-	CachedTallies []byte             `db:"cached_tallies" json:"cached_tallies"`
+	CachedTallies []int64            `db:"cached_tallies" json:"cached_tallies"`
 	Multiple      bool               `db:"multiple" json:"multiple"`
 	HideTotals    bool               `db:"hide_totals" json:"hide_totals"`
 	VotesCount    int64              `db:"votes_count" json:"votes_count"`
@@ -593,6 +886,24 @@ type Quote struct {
 	Legacy          bool               `db:"legacy" json:"legacy"`
 }
 
+type RelationshipSeveranceEvent struct {
+	ID         int64              `db:"id" json:"id"`
+	Type       int32              `db:"type" json:"type"`
+	TargetName string             `db:"target_name" json:"target_name"`
+	Purged     bool               `db:"purged" json:"purged"`
+	CreatedAt  pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type Relay struct {
+	ID               int64              `db:"id" json:"id"`
+	InboxUrl         string             `db:"inbox_url" json:"inbox_url"`
+	FollowActivityID pgtype.Text        `db:"follow_activity_id" json:"follow_activity_id"`
+	CreatedAt        pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	State            int32              `db:"state" json:"state"`
+}
+
 type Report struct {
 	ID                     int64              `db:"id" json:"id"`
 	StatusIds              []int64            `db:"status_ids" json:"status_ids"`
@@ -606,8 +917,18 @@ type Report struct {
 	Forwarded              pgtype.Bool        `db:"forwarded" json:"forwarded"`
 	Category               int32              `db:"category" json:"category"`
 	AssignedAccountID      pgtype.Int8        `db:"assigned_account_id" json:"assigned_account_id"`
-	RuleIds                []int32            `db:"rule_ids" json:"rule_ids"`
+	RuleIds                []int64            `db:"rule_ids" json:"rule_ids"`
 	Uri                    pgtype.Text        `db:"uri" json:"uri"`
+	ApplicationID          pgtype.Int8        `db:"application_id" json:"application_id"`
+}
+
+type ReportNote struct {
+	ID        int64              `db:"id" json:"id"`
+	Content   string             `db:"content" json:"content"`
+	ReportID  int64              `db:"report_id" json:"report_id"`
+	AccountID int64              `db:"account_id" json:"account_id"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 type Rule struct {
@@ -635,8 +956,6 @@ type ScheduledStatus struct {
 	AccountID   int64              `db:"account_id" json:"account_id"`
 	ScheduledAt pgtype.Timestamptz `db:"scheduled_at" json:"scheduled_at"`
 	Params      []byte             `db:"params" json:"params"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 type SessionActivation struct {
@@ -657,6 +976,42 @@ type Setting struct {
 	Value     pgtype.Text        `db:"value" json:"value"`
 	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type SeveredRelationship struct {
+	ID                           int64              `db:"id" json:"id"`
+	RelationshipSeveranceEventID int64              `db:"relationship_severance_event_id" json:"relationship_severance_event_id"`
+	LocalAccountID               int64              `db:"local_account_id" json:"local_account_id"`
+	RemoteAccountID              int64              `db:"remote_account_id" json:"remote_account_id"`
+	Direction                    int32              `db:"direction" json:"direction"`
+	ShowReblogs                  pgtype.Bool        `db:"show_reblogs" json:"show_reblogs"`
+	Notify                       pgtype.Bool        `db:"notify" json:"notify"`
+	Languages                    []string           `db:"languages" json:"languages"`
+	CreatedAt                    pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt                    pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type SiteUpload struct {
+	ID              int64              `db:"id" json:"id"`
+	Var             string             `db:"var" json:"var"`
+	FileFileName    pgtype.Text        `db:"file_file_name" json:"file_file_name"`
+	FileContentType pgtype.Text        `db:"file_content_type" json:"file_content_type"`
+	FileFileSize    pgtype.Int4        `db:"file_file_size" json:"file_file_size"`
+	FileUpdatedAt   pgtype.Timestamptz `db:"file_updated_at" json:"file_updated_at"`
+	Meta            []byte             `db:"meta" json:"meta"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	Blurhash        pgtype.Text        `db:"blurhash" json:"blurhash"`
+}
+
+type SoftwareUpdate struct {
+	ID           int64              `db:"id" json:"id"`
+	Version      string             `db:"version" json:"version"`
+	Urgent       bool               `db:"urgent" json:"urgent"`
+	Type         int32              `db:"type" json:"type"`
+	ReleaseNotes string             `db:"release_notes" json:"release_notes"`
+	CreatedAt    pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 type Status struct {
@@ -684,6 +1039,7 @@ type Status struct {
 	Trendable                 pgtype.Bool        `db:"trendable" json:"trendable"`
 	OrderedMediaAttachmentIds []int64            `db:"ordered_media_attachment_ids" json:"ordered_media_attachment_ids"`
 	FetchedRepliesAt          pgtype.Timestamptz `db:"fetched_replies_at" json:"fetched_replies_at"`
+	QuoteApprovalPolicy       int32              `db:"quote_approval_policy" json:"quote_approval_policy"`
 }
 
 type StatusEdit struct {
@@ -770,6 +1126,17 @@ type TagTrend struct {
 	Language string  `db:"language" json:"language"`
 }
 
+type TermsOfService struct {
+	ID                 int64              `db:"id" json:"id"`
+	Text               string             `db:"text" json:"text"`
+	Changelog          string             `db:"changelog" json:"changelog"`
+	PublishedAt        pgtype.Timestamptz `db:"published_at" json:"published_at"`
+	NotificationSentAt pgtype.Timestamptz `db:"notification_sent_at" json:"notification_sent_at"`
+	CreatedAt          pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	EffectiveDate      pgtype.Date        `db:"effective_date" json:"effective_date"`
+}
+
 type Tombstone struct {
 	ID          int64              `db:"id" json:"id"`
 	AccountID   int64              `db:"account_id" json:"account_id"`
@@ -777,6 +1144,13 @@ type Tombstone struct {
 	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	ByModerator pgtype.Bool        `db:"by_moderator" json:"by_moderator"`
+}
+
+type UnavailableDomain struct {
+	ID        int64              `db:"id" json:"id"`
+	Domain    string             `db:"domain" json:"domain"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 type User struct {
@@ -814,6 +1188,16 @@ type User struct {
 	Settings               pgtype.Text        `db:"settings" json:"settings"`
 	TimeZone               pgtype.Text        `db:"time_zone" json:"time_zone"`
 	OtpSecret              pgtype.Text        `db:"otp_secret" json:"otp_secret"`
+	AgeVerifiedAt          pgtype.Timestamptz `db:"age_verified_at" json:"age_verified_at"`
+	RequireTosInterstitial bool               `db:"require_tos_interstitial" json:"require_tos_interstitial"`
+}
+
+type UserInviteRequest struct {
+	ID        int64              `db:"id" json:"id"`
+	UserID    int64              `db:"user_id" json:"user_id"`
+	Text      pgtype.Text        `db:"text" json:"text"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 type UserRole struct {
@@ -827,6 +1211,16 @@ type UserRole struct {
 	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
+type UsernameBlock struct {
+	ID                 int64              `db:"id" json:"id"`
+	Username           string             `db:"username" json:"username"`
+	NormalizedUsername string             `db:"normalized_username" json:"normalized_username"`
+	Exact              bool               `db:"exact" json:"exact"`
+	AllowWithApproval  bool               `db:"allow_with_approval" json:"allow_with_approval"`
+	CreatedAt          pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
 type WebPushSubscription struct {
 	ID            int64              `db:"id" json:"id"`
 	Endpoint      string             `db:"endpoint" json:"endpoint"`
@@ -837,6 +1231,15 @@ type WebPushSubscription struct {
 	UpdatedAt     pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	AccessTokenID pgtype.Int8        `db:"access_token_id" json:"access_token_id"`
 	UserID        pgtype.Int8        `db:"user_id" json:"user_id"`
+	Standard      bool               `db:"standard" json:"standard"`
+}
+
+type WebSetting struct {
+	ID        int64              `db:"id" json:"id"`
+	Data      []byte             `db:"data" json:"data"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	UserID    int64              `db:"user_id" json:"user_id"`
 }
 
 type WebauthnCredential struct {
@@ -848,4 +1251,15 @@ type WebauthnCredential struct {
 	UserID     pgtype.Int8        `db:"user_id" json:"user_id"`
 	CreatedAt  pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt  pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type Webhook struct {
+	ID        int64              `db:"id" json:"id"`
+	Url       string             `db:"url" json:"url"`
+	Events    []string           `db:"events" json:"events"`
+	Secret    string             `db:"secret" json:"secret"`
+	Enabled   bool               `db:"enabled" json:"enabled"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	Template  pgtype.Text        `db:"template" json:"template"`
 }

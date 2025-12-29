@@ -188,6 +188,23 @@ func TestProcessImage(t *testing.T) {
 	}
 }
 
+func TestGenerateThumbnail(t *testing.T) {
+	testImage := createTestImage(800, 600)
+	thumb, err := GenerateThumbnail(testImage, "image/png")
+	if err != nil {
+		t.Fatalf("GenerateThumbnail() error = %v", err)
+	}
+	if thumb.Width != 400 || thumb.Height != 300 {
+		t.Fatalf("thumbnail size = %dx%d, want 400x300", thumb.Width, thumb.Height)
+	}
+	if thumb.ContentType != "image/png" {
+		t.Fatalf("thumbnail ContentType = %q, want image/png", thumb.ContentType)
+	}
+	if len(thumb.Data) == 0 {
+		t.Fatal("thumbnail data should not be empty")
+	}
+}
+
 func TestCalculateThumbnailSize(t *testing.T) {
 	tests := []struct {
 		width, height int

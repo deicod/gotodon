@@ -99,7 +99,7 @@ func (q *Queries) AdminListTrendingLinks(ctx context.Context, limit int32) ([]Pr
 }
 
 const adminListTrendingStatuses = `-- name: AdminListTrendingStatuses :many
-SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at FROM statuses s
+SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at, s.quote_approval_policy FROM statuses s
 JOIN status_stats ss ON s.id = ss.status_id
 WHERE s.created_at > NOW() - INTERVAL '24 hours'
   AND s.visibility = 0
@@ -142,6 +142,7 @@ func (q *Queries) AdminListTrendingStatuses(ctx context.Context, limit int32) ([
 			&i.Trendable,
 			&i.OrderedMediaAttachmentIds,
 			&i.FetchedRepliesAt,
+			&i.QuoteApprovalPolicy,
 		); err != nil {
 			return nil, err
 		}
@@ -288,7 +289,7 @@ UPDATE statuses
 SET trendable = $2,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at
+RETURNING id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at, quote_approval_policy
 `
 
 type AdminUpdateStatusTrendableParams struct {
@@ -324,6 +325,7 @@ func (q *Queries) AdminUpdateStatusTrendable(ctx context.Context, arg AdminUpdat
 		&i.Trendable,
 		&i.OrderedMediaAttachmentIds,
 		&i.FetchedRepliesAt,
+		&i.QuoteApprovalPolicy,
 	)
 	return i, err
 }

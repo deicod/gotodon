@@ -94,7 +94,7 @@ func (q *Queries) ListAnnouncementReactions(ctx context.Context, announcementID 
 }
 
 const listAnnouncements = `-- name: ListAnnouncements :many
-SELECT a.id, a.text, a.published, a.all_day, a.scheduled_at, a.starts_at, a.ends_at, a.created_at, a.updated_at, a.published_at, a.status_ids 
+SELECT a.id, a.text, a.published, a.all_day, a.scheduled_at, a.starts_at, a.ends_at, a.created_at, a.updated_at, a.published_at, a.status_ids, a.notification_sent_at 
 FROM announcements a
 LEFT JOIN announcement_mutes am ON a.id = am.announcement_id AND am.account_id = $1
 WHERE (am.id IS NULL OR $2::boolean)
@@ -130,6 +130,7 @@ func (q *Queries) ListAnnouncements(ctx context.Context, arg ListAnnouncementsPa
 			&i.UpdatedAt,
 			&i.PublishedAt,
 			&i.StatusIds,
+			&i.NotificationSentAt,
 		); err != nil {
 			return nil, err
 		}

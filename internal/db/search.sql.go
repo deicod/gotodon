@@ -12,7 +12,7 @@ import (
 )
 
 const searchAccountsV2 = `-- name: SearchAccountsV2 :many
-SELECT id, username, domain, private_key, public_key, created_at, updated_at, note, display_name, uri, url, avatar_file_name, avatar_content_type, avatar_file_size, avatar_updated_at, header_file_name, header_content_type, header_file_size, header_updated_at, avatar_remote_url, locked, header_remote_url, last_webfingered_at, inbox_url, outbox_url, shared_inbox_url, followers_url, following_url, protocol, memorial, moved_to_account_id, featured_collection_url, fields, actor_type, discoverable, also_known_as, silenced_at, suspended_at, hide_collections, avatar_storage_schema_version, header_storage_schema_version, suspension_origin, sensitized_at, trendable, reviewed_at, requested_review_at, indexable, attribution_domains FROM accounts
+SELECT id, username, domain, private_key, public_key, created_at, updated_at, note, display_name, uri, url, avatar_file_name, avatar_content_type, avatar_file_size, avatar_updated_at, header_file_name, header_content_type, header_file_size, header_updated_at, avatar_remote_url, locked, header_remote_url, last_webfingered_at, inbox_url, outbox_url, shared_inbox_url, followers_url, following_url, protocol, memorial, moved_to_account_id, featured_collection_url, fields, actor_type, discoverable, also_known_as, silenced_at, suspended_at, hide_collections, avatar_storage_schema_version, header_storage_schema_version, suspension_origin, sensitized_at, trendable, reviewed_at, requested_review_at, indexable, attribution_domains, id_scheme FROM accounts
 WHERE search_index @@ websearch_to_tsquery('english', $3)
 ORDER BY ts_rank(search_index, websearch_to_tsquery('english', $3)) DESC
 LIMIT $1 OFFSET $2
@@ -82,6 +82,7 @@ func (q *Queries) SearchAccountsV2(ctx context.Context, arg SearchAccountsV2Para
 			&i.RequestedReviewAt,
 			&i.Indexable,
 			&i.AttributionDomains,
+			&i.IDScheme,
 		); err != nil {
 			return nil, err
 		}
@@ -142,7 +143,7 @@ func (q *Queries) SearchHashtags(ctx context.Context, arg SearchHashtagsParams) 
 
 const searchStatuses = `-- name: SearchStatuses :many
 SELECT 
-    s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at,
+    s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at, s.quote_approval_policy,
     a.username as account_username,
     a.display_name as account_display_name,
     a.avatar_remote_url as account_avatar
@@ -185,6 +186,7 @@ type SearchStatusesRow struct {
 	Trendable                 pgtype.Bool        `db:"trendable" json:"trendable"`
 	OrderedMediaAttachmentIds []int64            `db:"ordered_media_attachment_ids" json:"ordered_media_attachment_ids"`
 	FetchedRepliesAt          pgtype.Timestamptz `db:"fetched_replies_at" json:"fetched_replies_at"`
+	QuoteApprovalPolicy       int32              `db:"quote_approval_policy" json:"quote_approval_policy"`
 	AccountUsername           string             `db:"account_username" json:"account_username"`
 	AccountDisplayName        string             `db:"account_display_name" json:"account_display_name"`
 	AccountAvatar             pgtype.Text        `db:"account_avatar" json:"account_avatar"`
@@ -224,6 +226,7 @@ func (q *Queries) SearchStatuses(ctx context.Context, arg SearchStatusesParams) 
 			&i.Trendable,
 			&i.OrderedMediaAttachmentIds,
 			&i.FetchedRepliesAt,
+			&i.QuoteApprovalPolicy,
 			&i.AccountUsername,
 			&i.AccountDisplayName,
 			&i.AccountAvatar,

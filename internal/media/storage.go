@@ -119,6 +119,11 @@ type Uploader struct {
 	storage Storage
 }
 
+// UploadOptions controls upload processing behavior.
+type UploadOptions struct {
+	SkipProcessing bool
+}
+
 // NewUploader creates a new uploader
 func NewUploader(storage Storage) *Uploader {
 	return &Uploader{storage: storage}
@@ -126,6 +131,11 @@ func NewUploader(storage Storage) *Uploader {
 
 // Upload processes and stores an uploaded file
 func (u *Uploader) Upload(ctx context.Context, accountID int64, filename string, data []byte) (*UploadResult, error) {
+	return u.UploadWithOptions(ctx, accountID, filename, data, UploadOptions{})
+}
+
+// UploadWithOptions processes and stores an uploaded file with options.
+func (u *Uploader) UploadWithOptions(ctx context.Context, accountID int64, filename string, data []byte, opts UploadOptions) (*UploadResult, error) {
 	// Detect content type
 	contentType := DetectContentType(data)
 
@@ -146,7 +156,7 @@ func (u *Uploader) Upload(ctx context.Context, accountID int64, filename string,
 	var blurhash string
 	var err error
 
-	if mediaType == MediaTypeImage || mediaType == MediaTypeGifv {
+	if !opts.SkipProcessing && (mediaType == MediaTypeImage || mediaType == MediaTypeGifv) {
 		meta, err = ProcessImage(data)
 		if err != nil {
 			return nil, err

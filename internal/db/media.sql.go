@@ -174,6 +174,15 @@ func (q *Queries) DeleteMediaAttachment(ctx context.Context, arg DeleteMediaAtta
 	return err
 }
 
+const deleteMediaAttachmentByID = `-- name: DeleteMediaAttachmentByID :exec
+DELETE FROM media_attachments WHERE id = $1
+`
+
+func (q *Queries) DeleteMediaAttachmentByID(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, deleteMediaAttachmentByID, id)
+	return err
+}
+
 const detachMediaFromStatus = `-- name: DetachMediaFromStatus :execrows
 UPDATE media_attachments SET status_id = NULL, updated_at = now()
 WHERE id = $1 AND account_id = $2 AND status_id IS NOT NULL
@@ -363,6 +372,64 @@ func (q *Queries) ListMediaAttachmentsByStatus(ctx context.Context, statusID pgt
 	return items, nil
 }
 
+const listOrphanedMediaAttachments = `-- name: ListOrphanedMediaAttachments :many
+SELECT id, status_id, file_file_name, file_content_type, file_file_size, file_updated_at, remote_url, created_at, updated_at, shortcode, type, file_meta, account_id, description, scheduled_status_id, blurhash, processing, file_storage_schema_version, thumbnail_file_name, thumbnail_content_type, thumbnail_file_size, thumbnail_updated_at, thumbnail_remote_url FROM media_attachments
+WHERE status_id IS NULL
+  AND scheduled_status_id IS NULL
+  AND created_at < $1
+ORDER BY id ASC
+LIMIT $2
+`
+
+type ListOrphanedMediaAttachmentsParams struct {
+	Before pgtype.Timestamptz `db:"before" json:"before"`
+	Limit  int32              `db:"limit" json:"limit"`
+}
+
+func (q *Queries) ListOrphanedMediaAttachments(ctx context.Context, arg ListOrphanedMediaAttachmentsParams) ([]MediaAttachment, error) {
+	rows, err := q.db.Query(ctx, listOrphanedMediaAttachments, arg.Before, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MediaAttachment{}
+	for rows.Next() {
+		var i MediaAttachment
+		if err := rows.Scan(
+			&i.ID,
+			&i.StatusID,
+			&i.FileFileName,
+			&i.FileContentType,
+			&i.FileFileSize,
+			&i.FileUpdatedAt,
+			&i.RemoteUrl,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Shortcode,
+			&i.Type,
+			&i.FileMeta,
+			&i.AccountID,
+			&i.Description,
+			&i.ScheduledStatusID,
+			&i.Blurhash,
+			&i.Processing,
+			&i.FileStorageSchemaVersion,
+			&i.ThumbnailFileName,
+			&i.ThumbnailContentType,
+			&i.ThumbnailFileSize,
+			&i.ThumbnailUpdatedAt,
+			&i.ThumbnailRemoteUrl,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUnattachedMedia = `-- name: ListUnattachedMedia :many
 SELECT id, status_id, file_file_name, file_content_type, file_file_size, file_updated_at, remote_url, created_at, updated_at, shortcode, type, file_meta, account_id, description, scheduled_status_id, blurhash, processing, file_storage_schema_version, thumbnail_file_name, thumbnail_content_type, thumbnail_file_size, thumbnail_updated_at, thumbnail_remote_url FROM media_attachments 
 WHERE account_id = $1 AND status_id IS NULL
@@ -447,6 +514,72 @@ func (q *Queries) UpdateMediaAttachment(ctx context.Context, arg UpdateMediaAtta
 		arg.AccountID,
 		arg.Description,
 		arg.FileMeta,
+		arg.ThumbnailFileName,
+		arg.ThumbnailContentType,
+		arg.ThumbnailFileSize,
+	)
+	var i MediaAttachment
+	err := row.Scan(
+		&i.ID,
+		&i.StatusID,
+		&i.FileFileName,
+		&i.FileContentType,
+		&i.FileFileSize,
+		&i.FileUpdatedAt,
+		&i.RemoteUrl,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Shortcode,
+		&i.Type,
+		&i.FileMeta,
+		&i.AccountID,
+		&i.Description,
+		&i.ScheduledStatusID,
+		&i.Blurhash,
+		&i.Processing,
+		&i.FileStorageSchemaVersion,
+		&i.ThumbnailFileName,
+		&i.ThumbnailContentType,
+		&i.ThumbnailFileSize,
+		&i.ThumbnailUpdatedAt,
+		&i.ThumbnailRemoteUrl,
+	)
+	return i, err
+}
+
+const updateMediaProcessing = `-- name: UpdateMediaProcessing :one
+UPDATE media_attachments SET
+    file_meta = COALESCE($2, file_meta),
+    blurhash = COALESCE($3, blurhash),
+    processing = COALESCE($4, processing),
+    thumbnail_file_name = COALESCE($5, thumbnail_file_name),
+    thumbnail_content_type = COALESCE($6, thumbnail_content_type),
+    thumbnail_file_size = COALESCE($7, thumbnail_file_size),
+    thumbnail_updated_at = CASE
+        WHEN $5 IS NULL AND $6 IS NULL AND $7 IS NULL THEN thumbnail_updated_at
+        ELSE now()
+    END,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, status_id, file_file_name, file_content_type, file_file_size, file_updated_at, remote_url, created_at, updated_at, shortcode, type, file_meta, account_id, description, scheduled_status_id, blurhash, processing, file_storage_schema_version, thumbnail_file_name, thumbnail_content_type, thumbnail_file_size, thumbnail_updated_at, thumbnail_remote_url
+`
+
+type UpdateMediaProcessingParams struct {
+	ID                   int64       `db:"id" json:"id"`
+	FileMeta             []byte      `db:"file_meta" json:"file_meta"`
+	Blurhash             pgtype.Text `db:"blurhash" json:"blurhash"`
+	Processing           pgtype.Int4 `db:"processing" json:"processing"`
+	ThumbnailFileName    pgtype.Text `db:"thumbnail_file_name" json:"thumbnail_file_name"`
+	ThumbnailContentType pgtype.Text `db:"thumbnail_content_type" json:"thumbnail_content_type"`
+	ThumbnailFileSize    pgtype.Int4 `db:"thumbnail_file_size" json:"thumbnail_file_size"`
+}
+
+func (q *Queries) UpdateMediaProcessing(ctx context.Context, arg UpdateMediaProcessingParams) (MediaAttachment, error) {
+	row := q.db.QueryRow(ctx, updateMediaProcessing,
+		arg.ID,
+		arg.FileMeta,
+		arg.Blurhash,
+		arg.Processing,
 		arg.ThumbnailFileName,
 		arg.ThumbnailContentType,
 		arg.ThumbnailFileSize,

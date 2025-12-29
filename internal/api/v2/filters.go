@@ -123,7 +123,7 @@ var validActions = map[string]bool{
 	"hide": true,
 }
 
-func (h *FiltersHandler) dbFilterToAPI(dbFilter db.Filter) FilterV2 {
+func (h *FiltersHandler) dbFilterToAPI(dbFilter db.CustomFilter) FilterV2 {
 	action := filterActionToString[dbFilter.Action]
 	if action == "" {
 		action = "warn"
@@ -134,7 +134,7 @@ func (h *FiltersHandler) dbFilterToAPI(dbFilter db.Filter) FilterV2 {
 	}
 	return FilterV2{
 		ID:           strconv.FormatInt(dbFilter.ID, 10),
-		Title:        dbFilter.Title,
+		Title:        dbFilter.Phrase,
 		Context:      dbFilter.Context,
 		ExpiresAt:    expiresAt,
 		FilterAction: action,
@@ -325,7 +325,7 @@ func (h *FiltersHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if h.useDB() {
 		dbFilter, err := h.queries.CreateFilter(ctx, db.CreateFilterParams{
 			AccountID: accountID,
-			Title:     req.Title,
+			Phrase:    req.Title,
 			Context:   req.Context,
 			Action:    actionInt,
 			ExpiresAt: expiresAtPG,
@@ -343,9 +343,9 @@ func (h *FiltersHandler) Create(w http.ResponseWriter, r *http.Request) {
 				wholeWord = *kw.WholeWord
 			}
 			dbKw, err := h.queries.CreateFilterKeyword(ctx, db.CreateFilterKeywordParams{
-				FilterID:  dbFilter.ID,
-				Keyword:   kw.Keyword,
-				WholeWord: wholeWord,
+				CustomFilterID: dbFilter.ID,
+				Keyword:        kw.Keyword,
+				WholeWord:      wholeWord,
 			})
 			if err == nil {
 				keywords = append(keywords, FilterKeyword{
@@ -438,7 +438,7 @@ func (h *FiltersHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if req.Title != nil {
-			params.Title = pgtype.Text{String: *req.Title, Valid: true}
+			params.Phrase = pgtype.Text{String: *req.Title, Valid: true}
 		}
 
 		if len(req.Context) > 0 {
@@ -496,9 +496,9 @@ func (h *FiltersHandler) Update(w http.ResponseWriter, r *http.Request) {
 					wholeWord = *kw.WholeWord
 				}
 				_, _ = h.queries.CreateFilterKeyword(ctx, db.CreateFilterKeywordParams{
-					FilterID:  filterID,
-					Keyword:   *kw.Keyword,
-					WholeWord: wholeWord,
+					CustomFilterID: filterID,
+					Keyword:        *kw.Keyword,
+					WholeWord:      wholeWord,
 				})
 			}
 		}
@@ -724,9 +724,9 @@ func (h *FiltersHandler) CreateKeyword(w http.ResponseWriter, r *http.Request) {
 		}
 
 		dbKw, err := h.queries.CreateFilterKeyword(ctx, db.CreateFilterKeywordParams{
-			FilterID:  filterID,
-			Keyword:   req.Keyword,
-			WholeWord: wholeWord,
+			CustomFilterID: filterID,
+			Keyword:        req.Keyword,
+			WholeWord:      wholeWord,
 		})
 		if err != nil {
 			web.JSONError(w, http.StatusInternalServerError, "Failed to create keyword")

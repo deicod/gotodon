@@ -22,7 +22,7 @@ type CreatePollParams struct {
 	StatusID      pgtype.Int8        `db:"status_id" json:"status_id"`
 	ExpiresAt     pgtype.Timestamptz `db:"expires_at" json:"expires_at"`
 	Options       []string           `db:"options" json:"options"`
-	CachedTallies []byte             `db:"cached_tallies" json:"cached_tallies"`
+	CachedTallies []int64            `db:"cached_tallies" json:"cached_tallies"`
 	Multiple      bool               `db:"multiple" json:"multiple"`
 	HideTotals    bool               `db:"hide_totals" json:"hide_totals"`
 }
@@ -145,7 +145,7 @@ const getPollOptions = `-- name: GetPollOptions :many
 SELECT 
     ordinality - 1 AS option_index,
     option_text AS title,
-    COALESCE((p.cached_tallies->>((ordinality - 1)::text))::bigint, 0) AS votes_count
+    COALESCE(p.cached_tallies[ordinality], 0) AS votes_count
 FROM polls p,
 LATERAL unnest(p.options) WITH ORDINALITY AS opt(option_text, ordinality)
 WHERE p.id = $1
@@ -256,18 +256,26 @@ func (q *Queries) GetVotes(ctx context.Context, arg GetVotesParams) ([]PollVote,
 const incrementVoteCount = `-- name: IncrementVoteCount :exec
 UPDATE polls SET
     votes_count = votes_count + 1,
-    cached_tallies = jsonb_set(
-        cached_tallies,
-        ARRAY[$2::text],
-        to_jsonb(COALESCE((cached_tallies->>$2::text)::int, 0) + 1)
+    cached_tallies = (
+        SELECT array_agg(
+            CASE
+                WHEN i = $2 + 1 THEN COALESCE(polls.cached_tallies[i], 0) + 1
+                ELSE COALESCE(polls.cached_tallies[i], 0)
+            END
+            ORDER BY i
+        )
+        FROM generate_series(
+            1,
+            GREATEST(COALESCE(array_length(polls.cached_tallies, 1), 0), $2 + 1)
+        ) AS i
     ),
     updated_at = now()
 WHERE id = $1
 `
 
 type IncrementVoteCountParams struct {
-	ID      int64  `db:"id" json:"id"`
-	Column2 string `db:"column_2" json:"column_2"`
+	ID      int64       `db:"id" json:"id"`
+	Column2 interface{} `db:"column_2" json:"column_2"`
 }
 
 func (q *Queries) IncrementVoteCount(ctx context.Context, arg IncrementVoteCountParams) error {
@@ -288,7 +296,6 @@ func (q *Queries) IncrementVotersCount(ctx context.Context, id int64) error {
 const vote = `-- name: Vote :exec
 INSERT INTO poll_votes (poll_id, account_id, choice)
 VALUES ($1, $2, $3)
-ON CONFLICT (poll_id, account_id, choice) DO NOTHING
 `
 
 type VoteParams struct {

@@ -24,7 +24,7 @@ DELETE FROM lists WHERE id = $1 AND account_id = $2;
 -- name: AddAccountToList :exec
 INSERT INTO list_accounts (list_id, account_id, follow_id)
 VALUES ($1, $2, $3)
-ON CONFLICT (list_id, account_id) DO NOTHING;
+ON CONFLICT (account_id, list_id) DO NOTHING;
 
 -- name: RemoveAccountFromList :exec
 DELETE FROM list_accounts WHERE list_id = $1 AND account_id = $2;

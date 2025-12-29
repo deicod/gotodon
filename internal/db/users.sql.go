@@ -16,7 +16,7 @@ INSERT INTO users (
     email, encrypted_password, account_id, confirmed_at, invite_id, role_id
 ) VALUES (
     $1, $2, $3, $4, $5, $6
-) RETURNING id, email, created_at, updated_at, encrypted_password, reset_password_token, reset_password_sent_at, sign_in_count, current_sign_in_at, last_sign_in_at, confirmation_token, confirmed_at, confirmation_sent_at, unconfirmed_email, locale, consumed_timestep, otp_required_for_login, last_emailed_at, otp_backup_codes, account_id, disabled, invite_id, chosen_languages, created_by_application_id, approved, sign_in_token, sign_in_token_sent_at, webauthn_id, sign_up_ip, skip_sign_in_token, role_id, settings, time_zone, otp_secret
+) RETURNING id, email, created_at, updated_at, encrypted_password, reset_password_token, reset_password_sent_at, sign_in_count, current_sign_in_at, last_sign_in_at, confirmation_token, confirmed_at, confirmation_sent_at, unconfirmed_email, locale, consumed_timestep, otp_required_for_login, last_emailed_at, otp_backup_codes, account_id, disabled, invite_id, chosen_languages, created_by_application_id, approved, sign_in_token, sign_in_token_sent_at, webauthn_id, sign_up_ip, skip_sign_in_token, role_id, settings, time_zone, otp_secret, age_verified_at, require_tos_interstitial
 `
 
 type CreateUserParams struct {
@@ -73,12 +73,14 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.Settings,
 		&i.TimeZone,
 		&i.OtpSecret,
+		&i.AgeVerifiedAt,
+		&i.RequireTosInterstitial,
 	)
 	return i, err
 }
 
 const getUserByAccountID = `-- name: GetUserByAccountID :one
-SELECT id, email, created_at, updated_at, encrypted_password, reset_password_token, reset_password_sent_at, sign_in_count, current_sign_in_at, last_sign_in_at, confirmation_token, confirmed_at, confirmation_sent_at, unconfirmed_email, locale, consumed_timestep, otp_required_for_login, last_emailed_at, otp_backup_codes, account_id, disabled, invite_id, chosen_languages, created_by_application_id, approved, sign_in_token, sign_in_token_sent_at, webauthn_id, sign_up_ip, skip_sign_in_token, role_id, settings, time_zone, otp_secret FROM users WHERE account_id = $1
+SELECT id, email, created_at, updated_at, encrypted_password, reset_password_token, reset_password_sent_at, sign_in_count, current_sign_in_at, last_sign_in_at, confirmation_token, confirmed_at, confirmation_sent_at, unconfirmed_email, locale, consumed_timestep, otp_required_for_login, last_emailed_at, otp_backup_codes, account_id, disabled, invite_id, chosen_languages, created_by_application_id, approved, sign_in_token, sign_in_token_sent_at, webauthn_id, sign_up_ip, skip_sign_in_token, role_id, settings, time_zone, otp_secret, age_verified_at, require_tos_interstitial FROM users WHERE account_id = $1
 `
 
 func (q *Queries) GetUserByAccountID(ctx context.Context, accountID int64) (User, error) {
@@ -119,12 +121,14 @@ func (q *Queries) GetUserByAccountID(ctx context.Context, accountID int64) (User
 		&i.Settings,
 		&i.TimeZone,
 		&i.OtpSecret,
+		&i.AgeVerifiedAt,
+		&i.RequireTosInterstitial,
 	)
 	return i, err
 }
 
 const getUserByConfirmationToken = `-- name: GetUserByConfirmationToken :one
-SELECT id, email, created_at, updated_at, encrypted_password, reset_password_token, reset_password_sent_at, sign_in_count, current_sign_in_at, last_sign_in_at, confirmation_token, confirmed_at, confirmation_sent_at, unconfirmed_email, locale, consumed_timestep, otp_required_for_login, last_emailed_at, otp_backup_codes, account_id, disabled, invite_id, chosen_languages, created_by_application_id, approved, sign_in_token, sign_in_token_sent_at, webauthn_id, sign_up_ip, skip_sign_in_token, role_id, settings, time_zone, otp_secret FROM users WHERE confirmation_token = $1
+SELECT id, email, created_at, updated_at, encrypted_password, reset_password_token, reset_password_sent_at, sign_in_count, current_sign_in_at, last_sign_in_at, confirmation_token, confirmed_at, confirmation_sent_at, unconfirmed_email, locale, consumed_timestep, otp_required_for_login, last_emailed_at, otp_backup_codes, account_id, disabled, invite_id, chosen_languages, created_by_application_id, approved, sign_in_token, sign_in_token_sent_at, webauthn_id, sign_up_ip, skip_sign_in_token, role_id, settings, time_zone, otp_secret, age_verified_at, require_tos_interstitial FROM users WHERE confirmation_token = $1
 `
 
 func (q *Queries) GetUserByConfirmationToken(ctx context.Context, confirmationToken pgtype.Text) (User, error) {
@@ -165,12 +169,14 @@ func (q *Queries) GetUserByConfirmationToken(ctx context.Context, confirmationTo
 		&i.Settings,
 		&i.TimeZone,
 		&i.OtpSecret,
+		&i.AgeVerifiedAt,
+		&i.RequireTosInterstitial,
 	)
 	return i, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, created_at, updated_at, encrypted_password, reset_password_token, reset_password_sent_at, sign_in_count, current_sign_in_at, last_sign_in_at, confirmation_token, confirmed_at, confirmation_sent_at, unconfirmed_email, locale, consumed_timestep, otp_required_for_login, last_emailed_at, otp_backup_codes, account_id, disabled, invite_id, chosen_languages, created_by_application_id, approved, sign_in_token, sign_in_token_sent_at, webauthn_id, sign_up_ip, skip_sign_in_token, role_id, settings, time_zone, otp_secret FROM users WHERE LOWER(email) = LOWER($1)
+SELECT id, email, created_at, updated_at, encrypted_password, reset_password_token, reset_password_sent_at, sign_in_count, current_sign_in_at, last_sign_in_at, confirmation_token, confirmed_at, confirmation_sent_at, unconfirmed_email, locale, consumed_timestep, otp_required_for_login, last_emailed_at, otp_backup_codes, account_id, disabled, invite_id, chosen_languages, created_by_application_id, approved, sign_in_token, sign_in_token_sent_at, webauthn_id, sign_up_ip, skip_sign_in_token, role_id, settings, time_zone, otp_secret, age_verified_at, require_tos_interstitial FROM users WHERE LOWER(email) = LOWER($1)
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, lower string) (User, error) {
@@ -211,12 +217,14 @@ func (q *Queries) GetUserByEmail(ctx context.Context, lower string) (User, error
 		&i.Settings,
 		&i.TimeZone,
 		&i.OtpSecret,
+		&i.AgeVerifiedAt,
+		&i.RequireTosInterstitial,
 	)
 	return i, err
 }
 
 const getUserByResetPasswordToken = `-- name: GetUserByResetPasswordToken :one
-SELECT id, email, created_at, updated_at, encrypted_password, reset_password_token, reset_password_sent_at, sign_in_count, current_sign_in_at, last_sign_in_at, confirmation_token, confirmed_at, confirmation_sent_at, unconfirmed_email, locale, consumed_timestep, otp_required_for_login, last_emailed_at, otp_backup_codes, account_id, disabled, invite_id, chosen_languages, created_by_application_id, approved, sign_in_token, sign_in_token_sent_at, webauthn_id, sign_up_ip, skip_sign_in_token, role_id, settings, time_zone, otp_secret FROM users WHERE reset_password_token = $1 AND reset_password_token IS NOT NULL
+SELECT id, email, created_at, updated_at, encrypted_password, reset_password_token, reset_password_sent_at, sign_in_count, current_sign_in_at, last_sign_in_at, confirmation_token, confirmed_at, confirmation_sent_at, unconfirmed_email, locale, consumed_timestep, otp_required_for_login, last_emailed_at, otp_backup_codes, account_id, disabled, invite_id, chosen_languages, created_by_application_id, approved, sign_in_token, sign_in_token_sent_at, webauthn_id, sign_up_ip, skip_sign_in_token, role_id, settings, time_zone, otp_secret, age_verified_at, require_tos_interstitial FROM users WHERE reset_password_token = $1 AND reset_password_token IS NOT NULL
 `
 
 func (q *Queries) GetUserByResetPasswordToken(ctx context.Context, resetPasswordToken pgtype.Text) (User, error) {
@@ -257,6 +265,8 @@ func (q *Queries) GetUserByResetPasswordToken(ctx context.Context, resetPassword
 		&i.Settings,
 		&i.TimeZone,
 		&i.OtpSecret,
+		&i.AgeVerifiedAt,
+		&i.RequireTosInterstitial,
 	)
 	return i, err
 }

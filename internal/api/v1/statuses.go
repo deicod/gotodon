@@ -28,6 +28,7 @@ import (
 var (
 	mentionRegex = regexp.MustCompile(`@([a-zA-Z0-9_]+)(?:@([a-zA-Z0-9_.-]+))?`)
 	tagRegex     = regexp.MustCompile(`#([\p{L}\p{N}_]+)`)
+	urlRegex     = regexp.MustCompile(`https?://[^\s<>()]+`)
 )
 
 // Visibility constants
@@ -60,6 +61,7 @@ type StatusesHandler struct {
 	cfg       *config.Config
 	outgoing  federation.OutgoingDeliverer
 	threader  federation.ThreadFetcher
+	linker    LinkCrawlerEnqueuer
 }
 
 // NewStatusesHandler creates a new statuses handler
@@ -76,6 +78,16 @@ func NewStatusesHandler(queries db.Querier, pool *pgxpool.Pool, publisher stream
 // SetThreadFetcher enables remote thread resolution for context requests.
 func (h *StatusesHandler) SetThreadFetcher(fetcher federation.ThreadFetcher) {
 	h.threader = fetcher
+}
+
+// LinkCrawlerEnqueuer schedules link crawler jobs for preview cards.
+type LinkCrawlerEnqueuer interface {
+	Enqueue(ctx context.Context, statusID int64, url string) error
+}
+
+// SetLinkCrawler configures link crawling for preview cards.
+func (h *StatusesHandler) SetLinkCrawler(enqueuer LinkCrawlerEnqueuer) {
+	h.linker = enqueuer
 }
 
 func (h *StatusesHandler) useDB() bool {
@@ -186,8 +198,57 @@ type notificationTask struct {
 	Account      db.Account
 }
 
+type statusCreateError struct {
+	Status  int
+	Message string
+}
+
+func (e statusCreateError) Error() string {
+	return e.Message
+}
+
+func (e statusCreateError) StatusCode() int {
+	return e.Status
+}
+
+type statusCreationResult struct {
+	Status     db.Status
+	Sender     db.Account
+	Tags       []string
+	NotifTasks []notificationTask
+}
+
+type mentionStore interface {
+	GetAccountsByUsernames(ctx context.Context, usernames []string) ([]db.Account, error)
+	GetAccountsByUsernamesAndDomains(ctx context.Context, arg db.GetAccountsByUsernamesAndDomainsParams) ([]db.Account, error)
+	GetMutesFromAccounts(ctx context.Context, arg db.GetMutesFromAccountsParams) ([]db.Mute, error)
+	GetBlocksFromAccounts(ctx context.Context, arg db.GetBlocksFromAccountsParams) ([]db.Block, error)
+	CreateMentions(ctx context.Context, arg db.CreateMentionsParams) error
+	CreateNotifications(ctx context.Context, arg db.CreateNotificationsParams) ([]db.Notification, error)
+}
+
+type tagStore interface {
+	UpsertTags(ctx context.Context, tags []string) error
+	GetTagsByNames(ctx context.Context, names []string) ([]db.Tag, error)
+	AddStatusTags(ctx context.Context, arg db.AddStatusTagsParams) error
+}
+
+type statusCreateStore interface {
+	GetAccountByID(ctx context.Context, id int64) (db.Account, error)
+	GetStatusByID(ctx context.Context, id int64) (db.Status, error)
+	CreateStatus(ctx context.Context, arg db.CreateStatusParams) (db.Status, error)
+	UpdateStatusURI(ctx context.Context, arg db.UpdateStatusURIParams) error
+	CreateStatusStats(ctx context.Context, statusID int64) (db.StatusStat, error)
+	IncrementStatusReplies(ctx context.Context, statusID int64) error
+	AttachMediaToStatus(ctx context.Context, arg db.AttachMediaToStatusParams) (int64, error)
+	CreatePoll(ctx context.Context, arg db.CreatePollParams) (db.Poll, error)
+	UpdateStatusPollID(ctx context.Context, arg db.UpdateStatusPollIDParams) error
+	mentionStore
+	tagStore
+}
+
 // processMentions parses mentions from status text and creates notifications
-func (h *StatusesHandler) processMentions(ctx context.Context, q db.Querier, statusID int64, accountID int64, text string) ([]Mention, []notificationTask, error) {
+func (h *StatusesHandler) processMentions(ctx context.Context, q mentionStore, statusID int64, accountID int64, text string) ([]Mention, []notificationTask, error) {
 	// Simple mention regex: @username or @username@domain
 	matches := mentionRegex.FindAllStringSubmatch(text, -1)
 
@@ -376,7 +437,7 @@ func (h *StatusesHandler) processTags(text string) ([]string, error) {
 }
 
 // saveTags persists tags for a status
-func (h *StatusesHandler) saveTags(ctx context.Context, q db.Querier, statusID int64, tags []string) error {
+func (h *StatusesHandler) saveTags(ctx context.Context, q tagStore, statusID int64, tags []string) error {
 	if len(tags) == 0 {
 		return nil
 	}
@@ -443,6 +504,262 @@ type PollReq struct {
 	HideTotals bool     `json:"hide_totals" form:"hide_totals"`
 }
 
+func normalizeCreateStatusRequest(req *CreateStatusRequest) error {
+	if req == nil {
+		return statusCreateError{Status: http.StatusBadRequest, Message: "Invalid request"}
+	}
+	if req.Status == "" && len(req.MediaIDs) == 0 && req.Poll == nil {
+		return statusCreateError{
+			Status:  http.StatusUnprocessableEntity,
+			Message: "Validation failed: Text can't be blank without media or poll",
+		}
+	}
+	if req.Visibility == "" {
+		req.Visibility = "public"
+	}
+	if _, valid := stringToVisibility[req.Visibility]; !valid {
+		return statusCreateError{
+			Status:  http.StatusUnprocessableEntity,
+			Message: "Validation failed: Visibility is not included in the list",
+		}
+	}
+	return nil
+}
+
+func (h *StatusesHandler) createStatus(ctx context.Context, accountID int64, req CreateStatusRequest) (statusCreationResult, error) {
+	if h.pool == nil {
+		return statusCreationResult{}, statusCreateError{Status: http.StatusInternalServerError, Message: "Failed to start transaction"}
+	}
+
+	tx, err := h.pool.Begin(ctx)
+	if err != nil {
+		return statusCreationResult{}, statusCreateError{Status: http.StatusInternalServerError, Message: "Failed to start transaction"}
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	result, err := h.createStatusTx(ctx, db.New(tx), accountID, req)
+	if err != nil {
+		return statusCreationResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return statusCreationResult{}, statusCreateError{Status: http.StatusInternalServerError, Message: "Failed to commit transaction"}
+	}
+
+	return result, nil
+}
+
+func (h *StatusesHandler) createStatusTx(ctx context.Context, qtx statusCreateStore, accountID int64, req CreateStatusRequest) (statusCreationResult, error) {
+	if err := normalizeCreateStatusRequest(&req); err != nil {
+		return statusCreationResult{}, err
+	}
+	visibility := stringToVisibility[req.Visibility]
+
+	if h.cfg == nil {
+		return statusCreationResult{}, statusCreateError{Status: http.StatusInternalServerError, Message: "Local domain not configured"}
+	}
+
+	// Fetch sender account for URI generation and later usage
+	sender, err := qtx.GetAccountByID(ctx, accountID)
+	if err != nil {
+		return statusCreationResult{}, statusCreateError{Status: http.StatusInternalServerError, Message: "Failed to fetch account"}
+	}
+
+	var inReplyToID, inReplyToAccountID pgtype.Int8
+	if req.InReplyToID != nil {
+		id, err := strconv.ParseInt(*req.InReplyToID, 10, 64)
+		if err == nil {
+			inReplyToID = pgtype.Int8{Int64: id, Valid: true}
+			// Get parent status to set reply account
+			parent, err := qtx.GetStatusByID(ctx, id)
+			if err == nil {
+				inReplyToAccountID = pgtype.Int8{Int64: parent.AccountID, Valid: true}
+			}
+		}
+	}
+
+	var lang pgtype.Text
+	if req.Language != nil {
+		lang = pgtype.Text{String: *req.Language, Valid: true}
+	}
+
+	dbStatus, err := qtx.CreateStatus(ctx, db.CreateStatusParams{
+		Uri:                pgtype.Text{Valid: false}, // Set later with ID
+		Text:               req.Status,
+		AccountID:          accountID,
+		InReplyToID:        inReplyToID,
+		InReplyToAccountID: inReplyToAccountID,
+		Sensitive:          req.Sensitive,
+		SpoilerText:        req.SpoilerText,
+		Visibility:         visibility,
+		Language:           lang,
+		Local:              pgtype.Bool{Bool: true, Valid: true},
+		Reply:              inReplyToID.Valid,
+	})
+	if err != nil {
+		return statusCreationResult{}, statusCreateError{Status: http.StatusInternalServerError, Message: "Failed to create status"}
+	}
+
+	// Generate and Update URI with Snowflake ID
+	// Format: https://<domain>/users/<username>/statuses/<id>
+	statusIDStr := strconv.FormatInt(dbStatus.ID, 10)
+	uri := fmt.Sprintf("https://%s/users/%s/statuses/%s", h.cfg.Instance.LocalDomain, sender.Username, statusIDStr)
+
+	if err := qtx.UpdateStatusURI(ctx, db.UpdateStatusURIParams{
+		Uri: pgtype.Text{String: uri, Valid: true},
+		ID:  dbStatus.ID,
+	}); err != nil {
+		return statusCreationResult{}, statusCreateError{Status: http.StatusInternalServerError, Message: "Failed to update status URI"}
+	}
+
+	// Update struct for response
+	dbStatus.Uri = pgtype.Text{String: uri, Valid: true}
+
+	if req.Poll != nil {
+		tallies := make([]int64, len(req.Poll.Options))
+		expiresAt := time.Now().Add(time.Duration(req.Poll.ExpiresIn) * time.Second)
+		dbPoll, err := qtx.CreatePoll(ctx, db.CreatePollParams{
+			AccountID:     pgtype.Int8{Int64: accountID, Valid: true},
+			StatusID:      pgtype.Int8{Int64: dbStatus.ID, Valid: true},
+			ExpiresAt:     pgtype.Timestamptz{Time: expiresAt, Valid: true},
+			Options:       req.Poll.Options,
+			CachedTallies: tallies,
+			Multiple:      req.Poll.Multiple,
+			HideTotals:    req.Poll.HideTotals,
+		})
+		if err != nil {
+			return statusCreationResult{}, statusCreateError{Status: http.StatusInternalServerError, Message: "Failed to create poll"}
+		}
+		if err := qtx.UpdateStatusPollID(ctx, db.UpdateStatusPollIDParams{
+			ID:     dbStatus.ID,
+			PollID: pgtype.Int8{Int64: dbPoll.ID, Valid: true},
+		}); err != nil {
+			return statusCreationResult{}, statusCreateError{Status: http.StatusInternalServerError, Message: "Failed to attach poll"}
+		}
+		dbStatus.PollID = pgtype.Int8{Int64: dbPoll.ID, Valid: true}
+	}
+
+	// Create stats
+	if _, err := qtx.CreateStatusStats(ctx, dbStatus.ID); err != nil {
+		fmt.Printf("Failed to create status stats: %v\n", err)
+	}
+
+	// Increment reply count on parent
+	if inReplyToID.Valid {
+		if err := qtx.IncrementStatusReplies(ctx, inReplyToID.Int64); err != nil {
+			fmt.Printf("Failed to increment reply count: %v\n", err)
+		}
+	}
+
+	_, notifTasks, err := h.processMentions(ctx, qtx, dbStatus.ID, accountID, req.Status)
+	if err != nil {
+		return statusCreationResult{}, statusCreateError{Status: http.StatusInternalServerError, Message: "Failed to process mentions"}
+	}
+
+	// Process Media Attachments
+	for _, mediaIDStr := range req.MediaIDs {
+		mediaID, err := strconv.ParseInt(mediaIDStr, 10, 64)
+		if err != nil {
+			continue
+		}
+		rows, err := qtx.AttachMediaToStatus(ctx, db.AttachMediaToStatusParams{
+			ID:        mediaID,
+			StatusID:  pgtype.Int8{Int64: dbStatus.ID, Valid: true},
+			AccountID: pgtype.Int8{Int64: accountID, Valid: true},
+		})
+		if err != nil {
+			return statusCreationResult{}, statusCreateError{Status: http.StatusInternalServerError, Message: "Failed to attach media"}
+		}
+		if rows != 1 {
+			return statusCreationResult{}, statusCreateError{Status: http.StatusForbidden, Message: "Media not found or not owned by you"}
+		}
+	}
+
+	// Process Hashtags
+	tags, _ := h.processTags(req.Status)
+	if err := h.saveTags(ctx, qtx, dbStatus.ID, tags); err != nil {
+		return statusCreationResult{}, statusCreateError{Status: http.StatusInternalServerError, Message: "Failed to save tags"}
+	}
+
+	return statusCreationResult{
+		Status:     dbStatus,
+		Sender:     sender,
+		Tags:       tags,
+		NotifTasks: notifTasks,
+	}, nil
+}
+
+func (h *StatusesHandler) publishCreatedStatus(ctx context.Context, accountID int64, result statusCreationResult) Status {
+	apiStatus := SerializeStatus(ctx, h.queries, h.cfg, result.Status)
+
+	// Publish streaming events
+	if h.publisher != nil {
+		// Publish to public timeline if public
+		streams := []string{}
+		if result.Status.Visibility == VisibilityPublic {
+			streams = append(streams, streaming.StreamPublic, streaming.StreamPublicLocal)
+		}
+
+		// Publish to user stream (home of followers would be distributed by worker usually,
+		// but simply publishing to author's user stream is good for self)
+		streams = append(streams, fmt.Sprintf("user:%d", accountID))
+
+		for _, t := range result.Tags {
+			streams = append(streams, fmt.Sprintf("hashtag:%s", t))
+		}
+
+		_ = h.publisher.PublishStatusToRedis(context.Background(), apiStatus, streams)
+
+		// Publish notifications
+		senderAPI := h.dbAccountToAPI(result.Sender)
+		for _, task := range result.NotifTasks {
+			apiNotif := Notification{
+				ID:        strconv.FormatInt(task.Notification.ID, 10),
+				Type:      "mention",
+				CreatedAt: task.Notification.CreatedAt.Time,
+				Account:   senderAPI,
+				Status:    &apiStatus,
+			}
+			_ = h.publisher.PublishNotificationToRedis(ctx, task.Account.ID, apiNotif)
+		}
+	}
+
+	if h.outgoing != nil {
+		if err := h.outgoing.DeliverStatusCreate(ctx, result.Status.ID); err != nil {
+			fmt.Printf("Failed to deliver Create activity: %v\n", err)
+		}
+	}
+
+	if h.linker != nil {
+		if link := extractFirstURL(result.Status.Text); link != "" {
+			_ = h.linker.Enqueue(ctx, result.Status.ID, link)
+		}
+	}
+
+	return apiStatus
+}
+
+func extractFirstURL(text string) string {
+	match := urlRegex.FindString(text)
+	if match == "" {
+		return ""
+	}
+	return trimTrailingPunctuation(match)
+}
+
+func trimTrailingPunctuation(value string) string {
+	trimSet := ".,!?:;)]}\"'»”’"
+	for len(value) > 0 {
+		last := value[len(value)-1]
+		if strings.ContainsRune(trimSet, rune(last)) {
+			value = value[:len(value)-1]
+			continue
+		}
+		break
+	}
+	return value
+}
+
 // Create handles POST /api/v1/statuses
 func (h *StatusesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	accountID, ok := middleware.GetAccountID(r.Context())
@@ -463,190 +780,32 @@ func (h *StatusesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Status == "" && len(req.MediaIDs) == 0 && req.Poll == nil {
-		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Text can't be blank without media or poll")
-		return
-	}
-
-	if req.Visibility == "" {
-		req.Visibility = "public"
-	}
-
-	visibility, validVis := stringToVisibility[req.Visibility]
-	if !validVis {
-		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Visibility is not included in the list")
-		return
-	}
-
 	ctx := r.Context()
 
 	if h.useDB() {
-		tx, err := h.pool.Begin(ctx)
+		result, err := h.createStatus(ctx, accountID, req)
 		if err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Failed to start transaction")
-			return
-		}
-		defer func() { _ = tx.Rollback(ctx) }()
-
-		qtx := db.New(tx)
-
-		// Fetch sender account for URI generation and later usage
-		sender, err := qtx.GetAccountByID(ctx, accountID)
-		if err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Failed to fetch account")
-			return
-		}
-
-		var inReplyToID, inReplyToAccountID pgtype.Int8
-		if req.InReplyToID != nil {
-			id, err := strconv.ParseInt(*req.InReplyToID, 10, 64)
-			if err == nil {
-				inReplyToID = pgtype.Int8{Int64: id, Valid: true}
-				// Get parent status to set reply account
-				parent, err := qtx.GetStatusByID(ctx, id)
-				if err == nil {
-					inReplyToAccountID = pgtype.Int8{Int64: parent.AccountID, Valid: true}
-				}
+			var createErr statusCreateError
+			if errors.As(err, &createErr) {
+				web.JSONError(w, createErr.Status, createErr.Message)
+				return
 			}
-		}
-
-		var lang pgtype.Text
-		if req.Language != nil {
-			lang = pgtype.Text{String: *req.Language, Valid: true}
-		}
-
-		dbStatus, err := qtx.CreateStatus(ctx, db.CreateStatusParams{
-			Uri:                pgtype.Text{Valid: false}, // Set later with ID
-			Text:               req.Status,
-			AccountID:          accountID,
-			InReplyToID:        inReplyToID,
-			InReplyToAccountID: inReplyToAccountID,
-			Sensitive:          req.Sensitive,
-			SpoilerText:        req.SpoilerText,
-			Visibility:         visibility,
-			Language:           lang,
-			Local:              pgtype.Bool{Bool: true, Valid: true},
-			Reply:              inReplyToID.Valid,
-		})
-		if err != nil {
 			web.JSONError(w, http.StatusInternalServerError, "Failed to create status")
 			return
 		}
 
-		// Generate and Update URI with Snowflake ID
-		// Format: https://<domain>/users/<username>/statuses/<id>
-		statusIDStr := strconv.FormatInt(dbStatus.ID, 10)
-		uri := fmt.Sprintf("https://%s/users/%s/statuses/%s", h.cfg.Instance.LocalDomain, sender.Username, statusIDStr)
-
-		if err := qtx.UpdateStatusURI(ctx, db.UpdateStatusURIParams{
-			Uri: pgtype.Text{String: uri, Valid: true},
-			ID:  dbStatus.ID,
-		}); err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Failed to update status URI")
-			return
-		}
-
-		// Update struct for response
-		dbStatus.Uri = pgtype.Text{String: uri, Valid: true}
-
-		// Create stats
-		if _, err := qtx.CreateStatusStats(ctx, dbStatus.ID); err != nil {
-			fmt.Printf("Failed to create status stats: %v\n", err)
-		}
-
-		// Increment reply count on parent
-		if inReplyToID.Valid {
-			if err := qtx.IncrementStatusReplies(ctx, inReplyToID.Int64); err != nil {
-				fmt.Printf("Failed to increment reply count: %v\n", err)
-			}
-		}
-
-		_, notifTasks, err := h.processMentions(ctx, qtx, dbStatus.ID, accountID, req.Status)
-		if err != nil {
-			// Log error but continue status creation?
-			// Better to fail if critical, or log and continue.
-			// Review says: "Silent failure patterns... This could lead to statuses being posted without mentions"
-			// So we should handle it. However, failing the whole status after creation might be extreme.
-			// But since we are in a transaction, we can return error and rollback.
-			web.JSONError(w, http.StatusInternalServerError, "Failed to process mentions")
-			return
-		}
-
-		// Process Media Attachments
-		for _, mediaIDStr := range req.MediaIDs {
-			mediaID, err := strconv.ParseInt(mediaIDStr, 10, 64)
-			if err != nil {
-				continue
-			}
-			rows, err := qtx.AttachMediaToStatus(ctx, db.AttachMediaToStatusParams{
-				ID:        mediaID,
-				StatusID:  pgtype.Int8{Int64: dbStatus.ID, Valid: true},
-				AccountID: pgtype.Int8{Int64: accountID, Valid: true},
-			})
-			if err != nil {
-				web.JSONError(w, http.StatusInternalServerError, "Failed to attach media")
-				return
-			}
-			if rows != 1 {
-				web.JSONError(w, http.StatusForbidden, "Media not found or not owned by you")
-				return
-			}
-		}
-
-		// Process Hashtags
-		tags, _ := h.processTags(req.Status)
-		if err := h.saveTags(ctx, qtx, dbStatus.ID, tags); err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Failed to save tags")
-			return
-		}
-
-		if err := tx.Commit(ctx); err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Failed to commit transaction")
-			return
-		}
-
-		apiStatus := SerializeStatus(ctx, h.queries, h.cfg, dbStatus)
-
-		// Publish streaming events
-		if h.publisher != nil {
-			// Publish to public timeline if public
-			streams := []string{}
-			if dbStatus.Visibility == VisibilityPublic {
-				streams = append(streams, streaming.StreamPublic, streaming.StreamPublicLocal)
-			}
-
-			// Publish to user stream (home of followers would be distributed by worker usually,
-			// but simply publishing to author's user stream is good for self)
-			streams = append(streams, fmt.Sprintf("user:%d", accountID))
-
-			for _, t := range tags {
-				streams = append(streams, fmt.Sprintf("hashtag:%s", t))
-			}
-
-			_ = h.publisher.PublishStatusToRedis(context.Background(), apiStatus, streams)
-
-			// Publish notifications
-			// Sender already fetched
-			senderAPI := h.dbAccountToAPI(sender)
-			for _, task := range notifTasks {
-				apiNotif := Notification{
-					ID:        strconv.FormatInt(task.Notification.ID, 10),
-					Type:      "mention",
-					CreatedAt: task.Notification.CreatedAt.Time,
-					Account:   senderAPI,
-					Status:    &apiStatus,
-				}
-				_ = h.publisher.PublishNotificationToRedis(ctx, task.Account.ID, apiNotif)
-			}
-		}
-
-		if h.outgoing != nil {
-			if err := h.outgoing.DeliverStatusCreate(ctx, dbStatus.ID); err != nil {
-				fmt.Printf("Failed to deliver Create activity: %v\n", err)
-			}
-		}
-
+		apiStatus := h.publishCreatedStatus(ctx, accountID, result)
 		web.JSON(w, http.StatusOK, apiStatus)
+		return
+	}
+
+	if err := normalizeCreateStatusRequest(&req); err != nil {
+		var createErr statusCreateError
+		if errors.As(err, &createErr) {
+			web.JSONError(w, createErr.Status, createErr.Message)
+			return
+		}
+		web.JSONError(w, http.StatusInternalServerError, "Failed to create status")
 		return
 	}
 

@@ -27,6 +27,7 @@ import (
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/federation"
 	"github.com/deicod/gotodon/internal/media"
+	"github.com/deicod/gotodon/internal/services"
 	"github.com/deicod/gotodon/internal/streaming"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/internal/workers"
@@ -125,10 +126,15 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	deliveryService := federation.NewDeliveryService()
 	var (
-		deliveryEnqueuer      federation.DeliveryEnqueuer
-		workerManager         *workers.Manager
-		remoteAccountEnqueuer *workers.RemoteAccountEnqueuer
-		remoteStatusEnqueuer  *workers.RemoteStatusEnqueuer
+		deliveryEnqueuer        federation.DeliveryEnqueuer
+		workerManager           *workers.Manager
+		remoteAccountEnqueuer   *workers.RemoteAccountEnqueuer
+		remoteStatusEnqueuer    *workers.RemoteStatusEnqueuer
+		scheduledStatusEnqueuer *workers.ScheduledStatusEnqueuer
+		mediaProcessingEnqueuer *workers.MediaProcessingEnqueuer
+		linkCrawlerEnqueuer     *workers.LinkCrawlerEnqueuer
+		statusCleanupEnqueuer   *workers.StatusCleanupEnqueuer
+		mediaCleanupEnqueuer    *workers.MediaCleanupEnqueuer
 	)
 	if cfg.Workers.Enabled && rdb != nil {
 		workerManager, err = workers.NewManager(cfg, logger)
@@ -138,6 +144,11 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		deliveryEnqueuer = workers.NewDeliveryEnqueuer(workerManager.Client())
 		remoteAccountEnqueuer = workers.NewRemoteAccountEnqueuer(workerManager.Client())
 		remoteStatusEnqueuer = workers.NewRemoteStatusEnqueuer(workerManager.Client())
+		scheduledStatusEnqueuer = workers.NewScheduledStatusEnqueuer(workerManager.Client())
+		mediaProcessingEnqueuer = workers.NewMediaProcessingEnqueuer(workerManager.Client())
+		linkCrawlerEnqueuer = workers.NewLinkCrawlerEnqueuer(workerManager.Client())
+		statusCleanupEnqueuer = workers.NewStatusCleanupEnqueuer(workerManager.Client())
+		mediaCleanupEnqueuer = workers.NewMediaCleanupEnqueuer(workerManager.Client())
 	} else {
 		if !cfg.Workers.Enabled {
 			logger.Warn("Workers disabled by config; using in-process delivery queue")
@@ -202,7 +213,22 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	mediaStorage := media.NewLocalStorage("./uploads", fmt.Sprintf("https://%s/files", cfg.Instance.LocalDomain))
 	mediaUploader := media.NewUploader(mediaStorage)
 	mediaHandler := v1.NewMediaHandler(queries, mediaUploader)
+	if mediaProcessingEnqueuer != nil {
+		mediaHandler.SetProcessingEnqueuer(mediaProcessingEnqueuer)
+	}
 	mediaHandler.RegisterRoutes(mux)
+
+	linkCrawler := services.NewLinkCrawler(queries, mediaStorage)
+	statusCleanup := services.NewStatusCleanupService(queries, rdb, outgoingService, streamingHub)
+	mediaCleanup := services.NewMediaCleanupService(queries, mediaStorage, logger)
+	if linkCrawlerEnqueuer != nil {
+		statusesHandler.SetLinkCrawler(linkCrawlerEnqueuer)
+	} else {
+		statusesHandler.SetLinkCrawler(&services.InProcessLinkCrawler{
+			Crawler: linkCrawler,
+			Logger:  logger,
+		})
+	}
 
 	announcementsHandler := v1.NewAnnouncementsHandler(queries)
 	announcementsHandler.RegisterRoutes(mux)
@@ -334,6 +360,11 @@ func runServer(cmd *cobra.Command, _ []string) error {
 			&workers.DeliveryRegistrar{Store: queries, Deliver: deliveryService.DeliverActivity},
 			&workers.RemoteAccountRegistrar{Resolver: remoteAccountResolver},
 			&workers.RemoteStatusRegistrar{Fetcher: remoteStatusFetcher, Lookup: queries},
+			&workers.ScheduledStatusRegistrar{Store: queries, Publisher: statusesHandler},
+			&workers.MediaProcessingRegistrar{Store: queries, Storage: mediaStorage},
+			&workers.LinkCrawlerRegistrar{Crawler: linkCrawler},
+			&workers.StatusCleanupRegistrar{Runner: statusCleanup},
+			&workers.MediaCleanupRegistrar{Runner: mediaCleanup},
 		); err != nil {
 			return fmt.Errorf("registering workers: %w", err)
 		}
@@ -346,7 +377,22 @@ func runServer(cmd *cobra.Command, _ []string) error {
 			if err != nil {
 				return fmt.Errorf("starting workers: %w", err)
 			}
-		default:
+		case <-time.After(250 * time.Millisecond):
+			go func() {
+				if err := <-startErr; err != nil {
+					logger.Error("Worker server stopped", "error", err)
+					cancel()
+				}
+			}()
+		}
+		if scheduledStatusEnqueuer != nil {
+			go workers.StartScheduledStatusPolling(ctx, scheduledStatusEnqueuer, 0)
+		}
+		if statusCleanupEnqueuer != nil {
+			go workers.StartStatusCleanupPolling(ctx, statusCleanupEnqueuer, 0)
+		}
+		if mediaCleanupEnqueuer != nil {
+			go workers.StartMediaCleanupPolling(ctx, mediaCleanupEnqueuer, 0)
 		}
 		go func() {
 			<-ctx.Done()

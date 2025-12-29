@@ -28,7 +28,7 @@ func (q *Queries) AdminAssignReport(ctx context.Context, arg AdminAssignReportPa
 }
 
 const adminGetReport = `-- name: AdminGetReport :one
-SELECT id, status_ids, comment, created_at, updated_at, account_id, action_taken_by_account_id, target_account_id, action_taken_at, forwarded, category, assigned_account_id, rule_ids, uri FROM reports WHERE id = $1
+SELECT id, status_ids, comment, created_at, updated_at, account_id, action_taken_by_account_id, target_account_id, action_taken_at, forwarded, category, assigned_account_id, rule_ids, uri, application_id FROM reports WHERE id = $1
 `
 
 func (q *Queries) AdminGetReport(ctx context.Context, id int64) (Report, error) {
@@ -49,13 +49,14 @@ func (q *Queries) AdminGetReport(ctx context.Context, id int64) (Report, error) 
 		&i.AssignedAccountID,
 		&i.RuleIds,
 		&i.Uri,
+		&i.ApplicationID,
 	)
 	return i, err
 }
 
 const adminListReports = `-- name: AdminListReports :many
 SELECT 
-    r.id, r.status_ids, r.comment, r.created_at, r.updated_at, r.account_id, r.action_taken_by_account_id, r.target_account_id, r.action_taken_at, r.forwarded, r.category, r.assigned_account_id, r.rule_ids, r.uri,
+    r.id, r.status_ids, r.comment, r.created_at, r.updated_at, r.account_id, r.action_taken_by_account_id, r.target_account_id, r.action_taken_at, r.forwarded, r.category, r.assigned_account_id, r.rule_ids, r.uri, r.application_id,
     a.username as account_username, a.domain as account_domain,
     ta.username as target_account_username, ta.domain as target_account_domain
 FROM reports r
@@ -90,8 +91,9 @@ type AdminListReportsRow struct {
 	Forwarded              pgtype.Bool        `db:"forwarded" json:"forwarded"`
 	Category               int32              `db:"category" json:"category"`
 	AssignedAccountID      pgtype.Int8        `db:"assigned_account_id" json:"assigned_account_id"`
-	RuleIds                []int32            `db:"rule_ids" json:"rule_ids"`
+	RuleIds                []int64            `db:"rule_ids" json:"rule_ids"`
 	Uri                    pgtype.Text        `db:"uri" json:"uri"`
+	ApplicationID          pgtype.Int8        `db:"application_id" json:"application_id"`
 	AccountUsername        string             `db:"account_username" json:"account_username"`
 	AccountDomain          pgtype.Text        `db:"account_domain" json:"account_domain"`
 	TargetAccountUsername  string             `db:"target_account_username" json:"target_account_username"`
@@ -128,6 +130,7 @@ func (q *Queries) AdminListReports(ctx context.Context, arg AdminListReportsPara
 			&i.AssignedAccountID,
 			&i.RuleIds,
 			&i.Uri,
+			&i.ApplicationID,
 			&i.AccountUsername,
 			&i.AccountDomain,
 			&i.TargetAccountUsername,
@@ -165,7 +168,7 @@ INSERT INTO reports (
 ) VALUES (
     $1, $2, $3, $4, $5, $6, now(), now()
 )
-RETURNING id, status_ids, comment, created_at, updated_at, account_id, action_taken_by_account_id, target_account_id, action_taken_at, forwarded, category, assigned_account_id, rule_ids, uri
+RETURNING id, status_ids, comment, created_at, updated_at, account_id, action_taken_by_account_id, target_account_id, action_taken_at, forwarded, category, assigned_account_id, rule_ids, uri, application_id
 `
 
 type CreateReportParams struct {
@@ -202,6 +205,7 @@ func (q *Queries) CreateReport(ctx context.Context, arg CreateReportParams) (Rep
 		&i.AssignedAccountID,
 		&i.RuleIds,
 		&i.Uri,
+		&i.ApplicationID,
 	)
 	return i, err
 }

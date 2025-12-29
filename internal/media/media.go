@@ -8,15 +8,17 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	_ "image/gif"  // GIF support
-	_ "image/jpeg" // JPEG support
-	_ "image/png"  // PNG support
+	"image/gif"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"mime"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"golang.org/x/image/draw"
 
 	_ "golang.org/x/image/webp" // WebP support
 )
@@ -272,6 +274,93 @@ func ProcessImage(data []byte) (*FileMeta, error) {
 	_ = format // Could use this for validation
 
 	return meta, nil
+}
+
+// Thumbnail contains generated thumbnail data.
+type Thumbnail struct {
+	Data        []byte
+	ContentType string
+	Width       int
+	Height      int
+}
+
+// GenerateThumbnail decodes an image and produces a resized thumbnail.
+func GenerateThumbnail(data []byte, contentType string) (*Thumbnail, error) {
+	if len(data) == 0 {
+		return nil, ErrInvalidImage
+	}
+	img, format, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, ErrInvalidImage
+	}
+
+	bounds := img.Bounds()
+	if bounds.Empty() {
+		return nil, ErrInvalidImage
+	}
+
+	width, height := bounds.Dx(), bounds.Dy()
+	thumbWidth, thumbHeight := calculateThumbnailSize(width, height)
+
+	dst := image.NewRGBA(image.Rect(0, 0, thumbWidth, thumbHeight))
+	draw.CatmullRom.Scale(dst, dst.Bounds(), img, bounds, draw.Over, nil)
+
+	thumbFormat := thumbnailFormat(contentType, format)
+	var buf bytes.Buffer
+	switch thumbFormat {
+	case "jpeg":
+		if err := jpeg.Encode(&buf, dst, &jpeg.Options{Quality: 85}); err != nil {
+			return nil, fmt.Errorf("encode jpeg: %w", err)
+		}
+	case "gif":
+		if err := gif.Encode(&buf, dst, nil); err != nil {
+			return nil, fmt.Errorf("encode gif: %w", err)
+		}
+	default:
+		if err := png.Encode(&buf, dst); err != nil {
+			return nil, fmt.Errorf("encode png: %w", err)
+		}
+	}
+
+	return &Thumbnail{
+		Data:        buf.Bytes(),
+		ContentType: formatContentType(thumbFormat),
+		Width:       thumbWidth,
+		Height:      thumbHeight,
+	}, nil
+}
+
+func thumbnailFormat(contentType, decodedFormat string) string {
+	normalized := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	switch normalized {
+	case "image/jpeg", "image/jpg":
+		return "jpeg"
+	case "image/png":
+		return "png"
+	case "image/gif":
+		return "gif"
+	}
+	switch strings.ToLower(decodedFormat) {
+	case "jpeg", "jpg":
+		return "jpeg"
+	case "png":
+		return "png"
+	case "gif":
+		return "gif"
+	default:
+		return "png"
+	}
+}
+
+func formatContentType(format string) string {
+	switch format {
+	case "jpeg":
+		return "image/jpeg"
+	case "gif":
+		return "image/gif"
+	default:
+		return "image/png"
+	}
 }
 
 // calculateThumbnailSize calculates appropriate thumbnail dimensions

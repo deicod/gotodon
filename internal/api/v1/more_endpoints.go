@@ -354,9 +354,13 @@ func (h *ScheduledStatusesHandler) List(w http.ResponseWriter, r *http.Request) 
 
 		res := make([]ScheduledStatus, len(statuses))
 		for i, s := range statuses {
+			var scheduledAt interface{}
+			if s.ScheduledAt.Valid {
+				scheduledAt = s.ScheduledAt.Time
+			}
 			res[i] = ScheduledStatus{
 				ID:          strconv.FormatInt(s.ID, 10),
-				ScheduledAt: s.ScheduledAt.Time,
+				ScheduledAt: scheduledAt,
 				Params:      s.Params, // Raw JSON bytes
 			}
 		}
@@ -396,9 +400,13 @@ func (h *ScheduledStatusesHandler) Get(w http.ResponseWriter, r *http.Request) {
 			web.JSONError(w, http.StatusNotFound, "Record not found")
 			return
 		}
+		var scheduledAt interface{}
+		if s.ScheduledAt.Valid {
+			scheduledAt = s.ScheduledAt.Time
+		}
 		web.JSON(w, http.StatusOK, ScheduledStatus{
 			ID:          strconv.FormatInt(s.ID, 10),
-			ScheduledAt: s.ScheduledAt.Time,
+			ScheduledAt: scheduledAt,
 			Params:      s.Params,
 		})
 		return

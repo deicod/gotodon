@@ -43,6 +43,22 @@ UPDATE media_attachments SET
 WHERE id = $1 AND account_id = $2
 RETURNING *;
 
+-- name: UpdateMediaProcessing :one
+UPDATE media_attachments SET
+    file_meta = COALESCE($2, file_meta),
+    blurhash = COALESCE($3, blurhash),
+    processing = COALESCE($4, processing),
+    thumbnail_file_name = COALESCE($5, thumbnail_file_name),
+    thumbnail_content_type = COALESCE($6, thumbnail_content_type),
+    thumbnail_file_size = COALESCE($7, thumbnail_file_size),
+    thumbnail_updated_at = CASE
+        WHEN $5 IS NULL AND $6 IS NULL AND $7 IS NULL THEN thumbnail_updated_at
+        ELSE now()
+    END,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
 -- name: AttachMediaToStatus :execrows
 UPDATE media_attachments SET status_id = $2, updated_at = now()
 WHERE id = $1 AND account_id = $3 AND status_id IS NULL;
@@ -53,3 +69,14 @@ DELETE FROM media_attachments WHERE id = $1 AND account_id = $2;
 -- name: DetachMediaFromStatus :execrows
 UPDATE media_attachments SET status_id = NULL, updated_at = now()
 WHERE id = $1 AND account_id = $2 AND status_id IS NOT NULL;
+
+-- name: ListOrphanedMediaAttachments :many
+SELECT * FROM media_attachments
+WHERE status_id IS NULL
+  AND scheduled_status_id IS NULL
+  AND created_at < @before
+ORDER BY id ASC
+LIMIT sqlc.arg('limit');
+
+-- name: DeleteMediaAttachmentByID :exec
+DELETE FROM media_attachments WHERE id = $1;

@@ -2,6 +2,7 @@
 package v1
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,9 +22,10 @@ import (
 
 // MediaHandler handles media attachment endpoints
 type MediaHandler struct {
-	queries  *db.Queries
-	uploader *media.Uploader
-	idGen    *snowflake.Generator
+	queries            *db.Queries
+	uploader           *media.Uploader
+	idGen              *snowflake.Generator
+	processingEnqueuer MediaProcessingEnqueuer
 }
 
 // NewMediaHandler creates a new media handler
@@ -33,6 +35,16 @@ func NewMediaHandler(queries *db.Queries, uploader *media.Uploader) *MediaHandle
 		uploader: uploader,
 		idGen:    snowflake.NewGenerator(),
 	}
+}
+
+// MediaProcessingEnqueuer schedules media processing jobs.
+type MediaProcessingEnqueuer interface {
+	Enqueue(ctx context.Context, mediaID int64) error
+}
+
+// SetProcessingEnqueuer configures background media processing.
+func (h *MediaHandler) SetProcessingEnqueuer(enqueuer MediaProcessingEnqueuer) {
+	h.processingEnqueuer = enqueuer
 }
 
 // MediaAttachment is the API response for a media attachment
@@ -91,7 +103,8 @@ func (h *MediaHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Upload and process
-	result, err := h.uploader.Upload(r.Context(), accountID, header.Filename, data)
+	skipProcessing := h.processingEnqueuer != nil
+	result, err := h.uploader.UploadWithOptions(r.Context(), accountID, header.Filename, data, media.UploadOptions{SkipProcessing: skipProcessing})
 	if err != nil {
 		switch err {
 		case media.ErrUnsupportedType:
@@ -117,6 +130,13 @@ func (h *MediaHandler) Create(w http.ResponseWriter, r *http.Request) {
 			result.Meta.Focus = &media.MetaFocus{X: focusX, Y: focusY}
 		}
 		fileMeta, _ = json.Marshal(result.Meta)
+	} else if focusX != 0 || focusY != 0 {
+		fileMeta, _ = json.Marshal(&media.FileMeta{Focus: &media.MetaFocus{X: focusX, Y: focusY}})
+	}
+
+	processingState := media.ProcessingComplete
+	if skipProcessing {
+		processingState = media.ProcessingQueued
 	}
 
 	// Create in database
@@ -128,13 +148,24 @@ func (h *MediaHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Type:            mediaTypeToInt(result.MediaType),
 		Description:     pgtype.Text{String: description, Valid: description != ""},
 		Blurhash:        pgtype.Text{String: result.Blurhash, Valid: result.Blurhash != ""},
-		Processing:      pgtype.Int4{Int32: 2, Valid: true}, // 2 = processed
+		Processing:      pgtype.Int4{Int32: processingState, Valid: true},
 		Shortcode:       pgtype.Text{String: shortcode, Valid: true},
 		FileMeta:        fileMeta,
 	})
 	if err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Failed to save media record")
 		return
+	}
+
+	if skipProcessing {
+		if err := h.processingEnqueuer.Enqueue(r.Context(), dbMedia.ID); err != nil {
+			_, _ = h.queries.UpdateMediaProcessing(r.Context(), db.UpdateMediaProcessingParams{
+				ID:         dbMedia.ID,
+				Processing: pgtype.Int4{Int32: media.ProcessingFailed, Valid: true},
+			})
+			web.JSONError(w, http.StatusInternalServerError, "Failed to enqueue media processing")
+			return
+		}
 	}
 
 	resp := dbMediaToAPI(dbMedia)

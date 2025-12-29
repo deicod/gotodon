@@ -4,6 +4,7 @@ go 1.25
 
 require (
 	github.com/gorilla/websocket v1.5.3
+	github.com/hibiken/asynq v0.25.1
 	github.com/jackc/pgx/v5 v5.7.5
 	github.com/pressly/goose/v3 v3.26.0
 	github.com/redis/go-redis/v9 v9.17.2
@@ -11,6 +12,7 @@ require (
 	github.com/spf13/viper v1.19.0
 	golang.org/x/crypto v0.40.0
 	golang.org/x/image v0.33.0
+	golang.org/x/net v0.42.0
 )
 
 require (
@@ -19,7 +21,6 @@ require (
 	github.com/fsnotify/fsnotify v1.8.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
-	github.com/hibiken/asynq v0.25.1 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect

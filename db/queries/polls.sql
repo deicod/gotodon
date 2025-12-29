@@ -11,8 +11,7 @@ SELECT * FROM polls WHERE status_id = $1;
 
 -- name: Vote :exec
 INSERT INTO poll_votes (poll_id, account_id, choice)
-VALUES ($1, $2, $3)
-ON CONFLICT (poll_id, account_id, choice) DO NOTHING;
+VALUES ($1, $2, $3);
 
 -- name: GetVotes :many
 SELECT * FROM poll_votes WHERE poll_id = $1 AND account_id = $2;
@@ -23,10 +22,18 @@ SELECT * FROM poll_votes WHERE poll_id = $1;
 -- name: IncrementVoteCount :exec
 UPDATE polls SET
     votes_count = votes_count + 1,
-    cached_tallies = jsonb_set(
-        cached_tallies,
-        ARRAY[$2::text],
-        to_jsonb(COALESCE((cached_tallies->>$2::text)::int, 0) + 1)
+    cached_tallies = (
+        SELECT array_agg(
+            CASE
+                WHEN i = $2 + 1 THEN COALESCE(polls.cached_tallies[i], 0) + 1
+                ELSE COALESCE(polls.cached_tallies[i], 0)
+            END
+            ORDER BY i
+        )
+        FROM generate_series(
+            1,
+            GREATEST(COALESCE(array_length(polls.cached_tallies, 1), 0), $2 + 1)
+        ) AS i
     ),
     updated_at = now()
 WHERE id = $1;
@@ -39,7 +46,7 @@ WHERE id = $1;
 SELECT 
     ordinality - 1 AS option_index,
     option_text AS title,
-    COALESCE((p.cached_tallies->>((ordinality - 1)::text))::bigint, 0) AS votes_count
+    COALESCE(p.cached_tallies[ordinality], 0) AS votes_count
 FROM polls p,
 LATERAL unnest(p.options) WITH ORDINALITY AS opt(option_text, ordinality)
 WHERE p.id = $1
@@ -48,4 +55,3 @@ ORDER BY ordinality;
 -- name: GetPollVotesByAccountID :many
 SELECT * FROM poll_votes 
 WHERE poll_id = $1 AND account_id = $2;
-

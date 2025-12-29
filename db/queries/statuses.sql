@@ -177,6 +177,10 @@ LIMIT $1 OFFSET $2;
 UPDATE statuses SET uri = $1, updated_at = now()
 WHERE id = $2;
 
+-- name: UpdateStatusPollID :exec
+UPDATE statuses SET poll_id = $2, updated_at = now()
+WHERE id = $1;
+
 -- name: CountStatusesInRange :one
 SELECT COUNT(*) FROM statuses 
 WHERE created_at >= $1 AND created_at < $2 AND deleted_at IS NULL;

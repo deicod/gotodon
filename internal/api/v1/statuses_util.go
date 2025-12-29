@@ -3,6 +3,7 @@ package v1
 import (
 	"context"
 	"strconv"
+	"strings"
 
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
@@ -141,6 +142,47 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 		statsMap[s.StatusID] = s
 	}
 
+	previewCardsMap := make(map[int64]*PreviewCard)
+	if rows, err := q.GetPreviewCardsByStatusIDs(ctx, statusIDs); err == nil {
+		for _, row := range rows {
+			if _, exists := previewCardsMap[row.StatusID]; exists {
+				continue
+			}
+			card := db.PreviewCard{
+				ID:                        row.ID,
+				Url:                       row.Url,
+				Title:                     row.Title,
+				Description:               row.Description,
+				ImageFileName:             row.ImageFileName,
+				ImageContentType:          row.ImageContentType,
+				ImageFileSize:             row.ImageFileSize,
+				ImageUpdatedAt:            row.ImageUpdatedAt,
+				Type:                      row.Type,
+				Html:                      row.Html,
+				AuthorName:                row.AuthorName,
+				AuthorUrl:                 row.AuthorUrl,
+				ProviderName:              row.ProviderName,
+				ProviderUrl:               row.ProviderUrl,
+				Width:                     row.Width,
+				Height:                    row.Height,
+				CreatedAt:                 row.CreatedAt,
+				UpdatedAt:                 row.UpdatedAt,
+				EmbedUrl:                  row.EmbedUrl,
+				ImageStorageSchemaVersion: row.ImageStorageSchemaVersion,
+				Blurhash:                  row.Blurhash,
+				Language:                  row.Language,
+				MaxScore:                  row.MaxScore,
+				MaxScoreAt:                row.MaxScoreAt,
+				Trendable:                 row.Trendable,
+				LinkType:                  row.LinkType,
+				PublishedAt:               row.PublishedAt,
+				ImageDescription:          row.ImageDescription,
+				AuthorAccountID:           row.AuthorAccountID,
+			}
+			previewCardsMap[row.StatusID] = serializePreviewCard(card)
+		}
+	}
+
 	// Fetch quotes for statuses (quotes where these statuses are the quoting status)
 	dbQuotes, _ := q.GetQuotesByStatusIDs(ctx, statusIDs)
 	quotesMap := make(map[int64]db.Quote) // status_id -> quote
@@ -239,6 +281,9 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 			Emojis:             []CustomEmoji{},
 			Pinned:             false,
 		}
+		if card, ok := previewCardsMap[dbStatus.ID]; ok {
+			s.Card = card
+		}
 
 		if dbStatus.InReplyToID.Valid {
 			idStr := strconv.FormatInt(dbStatus.InReplyToID.Int64, 10)
@@ -312,5 +357,59 @@ func SerializeStatusSimple(ctx context.Context, q db.Querier, cfg *config.Config
 		Mentions:         []Mention{},
 		Tags:             []Tag{},
 		Emojis:           []CustomEmoji{},
+	}
+}
+
+func serializePreviewCard(card db.PreviewCard) *PreviewCard {
+	if card.ID == 0 {
+		return nil
+	}
+
+	var imageURL *string
+	if card.ImageFileName.Valid {
+		image := strings.TrimSpace(card.ImageFileName.String)
+		if image != "" {
+			if strings.HasPrefix(image, "http://") || strings.HasPrefix(image, "https://") {
+				imageURL = &image
+			} else {
+				local := "/files/" + image
+				imageURL = &local
+			}
+		}
+	}
+
+	var blurhash *string
+	if card.Blurhash.Valid {
+		value := card.Blurhash.String
+		blurhash = &value
+	}
+
+	return &PreviewCard{
+		URL:          card.Url,
+		Title:        card.Title,
+		Description:  card.Description,
+		Type:         previewCardType(card.Type),
+		AuthorName:   card.AuthorName,
+		AuthorURL:    card.AuthorUrl,
+		ProviderName: card.ProviderName,
+		ProviderURL:  card.ProviderUrl,
+		HTML:         card.Html,
+		Width:        int(card.Width),
+		Height:       int(card.Height),
+		Image:        imageURL,
+		Blurhash:     blurhash,
+	}
+}
+
+func previewCardType(cardType int32) string {
+	switch cardType {
+	case 1:
+		return "photo"
+	case 2:
+		return "video"
+	case 3:
+		return "rich"
+	default:
+		return "link"
 	}
 }

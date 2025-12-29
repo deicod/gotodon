@@ -162,6 +162,23 @@ func TestUploader(t *testing.T) {
 		}
 	})
 
+	t.Run("Upload image without processing", func(t *testing.T) {
+		imageData := createTestImage(100, 100)
+
+		result, err := uploader.UploadWithOptions(ctx, 12345, "test.png", imageData, UploadOptions{SkipProcessing: true})
+		if err != nil {
+			t.Fatalf("UploadWithOptions() error = %v", err)
+		}
+
+		if result.Meta != nil {
+			t.Error("Meta should be nil when processing is skipped")
+		}
+
+		if result.Blurhash != "" {
+			t.Error("Blurhash should be empty when processing is skipped")
+		}
+	})
+
 	t.Run("Reject unsupported type", func(t *testing.T) {
 		data := []byte("not an image")
 		_, err := uploader.Upload(ctx, 12345, "test.txt", data)

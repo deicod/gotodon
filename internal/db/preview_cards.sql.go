@@ -330,6 +330,97 @@ func (q *Queries) GetPreviewCardTrend(ctx context.Context, previewCardID int64) 
 	return i, err
 }
 
+const getPreviewCardsByStatusIDs = `-- name: GetPreviewCardsByStatusIDs :many
+SELECT pcs.status_id, pc.id, pc.url, pc.title, pc.description, pc.image_file_name, pc.image_content_type, pc.image_file_size, pc.image_updated_at, pc.type, pc.html, pc.author_name, pc.author_url, pc.provider_name, pc.provider_url, pc.width, pc.height, pc.created_at, pc.updated_at, pc.embed_url, pc.image_storage_schema_version, pc.blurhash, pc.language, pc.max_score, pc.max_score_at, pc.trendable, pc.link_type, pc.published_at, pc.image_description, pc.author_account_id FROM preview_cards pc
+JOIN preview_cards_statuses pcs ON pcs.preview_card_id = pc.id
+WHERE pcs.status_id = ANY($1::bigint[])
+ORDER BY pcs.status_id, pc.id
+`
+
+type GetPreviewCardsByStatusIDsRow struct {
+	StatusID                  int64              `db:"status_id" json:"status_id"`
+	ID                        int64              `db:"id" json:"id"`
+	Url                       string             `db:"url" json:"url"`
+	Title                     string             `db:"title" json:"title"`
+	Description               string             `db:"description" json:"description"`
+	ImageFileName             pgtype.Text        `db:"image_file_name" json:"image_file_name"`
+	ImageContentType          pgtype.Text        `db:"image_content_type" json:"image_content_type"`
+	ImageFileSize             pgtype.Int4        `db:"image_file_size" json:"image_file_size"`
+	ImageUpdatedAt            pgtype.Timestamptz `db:"image_updated_at" json:"image_updated_at"`
+	Type                      int32              `db:"type" json:"type"`
+	Html                      string             `db:"html" json:"html"`
+	AuthorName                string             `db:"author_name" json:"author_name"`
+	AuthorUrl                 string             `db:"author_url" json:"author_url"`
+	ProviderName              string             `db:"provider_name" json:"provider_name"`
+	ProviderUrl               string             `db:"provider_url" json:"provider_url"`
+	Width                     int32              `db:"width" json:"width"`
+	Height                    int32              `db:"height" json:"height"`
+	CreatedAt                 pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt                 pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	EmbedUrl                  string             `db:"embed_url" json:"embed_url"`
+	ImageStorageSchemaVersion pgtype.Int4        `db:"image_storage_schema_version" json:"image_storage_schema_version"`
+	Blurhash                  pgtype.Text        `db:"blurhash" json:"blurhash"`
+	Language                  pgtype.Text        `db:"language" json:"language"`
+	MaxScore                  pgtype.Float8      `db:"max_score" json:"max_score"`
+	MaxScoreAt                pgtype.Timestamptz `db:"max_score_at" json:"max_score_at"`
+	Trendable                 pgtype.Bool        `db:"trendable" json:"trendable"`
+	LinkType                  pgtype.Int4        `db:"link_type" json:"link_type"`
+	PublishedAt               pgtype.Timestamptz `db:"published_at" json:"published_at"`
+	ImageDescription          string             `db:"image_description" json:"image_description"`
+	AuthorAccountID           pgtype.Int8        `db:"author_account_id" json:"author_account_id"`
+}
+
+func (q *Queries) GetPreviewCardsByStatusIDs(ctx context.Context, dollar_1 []int64) ([]GetPreviewCardsByStatusIDsRow, error) {
+	rows, err := q.db.Query(ctx, getPreviewCardsByStatusIDs, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetPreviewCardsByStatusIDsRow{}
+	for rows.Next() {
+		var i GetPreviewCardsByStatusIDsRow
+		if err := rows.Scan(
+			&i.StatusID,
+			&i.ID,
+			&i.Url,
+			&i.Title,
+			&i.Description,
+			&i.ImageFileName,
+			&i.ImageContentType,
+			&i.ImageFileSize,
+			&i.ImageUpdatedAt,
+			&i.Type,
+			&i.Html,
+			&i.AuthorName,
+			&i.AuthorUrl,
+			&i.ProviderName,
+			&i.ProviderUrl,
+			&i.Width,
+			&i.Height,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.EmbedUrl,
+			&i.ImageStorageSchemaVersion,
+			&i.Blurhash,
+			&i.Language,
+			&i.MaxScore,
+			&i.MaxScoreAt,
+			&i.Trendable,
+			&i.LinkType,
+			&i.PublishedAt,
+			&i.ImageDescription,
+			&i.AuthorAccountID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getPreviewCardsForStatus = `-- name: GetPreviewCardsForStatus :many
 SELECT pc.id, pc.url, pc.title, pc.description, pc.image_file_name, pc.image_content_type, pc.image_file_size, pc.image_updated_at, pc.type, pc.html, pc.author_name, pc.author_url, pc.provider_name, pc.provider_url, pc.width, pc.height, pc.created_at, pc.updated_at, pc.embed_url, pc.image_storage_schema_version, pc.blurhash, pc.language, pc.max_score, pc.max_score_at, pc.trendable, pc.link_type, pc.published_at, pc.image_description, pc.author_account_id FROM preview_cards pc
 JOIN preview_cards_statuses pcs ON pcs.preview_card_id = pc.id

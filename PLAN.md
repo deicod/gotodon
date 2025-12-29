@@ -1,474 +1,227 @@
-# Gotodon v4.5.3 Compatibility Plan
+# Gotodon <-> Mastodon 4.5.3 Compatibility Plan
 
-> **Instructions:** Check off tasks with `[x]` as they are completed. This file tracks progress toward 100% Mastodon v4.5.3 API compatibility.
+Last updated: 2025-12-24
+Target: Mastodon 4.5.3
+Scope: Server-side compatibility (schema, API v1/v2/admin, federation, streaming, OAuth/OIDC, background jobs/services, tests).
+Out of scope for now: Web UI parity and /api/web endpoints.
+Assumptions: No database provisioned yet, so new migrations can be authored but do not need to be applied.
 
-**Last Updated:** 2025-12-18  
-**Target:** Mastodon v4.5.3  
-**Estimated Effort:** 4-6 weeks
+## Evidence sources
+- Mastodon routes: `mastodon/config/routes/api.rb`
+- Schema diff: `SCHEMA_DIFF.md`
+- Gotodon routes: `cmd/serve.go` and `internal/api/**`
+- Implementation notes: inline comments and mock fallbacks in handlers
 
----
-
-## Milestone 1: Database Schema Alignment
-
-**Goal:** Add all missing tables to match Mastodon v4.5.3 schema
-
-### Task 1.1: Core Content Tables
-- [x] Create migration `002_core_content_tables.sql`
-- [x] Add `status_edits` table (post edit history)
-  - [x] Define columns: status_id, account_id, text, spoiler_text, ordered_media_attachment_ids, etc.
-  - [x] Add indexes on status_id, account_id
-  - [x] Add foreign keys
-- [x] Add `quotes` table (quote posts - v4.5+ feature)
-  - [x] Define columns: account_id, status_id, quoted_status_id, quoted_account_id, state, etc.
-  - [x] Add indexes
-  - [x] Add foreign keys
-- [x] Add `preview_cards` table (link previews)
-  - [x] Define columns: url, title, description, image, type, author_account_id, etc.
-  - [x] Add `preview_cards_statuses` join table
-  - [x] Add `preview_card_trends` table
-  - [x] Add `preview_card_providers` table
-
-### Task 1.2: Notification System Tables
-- [x] Add `notification_policies` table
-  - [x] Define columns: account_id, for_not_following, for_not_followers, for_new_accounts, etc.
-  - [x] Add unique index on account_id
-- [x] Add `notification_requests` table
-  - [x] Define columns: account_id, from_account_id, last_status_id, notifications_count
-  - [x] Add indexes
-- [x] Add `notification_permissions` table
-  - [x] Define columns: account_id, from_account_id
-  - [x] Add indexes
-
-### Task 1.3: Tag & Trends Tables
-- [x] Add `tag_follows` table
-  - [x] Define columns: tag_id, account_id
-  - [x] Add unique index on account_id + tag_id
-- [x] Add `tag_trends` table
-  - [x] Define columns: tag_id, score, rank, allowed, language
-- [x] Add `status_trends` table
-  - [x] Define columns: status_id, account_id, score, rank, allowed, language
-
-### Task 1.4: Account Feature Tables
-- [x] Add `account_notes` table (private notes about users)
-  - [x] Define columns: account_id, target_account_id, comment
-  - [x] Add unique index
-- [x] Add `account_aliases` table
-  - [x] Define columns: account_id, acct, uri
-- [x] Add `account_migrations` table
-  - [x] Define columns: account_id, acct, followers_count, target_account_id
-
-### Task 1.5: Admin & Moderation Tables
-- [x] Add `rules` table (server rules)
-  - [x] Define columns: priority, text, hint, deleted_at
-  - [x] Add `rule_translations` table
-- [x] Add `domain_allows` table
-  - [x] Define columns: domain
-- [x] Add `tombstones` table
-  - [x] Define columns: account_id, uri, by_moderator
-
-### Task 1.6: Session & Security Tables
-- [x] Add `session_activations` table
-- [x] Add `login_activities` table
-- [x] Add `webauthn_credentials` table
-
-### Task 1.7: Reports & Annual Features
-- [x] Add `generated_annual_reports` table
-  - [x] Define columns: account_id, year, data (jsonb), schema_version, viewed_at
-
-### Task 1.8: Generate SQL Queries
-- [x] Run `sqlc generate` after migration
-- [x] Create `db/queries/status_edits.sql`
-- [x] Create `db/queries/quotes.sql`
-- [x] Create `db/queries/notification_policies.sql`
-- [x] Create `db/queries/tag_follows.sql`
-- [x] Create `db/queries/preview_cards.sql`
-- [x] Create `db/queries/account_notes.sql`
-- [x] Create `db/queries/rules.sql`
-- [x] Create `db/queries/sessions.sql`
-- [x] Create `db/queries/annual_reports.sql`
-- [x] Verify with `go build ./...`
+## Current parity snapshot (by subsystem)
+- Schema: High. Tables and columns align; one extra table remains (`preferences`) and many index name/shape mismatches remain in `SCHEMA_DIFF.md`.
+- API v1: Medium. Core handlers exist, but several endpoints are missing and some responses are static or minimal.
+- API v2: Medium-low. Core endpoints exist, but filters/notifications/admin coverage is incomplete and several responses are static or mock.
+- Admin API: Medium-low. Core CRUD exists, but report workflow, email domain blocks, instance config, metrics, roles, and audit logging are incomplete.
+- OAuth/OIDC: Low. Authorization code flow is stubbed; password grant uses plaintext compare; userinfo and discovery endpoints are missing.
+- ActivityPub/Federation: Low-medium. Inbox handlers exist, but outbox/collections/pages and alias routes are missing or empty.
+- Streaming: Low-medium. SSE/WS hub exists, but wildcard/multistream endpoints and full event coverage are missing.
+- Jobs/Services: Medium-low. Delivery, media processing, link crawling, and cleanup exist; many Mastodon background features are missing.
+- Tests/Compatibility: Partial. Unit tests exist, but integration and compatibility suites are missing.
 
 ---
 
-## Milestone 2: v1 API Endpoint Gaps
+## Schema & Data Model
+Status: High (parity with remaining gaps).
 
-**Goal:** Implement all missing v1 API endpoints
+Gaps
+- Extra `preferences` table (Mastodon uses `users.settings` / `web_settings`).
+- Index name/shape mismatches listed in `SCHEMA_DIFF.md`.
+- Conversation unread tracking is stubbed (no persistent read state).
 
-### Task 2.1: Status Edit History
-- [x] Create `internal/api/v1/status_edits.go`
-- [x] Implement `GET /api/v1/statuses/{id}/history`
-  - [x] Query status_edits table
-  - [x] Serialize to Mastodon format
-- [x] Implement `GET /api/v1/statuses/{id}/source`
-  - [x] Return raw text and spoiler_text
-- [x] Add tests in `status_edits_test.go`
-
-### Task 2.2: Status Translation
-- [x] Implement `POST /api/v1/statuses/{id}/translate`
-  - [x] Create translation service interface (`internal/translation/service.go`)
-  - [x] Integrate DeepL and LibreTranslate backends
-  - [x] Add TranslationConfig to config.go
-  - [x] Return translated content
-- [x] Add tests in `status_edits_test.go`
-
-### Task 2.3: Quote Posts (v4.5+ Feature)
-- [x] Add quote support to status creation (QuoteID field added to Status struct)
-- [x] Implement `GET /api/v1/statuses/{id}/quotes`
-- [x] Implement `POST /api/v1/statuses/{id}/quotes/{quote_id}/revoke`
-- [x] Add quote_id and quote to status response serializer
-- [x] Add tests in `status_edits_test.go`
-
-### Task 2.4: Instance Information Endpoints
-- [x] Create `internal/api/v1/instance_info.go`
-- [x] Implement `GET /api/v1/instance/peers`
-  - [x] Return list of known domains
-- [x] Implement `GET /api/v1/instance/activity`
-  - [x] Return weekly activity stats
-- [x] Implement `GET /api/v1/instance/rules`
-  - [x] Query rules table
-- [x] Implement `GET /api/v1/instance/privacy_policy`
-- [x] Implement `GET /api/v1/instance/terms_of_service`
-- [x] Implement `GET /api/v1/instance/extended_description`
-- [x] Implement `GET /api/v1/instance/translation_languages`
-- [x] Implement `GET /api/v1/instance/languages`
-- [x] Add tests in `instance_info_test.go`
-
-### Task 2.5: Tag Following
-- [x] Create `internal/api/v1/tags.go`
-- [x] Implement `GET /api/v1/tags/{id}`
-  - [x] Return tag info with following status
-- [x] Implement `POST /api/v1/tags/{id}/follow`
-  - [x] Insert into tag_follows
-- [x] Implement `POST /api/v1/tags/{id}/unfollow`
-  - [x] Delete from tag_follows
-- [x] Implement `POST /api/v1/tags/{id}/feature`
-- [x] Implement `POST /api/v1/tags/{id}/unfeature`
-- [x] Implement `GET /api/v1/followed_tags`
-  - [x] List user's followed tags
-- [x] Add tests in `tags_test.go`
-
-### Task 2.6: Notification Improvements
-- [x] Implement `GET /api/v1/notifications/unread_count`
-- [x] Implement `GET /api/v1/notifications/requests`
-  - [x] List notification permission requests
-- [x] Implement `POST /api/v1/notifications/requests/{id}/accept`
-- [x] Implement `POST /api/v1/notifications/requests/{id}/dismiss`
-- [x] Implement `GET /api/v1/notifications/policy`
-- [x] Implement `PUT /api/v1/notifications/policy`
-- [x] Add tests in `notifications_test.go`
-
-### Task 2.7: Account Notes
-- [x] Implement `POST /api/v1/accounts/{id}/note`
-  - [x] Create/update private note
-- [x] Include note in relationships response
-- [x] Add tests in `accounts_notes_test.go`
-
-### Task 2.8: Account Management
-- [x] Implement `POST /api/v1/accounts/{id}/remove_from_followers`
-- [x] Verify `GET /api/v1/accounts/lookup` works correctly
-- [x] Add tests
-
-### Task 2.9: Profile Management
-- [x] Implement `DELETE /api/v1/profile/avatar`
-- [x] Implement `DELETE /api/v1/profile/header`
-- [x] Add tests in `profile_test.go`
-
-### Task 2.10: Annual Reports
-- [x] Create `internal/api/v1/annual_reports.go`
-- [x] Implement `GET /api/v1/annual_reports`
-- [x] Implement `GET /api/v1/annual_reports/{id}`
-- [x] Implement `POST /api/v1/annual_reports/{id}/read`
-- [x] Add tests in `annual_reports_test.go`
-
-### Task 2.11: Email Confirmations
-- [x] Implement `POST /api/v1/emails/confirmations`
-- [x] Implement `GET /api/v1/emails/check_confirmation`
-- [x] Add tests in `emails_test.go`
-
-### Task 2.12: Peers Search
-- [x] Implement `GET /api/v1/peers/search`
-- [x] Add tests in `peers_test.go`
+Plan
+1) Add migration `040_migrate_preferences.sql` to move preferences into `users.settings` and `web_settings`, then drop `preferences`.
+2) Reconcile remaining index differences from `SCHEMA_DIFF.md` (name alignment + unique constraints).
+3) Add read/unread tracking for conversations (align with Mastodon logic; likely `conversation_mutes` or new table).
+4) Regenerate sqlc (`sqlc generate`) and update query usage after each schema change.
+5) Add schema parity tests (create tables + verify index names/uniqueness).
 
 ---
 
-## Milestone 3: v2 API Endpoint Gaps
+## API v1
+Status: Medium.
 
-**Goal:** Implement all missing v2 API endpoints
+Missing routes (from `mastodon/config/routes/api.rb`)
+- GET /api/oembed
+- GET /api/v1_alpha/async_refreshes/:id
+- GET /api/v1/statuses (index)
+- POST /api/v1/statuses/:id/mute
+- POST /api/v1/statuses/:id/unmute
+- PUT /api/v1/statuses/:id/interaction_policy
+- GET /api/v1/timelines/link
+- GET /api/v1/streaming/(*any)
+- POST /api/v1/conversations/:id/unread
+- DELETE /api/v1/media/:id
+- /api/v1/filters (all CRUD)
+- GET /api/v1/notifications/requests/:id
+- POST /api/v1/notifications/requests/accept (bulk)
+- POST /api/v1/notifications/requests/dismiss (bulk)
+- GET /api/v1/notifications/requests/merged
+- GET /api/v1/domain_blocks/preview
+- GET /api/v1/instance/terms_of_service/:date
+- GET /api/v1/accounts (index)
+- GET /api/v1/accounts/:id/lists
+- GET /api/v1/accounts/:id/identity_proofs
+- GET /api/v1/accounts/:id/featured_tags
+- GET /api/v1/accounts/:id/endorsements
+- POST /api/v1/accounts/:id/endorse
+- POST /api/v1/accounts/:id/unendorse
+- GET /api/v1/featured_tags/suggestions
+- GET /api/v1/trends (alias for tags index)
 
-### Task 3.1: Grouped Notifications
-- [x] Create `internal/api/v2/notifications.go`
-- [x] Implement `GET /api/v2/notifications` (grouped by group_key)
-  - [x] Group notifications by type and source
-  - [x] Return grouped format
-- [x] Implement `GET /api/v2/notifications/{group_key}`
-- [x] Implement `POST /api/v2/notifications/{group_key}/dismiss`
-- [x] Implement `GET /api/v2/notifications/{group_key}/accounts`
-- [x] Implement `GET /api/v2/notifications/unread_count`
-- [x] Add tests
+Behavior gaps
+- /api/v1/instance uses static data and mismatched version string.
+- Trends links, suggestions deletion, and several account/status payloads are minimal or mock.
+- Scheduled status creation is missing (no `scheduled_at` in POST /api/v1/statuses).
 
-### Task 3.2: v2 Notification Policy
-- [x] Implement `GET /api/v2/notifications/policy`
-- [x] Implement `PUT /api/v2/notifications/policy`
-
----
-
-## Milestone 4: Admin API Gaps
-
-**Goal:** Complete admin API implementation
-
-### Task 4.1: Domain Allows
-- [x] Create `internal/api/admin/domain_allows.go`
-- [x] Implement `GET /api/v1/admin/domain_allows`
-- [x] Implement `GET /api/v1/admin/domain_allows/{id}`
-- [x] Implement `POST /api/v1/admin/domain_allows`
-- [x] Implement `DELETE /api/v1/admin/domain_allows/{id}`
-
-### Task 4.2: IP Blocks
-- [x] Create `internal/api/admin/ip_blocks.go`
-- [x] Implement CRUD for `/api/v1/admin/ip_blocks`
-
-### Task 4.3: Canonical Email Blocks
-- [x] Create `internal/api/admin/canonical_email_blocks.go`
-- [x] Implement CRUD for `/api/v1/admin/canonical_email_blocks`
-- [x] Implement `POST /api/v1/admin/canonical_email_blocks/test`
-
-### Task 4.4: Admin Tags
-- [x] Implement `GET /api/v1/admin/tags`
-- [x] Implement `GET /api/v1/admin/tags/{id}`
-- [x] Implement `PUT /api/v1/admin/tags/{id}`
-
-### Task 4.5: Trends Moderation
-- [x] Implement approve/reject for tags
-- [x] Implement approve/reject for links
-- [x] Implement approve/reject for statuses
-
-### Task 4.6: Account Deletion
-- [x] Implement `DELETE /api/v1/admin/accounts/{id}`
+Plan
+1) Implement all missing routes listed above and wire queries/services.
+2) Align v1 payloads to Mastodon formats (accounts, statuses, notifications, trends, search results, instance info).
+3) Add scheduled status creation in `POST /api/v1/statuses` with worker integration.
+4) Implement v1 filters API (legacy semantics) and migration paths from v2 filters if needed.
+5) Add tests for each new/changed handler (including error cases and auth boundaries).
 
 ---
 
-## Milestone 5: ActivityPub Federation 🔴 CRITICAL
+## API v2
+Status: Medium-low.
 
-**Goal:** Full federation with other ActivityPub servers
+Missing routes (from `mastodon/config/routes/api.rb`)
+- POST /api/v2/notifications/clear
+- GET /api/v2/filters/:filter_id/keywords
+- GET /api/v2/filters/keywords/:id
+- PUT /api/v2/filters/keywords/:id
+- GET /api/v2/filters/:filter_id/statuses
+- POST /api/v2/filters/:filter_id/statuses
+- GET /api/v2/filters/statuses/:id
+- DELETE /api/v2/filters/statuses/:id
+- GET /api/v2/admin/accounts
 
-### Task 5.1: HTTP Signature Verification
-- [x] Wire up existing `pkg/activitypub/httpsig.go`
-- [x] Add signature verification middleware
-- [x] Verify signatures on incoming POST requests to inbox
-- [x] Handle signature verification failures gracefully
+Behavior gaps
+- /api/v2/instance returns static placeholder data.
+- /api/v2/suggestions returns mock data.
+- /api/v2/search responses are minimal vs Mastodon payloads.
 
-### Task 5.2: Inbox Activity Routing
-- [x] Modify `PostInbox` in `handler.go`
-- [x] Parse incoming JSON-LD activities
-- [x] Route to appropriate handler based on activity type
-- [x] Return proper HTTP status codes
-
-### Task 5.3: Follow Handling
-- [x] Create `internal/federation/follow.go`
-- [x] Process incoming `Follow` activities
-  - [x] Validate actor exists
-  - [x] Check if auto-accept or require approval
-  - [x] Create follow_request or follow record
-- [x] Send `Accept` activity for approved follows
-- [x] Send `Reject` activity for rejected follows
-- [x] Handle locked accounts (require approval)
-
-### Task 5.4: Accept/Reject Handling
-- [x] Process incoming `Accept` activities
-  - [x] Convert our follow_request to follow
-- [x] Process incoming `Reject` activities
-  - [x] Remove our follow_request
-
-### Task 5.5: Undo Handling
-- [x] Process `Undo Follow` (unfollow)
-- [x] Process `Undo Like` (unfavourite)
-- [x] Process `Undo Announce` (unboost)
-- [x] Process `Undo Block`
-
-### Task 5.6: Create Activity Handling
-- [x] Create `internal/federation/create.go`
-- [x] Process incoming `Create Note` (new posts)
-  - [x] Fetch actor if not known
-  - [x] Parse Note content
-  - [x] Store in statuses table
-  - [x] Process mentions
-  - [x] Process attachments
-  - [x] Generate notifications
-- [x] Handle replies (in_reply_to)
-- [x] Handle visibility (public/unlisted/private/direct)
-
-### Task 5.7: Update Activity Handling
-- [x] Process `Update Note` (post edits)
-  - [x] Create status_edit record
-  - [x] Update status content
-- [x] Process `Update Person` (profile updates)
-  - [x] Update account fields
-
-### Task 5.8: Delete Activity Handling
-- [x] Process `Delete Note`
-  - [x] Mark status as deleted
-  - [x] Create tombstone record
-- [x] Process `Delete Person` (account deletion)
-
-### Task 5.9: Announce Handling (Boosts)
-- [x] Process incoming `Announce` activities
-  - [x] Fetch original post if needed
-  - [x] Create reblog record
-  - [x] Update reblog count
-  - [x] Generate notification
-
-### Task 5.10: Like Handling (Favourites)
-- [x] Process incoming `Like` activities
-  - [x] Create favourite record
-  - [x] Update favourite count
-  - [x] Generate notification
-
-### Task 5.11: Block Handling
-- [x] Process incoming `Block` activities
-- [x] Hide content appropriately
-
-### Task 5.12: Activity Delivery - Signing
-- [x] Create `internal/federation/delivery.go`
-- [x] Implement HTTP signature signing for outgoing requests
-- [x] Use account's private key
-
-### Task 5.13: Activity Delivery - Resolution
-- [x] Resolve recipient inboxes from followers
-- [x] Use shared inbox when available
-- [x] Batch deliveries to same inbox
-
-### Task 5.14: Activity Delivery - Queue
-- [x] Implement delivery queue with retries
-- [x] Handle failed deliveries gracefully
-- [x] Exponential backoff for retries
-
-### Task 5.15: Deliver Outgoing Activities
-- [x] Deliver `Create` for new posts
-- [x] Deliver `Update` for edited posts
-- [x] Deliver `Delete` for deleted posts
-- [x] Deliver `Follow` when following remote user
-- [x] Deliver `Undo Follow` when unfollowing
-- [x] Deliver `Like` for favourites
-- [x] Deliver `Announce` for boosts
-- [x] Deliver `Accept`/`Reject` for follow responses
-
-### Task 5.16: Remote Actor Resolution
-- [x] Create `internal/federation/resolver.go`
-- [x] Implement WebFinger client
-- [x] Fetch remote actor profiles
-- [x] Cache actors in database
-- [x] Refresh stale actor data (>24h old)
-
-### Task 5.17: Remote Content Fetching
-- [x] Fetch remote statuses when needed
-- [x] Fetch thread context
-- [x] Handle media attachments
+Plan
+1) Implement full v2 filters keyword/status endpoints and align to custom_filters schema.
+2) Add /api/v2/notifications/clear and /api/v2/admin/accounts.
+3) Align v2 instance, suggestions, and search payloads to Mastodon formats.
+4) Add tests for each new/changed v2 endpoint.
 
 ---
 
-## Milestone 6: Background Workers
+## Admin API (v1 + v2)
+Status: Medium-low.
 
-**Goal:** Async job processing for reliability
+Missing routes or mismatches
+- /api/v1/admin/email_domain_blocks (all CRUD).
+- Report workflow actions: assign_to_self, unassign, reopen, and update (PUT /api/v1/admin/reports/:id).
+- Admin trends publishers: /api/v1/admin/trends/links/publishers (preview_card_providers) + approve/reject.
+- Path mismatch: Mastodon uses /unsensitive; Gotodon currently registers /unsensitize.
+- /api/v2/admin/accounts (index).
 
-### Task 6.1: Choose Job Queue
-- [x] Evaluate River (PostgreSQL)
-  - Pros: Uses Postgres already in the stack; enqueue can participate in DB transactions.
-  - Cons: Adds queue load to the primary database; requires queue tables/migrations and ongoing vacuum/tuning.
-- [x] Evaluate Asynq (Redis)
-  - Pros: Redis is already required for streaming/timelines; keeps job throughput off Postgres; supports retries and scheduled jobs.
-  - Cons: Requires Redis availability for job processing; separate persistence from Postgres.
-- [x] Make decision and document reasoning
-  - Decision: Asynq (Redis). Redis is already a required dependency, and keeping background job throughput out of Postgres reduces contention while still providing scheduling and retry support for delivery/media/scheduled-status workloads.
-  - Note: Revisit this choice once Asynq v0.26.0 is released.
+Behavior gaps
+- Admin instance config is in-memory and not persisted.
+- Dimensions/measures/retention endpoints return empty arrays.
+- Admin action logs and role handling are stubbed.
+- Custom emoji categories are missing in responses.
 
-### Task 6.2: Worker Infrastructure
-- [x] Install chosen library
-- [x] Create `internal/workers/worker.go`
-- [x] Add worker startup to `serve.go`
-- [x] Create job registration system
-
-### Task 6.3: Delivery Jobs
-- [x] Create `DeliverActivityJob`
-  - [x] Accept: activity, recipient inbox
-  - [x] Sign and POST activity
-  - [x] Handle retries
-
-### Task 6.4: Remote Processing Jobs
-- [x] Create `ProcessRemoteAccountJob`
-  - [x] Fetch and store remote actor
-- [x] Create `FetchRemoteStatusJob`
-
-### Task 6.5: Scheduled Status Job
-- [ ] Create `ScheduledStatusJob`
-  - [ ] Poll scheduled_statuses table
-  - [ ] Publish when time is reached
-
-### Task 6.6: Media Processing Jobs
-- [ ] Create `MediaProcessingJob`
-  - [ ] Generate thumbnails
-  - [ ] Extract metadata
-  - [ ] Calculate blurhash
-
-### Task 6.7: Link Crawler Job
-- [ ] Create `LinkCrawlerJob`
-  - [ ] Fetch URL metadata
-  - [ ] Generate preview cards
-
-### Task 6.8: Cleanup Jobs
-- [ ] Create `StatusCleanupJob`
-  - [ ] Honor account cleanup policies
-- [ ] Create `MediaCleanupJob`
-  - [ ] Remove orphaned media
+Plan
+1) Implement email domain block endpoints (use `email_domain_blocks` table).
+2) Add full report workflow actions and update endpoint.
+3) Add preview_card_providers moderation endpoints.
+4) Align admin account actions and path names (unsensitive) and wire audit logging.
+5) Implement role handling via `user_roles` and include role in admin responses.
+6) Persist admin instance config (backed by settings tables) and enforce auth.
+7) Implement real metrics for dimensions/measures/retention.
+8) Add custom emoji categories in admin responses.
+9) Add v2 admin accounts endpoint and tests.
 
 ---
 
-## Milestone 7: Verification & Testing
+## OAuth/OIDC
+Status: Low.
 
-**Goal:** Ensure everything works correctly
+Gaps
+- Authorization code flow is stubbed.
+- Password grant uses plaintext compare.
+- Missing /oauth/userinfo and /.well-known/oauth-authorization-server.
+- Token refresh/expiry and revocation semantics are incomplete.
 
-### Task 7.1: Unit Tests
-- [ ] All existing tests pass: `go test ./...`
-- [ ] Add tests for new handlers
-- [ ] Add tests for federation code
-- [ ] Code coverage > 60%
-
-### Task 7.2: Integration Testing
-- [ ] Set up test Mastodon instance (Docker)
-- [ ] Test follow from Mastodon to Gotodon
-- [ ] Test follow from Gotodon to Mastodon
-- [ ] Test posting and visibility
-- [ ] Test replies across servers
-- [ ] Test boosts across servers
-- [ ] Test favourites across servers
-
-### Task 7.3: API Compatibility Testing
-- [ ] Test with Mastodon.py client
-- [ ] Test with official Mastodon web UI
-- [ ] Test with mobile apps (Tusky, Ice Cubes, etc.)
-
-### Task 7.4: Performance Testing
-- [ ] Load test federation delivery
-- [ ] Verify streaming under load
-- [ ] Check database query performance
+Plan
+1) Choose OAuth/OIDC server implementation (use ory/fosite if appropriate).
+2) Implement full authorization code + PKCE flow with sessions and persisted grants.
+3) Implement bcrypt password verification and proper token lifecycle.
+4) Add /oauth/userinfo and discovery metadata.
+5) Add tests for OAuth flows (grant types, PKCE, refresh, revoke).
 
 ---
 
-## Progress Summary
+## ActivityPub / Federation
+Status: Low-medium.
 
-| Milestone | Status | Progress |
-|-----------|--------|----------|
-| 1. Schema | Not Started | 0% |
-| 2. v1 API | Not Started | 0% |
-| 3. v2 API | Not Started | 0% |
-| 4. Admin API | Not Started | 0% |
-| 5. Federation | Not Started | 0% |
-| 6. Workers | Not Started | 0% |
-| 7. Testing | Not Started | 0% |
+Gaps
+- Outbox returns empty collections; no paging or items.
+- Missing /ap alias routes.
+- Missing collection endpoints (featured, tags), quote authorizations, followers synchronization.
+- Missing /contexts endpoints and instance actor (/actor).
+- Followers/following pages lack items.
+
+Plan
+1) Implement outbox collections and paging with serialized activities.
+2) Add /ap/ alias routes matching Mastodon.
+3) Add collections endpoints (featured, tags) and quote authorization endpoints.
+4) Implement /contexts endpoints and instance actor.
+5) Return followers/following OrderedCollectionPages with items.
+6) Add federation tests for inbox + newly implemented endpoints.
 
 ---
 
-## Notes
+## Streaming
+Status: Low-medium.
 
-- Mark tasks with `[x]` when complete
-- Add notes under tasks for decisions or blockers
-- Update progress summary after completing milestones
+Gaps
+- Missing /api/v1/streaming/(*any) wildcard route.
+- Missing multistream support (stream[] and multiple streams per connection).
+- Event coverage is incomplete vs Mastodon (filters_changed, conversation, announcements, status.update, etc).
+
+Plan
+1) Add wildcard streaming route and per-stream path handling.
+2) Support multi-stream subscriptions (stream[] + tag/list combos).
+3) Align event types and payload formats to Mastodon.
+4) Add streaming tests (SSE + WS) and multi-stream coverage.
+
+---
+
+## Jobs & Services
+Status: Medium-low.
+
+Gaps
+- Scheduled status creation is missing; workers exist but no creation flow in v1.
+- Many Mastodon background features are missing (backups, bulk imports, relays, webhooks, follow recommendations, annual reports generation, etc).
+
+Plan
+1) Finish scheduled status creation + enqueue/publish flow.
+2) Implement missing background jobs/services per Mastodon (backups, imports, relays, webhooks, follow recommendations).
+3) Add tests for workers and job retries.
+
+---
+
+## Tests & Compatibility Verification
+Status: Partial.
+
+Plan
+1) Add handler tests for every new endpoint and behavior change.
+2) Add schema parity and query-level tests for new migrations.
+3) Add integration tests for key flows (follow, post, reply, boost, favourite, media upload).
+4) Add client compatibility tests (Mastodon.py, Tusky, Ice Cubes).
+5) Add federation compatibility tests against a Mastodon 4.5.3 instance.
+
+---
+
+## Deferred (explicitly out of scope for now)
+- Web UI parity and /api/web endpoints.

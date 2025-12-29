@@ -16,7 +16,7 @@ INSERT INTO web_push_subscriptions (
     endpoint, key_p256dh, key_auth, data, user_id, access_token_id
 ) VALUES (
     $1, $2, $3, $4, $5, $6
-) RETURNING id, endpoint, key_p256dh, key_auth, data, created_at, updated_at, access_token_id, user_id
+) RETURNING id, endpoint, key_p256dh, key_auth, data, created_at, updated_at, access_token_id, user_id, standard
 `
 
 type CreatePushSubscriptionParams struct {
@@ -48,6 +48,7 @@ func (q *Queries) CreatePushSubscription(ctx context.Context, arg CreatePushSubs
 		&i.UpdatedAt,
 		&i.AccessTokenID,
 		&i.UserID,
+		&i.Standard,
 	)
 	return i, err
 }
@@ -62,7 +63,7 @@ func (q *Queries) DeletePushSubscription(ctx context.Context, accessTokenID pgty
 }
 
 const getPushSubscription = `-- name: GetPushSubscription :one
-SELECT id, endpoint, key_p256dh, key_auth, data, created_at, updated_at, access_token_id, user_id FROM web_push_subscriptions 
+SELECT id, endpoint, key_p256dh, key_auth, data, created_at, updated_at, access_token_id, user_id, standard FROM web_push_subscriptions 
 WHERE access_token_id = $1 OR user_id = $2
 ORDER BY id DESC LIMIT 1
 `
@@ -85,12 +86,13 @@ func (q *Queries) GetPushSubscription(ctx context.Context, arg GetPushSubscripti
 		&i.UpdatedAt,
 		&i.AccessTokenID,
 		&i.UserID,
+		&i.Standard,
 	)
 	return i, err
 }
 
 const getPushSubscriptionByEndpoint = `-- name: GetPushSubscriptionByEndpoint :one
-SELECT id, endpoint, key_p256dh, key_auth, data, created_at, updated_at, access_token_id, user_id FROM web_push_subscriptions WHERE endpoint = $1
+SELECT id, endpoint, key_p256dh, key_auth, data, created_at, updated_at, access_token_id, user_id, standard FROM web_push_subscriptions WHERE endpoint = $1
 `
 
 func (q *Queries) GetPushSubscriptionByEndpoint(ctx context.Context, endpoint string) (WebPushSubscription, error) {
@@ -106,6 +108,7 @@ func (q *Queries) GetPushSubscriptionByEndpoint(ctx context.Context, endpoint st
 		&i.UpdatedAt,
 		&i.AccessTokenID,
 		&i.UserID,
+		&i.Standard,
 	)
 	return i, err
 }

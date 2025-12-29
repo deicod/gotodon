@@ -3,7 +3,6 @@ package v1
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
@@ -73,13 +72,13 @@ type PollOption struct {
 }
 
 func (h *PollsHandler) dbPollToAPI(ctx context.Context, dbPoll db.Poll, accountID int64) PollResponse {
-	// Parse cached tallies
-	var tallies []int
-	if dbPoll.CachedTallies != nil {
-		_ = json.Unmarshal(dbPoll.CachedTallies, &tallies)
-	}
-	if tallies == nil {
-		tallies = make([]int, len(dbPoll.Options))
+	// Parse cached tallies (bigint array)
+	tallies := make([]int, len(dbPoll.Options))
+	for i, tally := range dbPoll.CachedTallies {
+		if i >= len(tallies) {
+			break
+		}
+		tallies[i] = int(tally)
 	}
 
 	options := make([]PollOption, len(dbPoll.Options))
@@ -250,7 +249,7 @@ func (h *PollsHandler) Vote(w http.ResponseWriter, r *http.Request) {
 			})
 			_ = h.queries.IncrementVoteCount(ctx, db.IncrementVoteCountParams{
 				ID:      pollID,
-				Column2: strconv.Itoa(choice),
+				Column2: int32(choice),
 			})
 		}
 		_ = h.queries.IncrementVotersCount(ctx, pollID)
@@ -312,8 +311,8 @@ func (h *PollsHandler) CreatePoll(accountID int64, options []string, expiresIn i
 
 	if h.useDB() {
 		// Create initial tallies
-		tallies := make([]int, len(options))
-		talliesJSON, _ := json.Marshal(tallies)
+		tallies := make([]int64, len(options))
+		memTallies := make([]int, len(options))
 
 		expiresAt := time.Now().Add(time.Duration(expiresIn) * time.Second)
 
@@ -321,7 +320,7 @@ func (h *PollsHandler) CreatePoll(accountID int64, options []string, expiresIn i
 			AccountID:     pgtype.Int8{Int64: accountID, Valid: true},
 			ExpiresAt:     pgtype.Timestamptz{Time: expiresAt, Valid: true},
 			Options:       options,
-			CachedTallies: talliesJSON,
+			CachedTallies: tallies,
 			Multiple:      multiple,
 			HideTotals:    hideTotals,
 		})
@@ -332,7 +331,7 @@ func (h *PollsHandler) CreatePoll(accountID int64, options []string, expiresIn i
 				AccountID:   accountID,
 				ExpiresAt:   expiresAt,
 				Options:     options,
-				Votes:       tallies,
+				Votes:       memTallies,
 				Multiple:    multiple,
 				HideTotals:  hideTotals,
 				VotesCount:  0,
