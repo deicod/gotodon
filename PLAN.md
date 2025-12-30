@@ -46,7 +46,7 @@ Plan
 Status: Medium.
 
 Missing routes (from `mastodon/config/routes/api.rb`)
-- GET /api/oembed
+- [x] GET /api/oembed
 - GET /api/v1_alpha/async_refreshes/:id
 - [x] GET /api/v1/statuses (index)
 - [x] POST /api/v1/statuses/:id/mute
@@ -64,7 +64,7 @@ Missing routes (from `mastodon/config/routes/api.rb`)
 - [x] GET /api/v1/domain_blocks/preview
 - GET /api/v1/instance/terms_of_service/:date
 - GET /api/v1/accounts (index)
-- GET /api/v1/accounts/:id/lists
+- [x] GET /api/v1/accounts/:id/lists
 - GET /api/v1/accounts/:id/identity_proofs
 - GET /api/v1/accounts/:id/featured_tags
 - GET /api/v1/accounts/:id/endorsements

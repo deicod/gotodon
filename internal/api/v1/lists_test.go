@@ -122,3 +122,61 @@ func TestListsHandler_Validation(t *testing.T) {
 		})
 	}
 }
+
+func TestListsHandler_GetListsForAccount_MockMode(t *testing.T) {
+	h := NewListsHandler(nil)
+
+	req, rec := mockListRequest(http.MethodPost, "/api/v1/lists", `{"title":"Primary"}`)
+	h.Create(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var primary List
+	if err := json.Unmarshal(rec.Body.Bytes(), &primary); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	req, rec = mockListRequest(http.MethodPost, "/api/v1/lists", `{"title":"Secondary"}`)
+	h.Create(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var secondary List
+	if err := json.Unmarshal(rec.Body.Bytes(), &secondary); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	addBody := `{"account_ids":["777"]}`
+	req, rec = mockListRequest(http.MethodPost, "/api/v1/lists/"+primary.ID+"/accounts", addBody)
+	req.SetPathValue("id", primary.ID)
+	h.AddAccounts(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	addBody = `{"account_ids":["888"]}`
+	req, rec = mockListRequest(http.MethodPost, "/api/v1/lists/"+secondary.ID+"/accounts", addBody)
+	req.SetPathValue("id", secondary.ID)
+	h.AddAccounts(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	req, rec = mockListRequest(http.MethodGet, "/api/v1/accounts/777/lists", "")
+	req.SetPathValue("id", "777")
+	h.GetListsForAccount(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var lists []List
+	if err := json.Unmarshal(rec.Body.Bytes(), &lists); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+	if len(lists) != 1 {
+		t.Fatalf("lists length = %d, want 1", len(lists))
+	}
+	if lists[0].ID != primary.ID {
+		t.Fatalf("list ID = %s, want %s", lists[0].ID, primary.ID)
+	}
+}

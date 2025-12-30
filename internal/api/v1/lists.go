@@ -124,6 +124,53 @@ func (h *ListsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, result)
 }
 
+// GetListsForAccount handles GET /api/v1/accounts/:id/lists
+func (h *ListsHandler) GetListsForAccount(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	targetID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	if h.useDB() {
+		lists, err := h.queries.GetListsContainingAccount(r.Context(), db.GetListsContainingAccountParams{
+			AccountID:   accountID,
+			AccountID_2: targetID,
+		})
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		result := make([]List, 0, len(lists))
+		for _, dbList := range lists {
+			result = append(result, h.dbListToAPI(dbList))
+		}
+		web.JSON(w, http.StatusOK, result)
+		return
+	}
+
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	accountLists := h.memLists[accountID]
+	result := make([]List, 0)
+	for listID, list := range accountLists {
+		for _, memberID := range h.memListMembers[listID] {
+			if memberID == targetID {
+				result = append(result, *list)
+				break
+			}
+		}
+	}
+	web.JSON(w, http.StatusOK, result)
+}
+
 // Get handles GET /api/v1/lists/:id
 func (h *ListsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	accountID, ok := middleware.GetAccountID(r.Context())
@@ -623,4 +670,5 @@ func (h *ListsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/lists/{id}/accounts", h.GetAccounts)
 	mux.HandleFunc("POST /api/v1/lists/{id}/accounts", h.AddAccounts)
 	mux.HandleFunc("DELETE /api/v1/lists/{id}/accounts", h.RemoveAccounts)
+	mux.HandleFunc("GET /api/v1/accounts/{id}/lists", h.GetListsForAccount)
 }

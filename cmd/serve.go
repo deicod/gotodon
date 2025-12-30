@@ -21,6 +21,7 @@ import (
 	"github.com/deicod/gotodon/internal/api/admin"
 	"github.com/deicod/gotodon/internal/api/middleware"
 	oauthapi "github.com/deicod/gotodon/internal/api/oauth"
+	oembedapi "github.com/deicod/gotodon/internal/api/oembed"
 	v1 "github.com/deicod/gotodon/internal/api/v1"
 	v2 "github.com/deicod/gotodon/internal/api/v2"
 	"github.com/deicod/gotodon/internal/config"
@@ -327,6 +328,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	// Register OAuth handlers
 	oauthHandler := oauthapi.NewHandler(queries)
 	oauthHandler.RegisterRoutes(mux)
+
+	oembedHandler := oembedapi.NewHandler(queries, cfg)
+	oembedHandler.RegisterRoutes(mux)
 
 	// ActivityPub Federation
 	federationHandler := activitypubapi.NewFederationHandler(queries, cfg.Instance.LocalDomain)
