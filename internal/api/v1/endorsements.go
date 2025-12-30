@@ -3,6 +3,8 @@ package v1
 import (
 	"net/http"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
@@ -11,10 +13,19 @@ import (
 
 type EndorsementsHandler struct {
 	queries *db.Queries
+	mu      sync.RWMutex
+	memPins map[int64][]int64
 }
 
 func NewEndorsementsHandler(queries *db.Queries) *EndorsementsHandler {
-	return &EndorsementsHandler{queries: queries}
+	return &EndorsementsHandler{
+		queries: queries,
+		memPins: make(map[int64][]int64),
+	}
+}
+
+func (h *EndorsementsHandler) useDB() bool {
+	return h.queries != nil
 }
 
 // List handles GET /api/v1/endorsements
@@ -22,6 +33,19 @@ func (h *EndorsementsHandler) List(w http.ResponseWriter, r *http.Request) {
 	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	if !h.useDB() {
+		h.mu.RLock()
+		targets := h.memPins[accountID]
+		h.mu.RUnlock()
+
+		resp := make([]Account, 0, len(targets))
+		for _, targetID := range targets {
+			resp = append(resp, mockAccountFromID(targetID))
+		}
+		web.JSON(w, http.StatusOK, resp)
 		return
 	}
 
@@ -89,6 +113,28 @@ func (h *EndorsementsHandler) Pin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.useDB() {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+
+		targets := h.memPins[accountID]
+		for _, existing := range targets {
+			if existing == targetID {
+				web.JSON(w, http.StatusOK, map[string]any{
+					"id":       strconv.FormatInt(targetID, 10),
+					"username": "user" + strconv.FormatInt(targetID, 10),
+				})
+				return
+			}
+		}
+		h.memPins[accountID] = append(targets, targetID)
+		web.JSON(w, http.StatusOK, map[string]any{
+			"id":       strconv.FormatInt(targetID, 10),
+			"username": "user" + strconv.FormatInt(targetID, 10),
+		})
+		return
+	}
+
 	_, err = h.queries.CreateAccountPin(r.Context(), db.CreateAccountPinParams{
 		AccountID:       accountID,
 		TargetAccountID: targetID,
@@ -124,6 +170,24 @@ func (h *EndorsementsHandler) Unpin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.useDB() {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+
+		targets := h.memPins[accountID]
+		for i, existing := range targets {
+			if existing == targetID {
+				h.memPins[accountID] = append(targets[:i], targets[i+1:]...)
+				break
+			}
+		}
+		web.JSON(w, http.StatusOK, map[string]any{
+			"id":       strconv.FormatInt(targetID, 10),
+			"username": "user" + strconv.FormatInt(targetID, 10),
+		})
+		return
+	}
+
 	err = h.queries.DeleteAccountPin(r.Context(), db.DeleteAccountPinParams{
 		AccountID:       accountID,
 		TargetAccountID: targetID,
@@ -147,9 +211,41 @@ func (h *EndorsementsHandler) Unpin(w http.ResponseWriter, r *http.Request) {
 func (h *EndorsementsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/endorsements", h.List)
 	mux.HandleFunc("POST /api/v1/accounts/{id}/pin", h.Pin)
+	mux.HandleFunc("POST /api/v1/accounts/{id}/endorse", h.Pin)
 	mux.HandleFunc("POST /api/v1/accounts/{id}/unpin", h.Unpin)
+	mux.HandleFunc("POST /api/v1/accounts/{id}/unendorse", h.Unpin)
 }
 
 func boolPtr(b bool) *bool {
 	return &b
+}
+
+func mockAccountFromID(id int64) Account {
+	idStr := strconv.FormatInt(id, 10)
+	username := "user" + idStr
+	return Account{
+		ID:             idStr,
+		Username:       username,
+		Acct:           username,
+		DisplayName:    "User " + idStr,
+		Locked:         false,
+		Bot:            false,
+		Discoverable:   boolPtr(true),
+		Indexable:      true,
+		Group:          false,
+		CreatedAt:      time.Now().Add(-24 * time.Hour),
+		Note:           "",
+		URL:            "https://example.com/@" + username,
+		URI:            "https://example.com/users/" + username,
+		Avatar:         "https://example.com/avatars/original/missing.png",
+		AvatarStatic:   "https://example.com/avatars/original/missing.png",
+		Header:         "https://example.com/headers/original/missing.png",
+		HeaderStatic:   "https://example.com/headers/original/missing.png",
+		FollowersCount: 0,
+		FollowingCount: 0,
+		StatusesCount:  0,
+		LastStatusAt:   nil,
+		Emojis:         []CustomEmoji{},
+		Fields:         []Field{},
+	}
 }

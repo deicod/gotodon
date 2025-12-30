@@ -21,7 +21,7 @@ func NewFeaturedTagsHandler(queries *db.Queries) *FeaturedTagsHandler {
 	return &FeaturedTagsHandler{queries: queries}
 }
 
-func (h *FeaturedTagsHandler) dbTagToAPI(t db.FeaturedTag) FeaturedTag {
+func featuredTagFromDB(t db.FeaturedTag) FeaturedTag {
 	count := int64(0)
 	if t.StatusesCount.Valid {
 		count = t.StatusesCount.Int64
@@ -32,6 +32,10 @@ func (h *FeaturedTagsHandler) dbTagToAPI(t db.FeaturedTag) FeaturedTag {
 		StatusesCount: count,
 		LastStatusAt:  t.LastStatusAt.Time,
 	}
+}
+
+func (h *FeaturedTagsHandler) dbTagToAPI(t db.FeaturedTag) FeaturedTag {
+	return featuredTagFromDB(t)
 }
 
 type FeaturedTag struct {

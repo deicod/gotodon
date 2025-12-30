@@ -21,6 +21,7 @@ import (
 	"github.com/deicod/gotodon/internal/federation"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/activitypub"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 // AccountsHandler handles account-related endpoints
@@ -31,6 +32,8 @@ type AccountsHandler struct {
 	outgoing federation.OutgoingDeliverer
 	resolver *federation.RemoteActorResolver
 }
+
+const defaultAccountsLimit = 40
 
 // NewAccountsHandler creates a new accounts handler
 func NewAccountsHandler(queries db.Querier, pool *pgxpool.Pool, cfg *config.Config, outgoing federation.OutgoingDeliverer) *AccountsHandler {
@@ -379,6 +382,52 @@ func (h *AccountsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Index handles GET /api/v1/accounts
+func (h *AccountsHandler) Index(w http.ResponseWriter, r *http.Request) {
+	scopes := middleware.GetScopes(r.Context())
+	if scopes != "" && !oauth.HasScope(scopes, "read:accounts") {
+		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
+		return
+	}
+
+	ids := parseAccountIDs(r)
+	if len(ids) > defaultAccountsLimit {
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed")
+		return
+	}
+
+	if !h.useDB() || len(ids) == 0 {
+		web.JSON(w, http.StatusOK, []Account{})
+		return
+	}
+
+	ctx := r.Context()
+	dbAccounts, err := h.queries.GetAccountsByIDs(ctx, ids)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to fetch accounts")
+		return
+	}
+	if len(dbAccounts) == 0 {
+		web.JSON(w, http.StatusOK, []Account{})
+		return
+	}
+
+	accountsByID := make(map[int64]Account, len(dbAccounts))
+	for _, dbAcc := range dbAccounts {
+		accountsByID[dbAcc.ID] = h.dbAccountWithStats(ctx, dbAcc)
+	}
+
+	resp := make([]Account, 0, len(dbAccounts))
+	for _, id := range ids {
+		acc, ok := accountsByID[id]
+		if !ok {
+			continue
+		}
+		resp = append(resp, acc)
+	}
+	web.JSON(w, http.StatusOK, resp)
+}
+
 // RegisterAccountRequest is the request for POST /api/v1/accounts
 type RegisterAccountRequest struct {
 	Username  string  `json:"username" form:"username"`
@@ -625,6 +674,140 @@ func (h *AccountsHandler) Following(w http.ResponseWriter, r *http.Request) {
 	}
 
 	web.JSON(w, http.StatusOK, []Account{})
+}
+
+// FeaturedTags handles GET /api/v1/accounts/:id/featured_tags
+func (h *AccountsHandler) FeaturedTags(w http.ResponseWriter, r *http.Request) {
+	targetID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	if h.useDB() {
+		tags, err := h.queries.ListFeaturedTags(r.Context(), targetID)
+		if err != nil {
+			web.JSON(w, http.StatusOK, []FeaturedTag{})
+			return
+		}
+
+		resp := make([]FeaturedTag, len(tags))
+		for i, tag := range tags {
+			resp[i] = featuredTagFromDB(tag)
+		}
+		web.JSON(w, http.StatusOK, resp)
+		return
+	}
+
+	web.JSON(w, http.StatusOK, []FeaturedTag{})
+}
+
+// Endorsements handles GET /api/v1/accounts/:id/endorsements
+func (h *AccountsHandler) Endorsements(w http.ResponseWriter, r *http.Request) {
+	scopes := middleware.GetScopes(r.Context())
+	if scopes != "" && !oauth.HasScope(scopes, "read:accounts") {
+		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
+		return
+	}
+
+	targetID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	limit := parseAccountLimit(web.QueryParam(r, "limit"), 40, 80)
+	maxID, maxValid := parseOptionalID(web.QueryParam(r, "max_id"))
+	sinceID, sinceValid := parseOptionalID(web.QueryParam(r, "since_id"))
+	if !maxValid || !sinceValid {
+		web.JSON(w, http.StatusOK, []Account{})
+		return
+	}
+
+	if !h.useDB() {
+		web.JSON(w, http.StatusOK, []Account{})
+		return
+	}
+
+	if _, err := h.queries.GetAccountByID(r.Context(), targetID); err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	pins, err := h.queries.ListAccountPins(r.Context(), targetID)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to list endorsements")
+		return
+	}
+
+	filtered := make([]db.ListAccountPinsRow, 0, len(pins))
+	for _, pin := range pins {
+		if maxID > 0 && pin.ID >= maxID {
+			continue
+		}
+		if sinceID > 0 && pin.ID <= sinceID {
+			continue
+		}
+		filtered = append(filtered, pin)
+		if len(filtered) >= limit {
+			break
+		}
+	}
+	if len(filtered) == 0 {
+		web.JSON(w, http.StatusOK, []Account{})
+		return
+	}
+
+	accountIDs := make([]int64, 0, len(filtered))
+	for _, pin := range filtered {
+		accountIDs = append(accountIDs, pin.TargetAccountID)
+	}
+
+	dbAccounts, err := h.queries.GetAccountsByIDs(r.Context(), accountIDs)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to list endorsements")
+		return
+	}
+
+	accountsByID := make(map[int64]db.Account, len(dbAccounts))
+	for _, acc := range dbAccounts {
+		accountsByID[acc.ID] = acc
+	}
+
+	resp := make([]Account, 0, len(filtered))
+	for _, pin := range filtered {
+		acc, ok := accountsByID[pin.TargetAccountID]
+		if !ok {
+			continue
+		}
+		resp = append(resp, SerializeAccount(h.cfg, acc))
+	}
+
+	web.JSON(w, http.StatusOK, resp)
+}
+
+// IdentityProofs handles GET /api/v1/accounts/:id/identity_proofs
+func (h *AccountsHandler) IdentityProofs(w http.ResponseWriter, r *http.Request) {
+	_, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	targetID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	if h.useDB() {
+		if _, err := h.queries.GetAccountByID(r.Context(), targetID); err != nil {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+	}
+
+	web.JSON(w, http.StatusOK, []any{})
 }
 
 // Relationship represents the relationship between accounts
@@ -897,6 +1080,34 @@ func parseAccountLimit(s string, defaultVal, maxVal int) int {
 		return maxVal
 	}
 	return v
+}
+
+func parseAccountIDs(r *http.Request) []int64 {
+	query := r.URL.Query()
+	rawIDs := append([]string{}, query["id"]...)
+	rawIDs = append(rawIDs, query["id[]"]...)
+	rawIDs = uniqueStrings(rawIDs)
+
+	ids := make([]int64, 0, len(rawIDs))
+	for _, value := range rawIDs {
+		id, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			id = 0
+		}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func parseOptionalID(raw string) (int64, bool) {
+	if raw == "" {
+		return 0, true
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || v < 1 {
+		return 0, false
+	}
+	return v, true
 }
 
 // Statuses handles GET /api/v1/accounts/:id/statuses
@@ -1201,10 +1412,14 @@ func (h *AccountsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/accounts/relationships", h.Relationships)
 	mux.HandleFunc("GET /api/v1/accounts/familiar_followers", h.FamiliarFollowers)
 	mux.HandleFunc("POST /api/v1/accounts", h.Register)
+	mux.HandleFunc("GET /api/v1/accounts", h.Index)
 	mux.HandleFunc("GET /api/v1/accounts/{id}", h.Get)
 	mux.HandleFunc("GET /api/v1/accounts/{id}/statuses", h.Statuses)
 	mux.HandleFunc("GET /api/v1/accounts/{id}/followers", h.Followers)
 	mux.HandleFunc("GET /api/v1/accounts/{id}/following", h.Following)
+	mux.HandleFunc("GET /api/v1/accounts/{id}/featured_tags", h.FeaturedTags)
+	mux.HandleFunc("GET /api/v1/accounts/{id}/endorsements", h.Endorsements)
+	mux.HandleFunc("GET /api/v1/accounts/{id}/identity_proofs", h.IdentityProofs)
 	mux.HandleFunc("POST /api/v1/accounts/{id}/follow", h.Follow)
 	mux.HandleFunc("POST /api/v1/accounts/{id}/unfollow", h.Unfollow)
 	mux.HandleFunc("POST /api/v1/accounts/{id}/block", h.Block)

@@ -63,13 +63,13 @@ Missing routes (from `mastodon/config/routes/api.rb`)
 - GET /api/v1/notifications/requests/merged
 - [x] GET /api/v1/domain_blocks/preview
 - GET /api/v1/instance/terms_of_service/:date
-- GET /api/v1/accounts (index)
+- [x] GET /api/v1/accounts (index)
 - [x] GET /api/v1/accounts/:id/lists
-- GET /api/v1/accounts/:id/identity_proofs
-- GET /api/v1/accounts/:id/featured_tags
-- GET /api/v1/accounts/:id/endorsements
-- POST /api/v1/accounts/:id/endorse
-- POST /api/v1/accounts/:id/unendorse
+- [x] GET /api/v1/accounts/:id/identity_proofs
+- [x] GET /api/v1/accounts/:id/featured_tags
+- [x] GET /api/v1/accounts/:id/endorsements
+- [x] POST /api/v1/accounts/:id/endorse
+- [x] POST /api/v1/accounts/:id/unendorse
 - GET /api/v1/featured_tags/suggestions
 - [x] GET /api/v1/trends (alias for tags index)
 
