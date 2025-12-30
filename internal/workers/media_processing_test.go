@@ -121,7 +121,7 @@ func TestMediaProcessingHandlerProcessesImage(t *testing.T) {
 	store := &stubMediaProcessingStore{attachment: attachment}
 	storage := &memStorage{}
 
-	originalPath := mediaStoragePath(attachment.AccountID.Int64, attachment.CreatedAt.Time, attachment.FileFileName.String)
+	originalPath := media.MediaStoragePath(attachment.AccountID.Int64, attachment.CreatedAt.Time, attachment.FileFileName.String)
 	imageData := createTestImage(800, 600)
 	if err := storage.Save(context.Background(), originalPath, imageData); err != nil {
 		t.Fatalf("Save original error = %v", err)

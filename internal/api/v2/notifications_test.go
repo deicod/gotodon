@@ -186,6 +186,24 @@ func TestNotificationsHandler_Dismiss_MockMode(t *testing.T) {
 	}
 }
 
+func TestNotificationsHandler_Clear_MockMode(t *testing.T) {
+	h := NewNotificationsHandler(nil, nil)
+
+	req, rec := mockNotificationRequest(http.MethodPost, "/api/v2/notifications/clear", "", 12345)
+	h.Clear(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	req, rec = mockNotificationRequest(http.MethodPost, "/api/v2/notifications/clear", "", 0)
+	h.Clear(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
 func TestNotificationsHandler_Accounts_MockMode(t *testing.T) {
 	h := NewNotificationsHandler(nil, nil)
 

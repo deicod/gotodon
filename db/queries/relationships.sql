@@ -152,6 +152,34 @@ DELETE FROM account_domain_blocks WHERE account_id = $1 AND domain = $2;
 -- name: GetDomainBlock :one
 SELECT * FROM account_domain_blocks WHERE account_id = $1 AND domain = $2;
 
+-- name: ListDomainBlockDomains :many
+SELECT domain FROM account_domain_blocks
+WHERE account_id = $1;
+
+-- name: GetDomainBlocksByAccountsAndDomain :many
+SELECT account_id FROM account_domain_blocks
+WHERE account_id = ANY(@account_ids::bigint[])
+  AND domain = @domain;
+
+-- name: GetFollowsByAccountIDs :many
+SELECT target_account_id FROM follows
+WHERE account_id = $1
+  AND target_account_id = ANY(@target_account_ids::bigint[]);
+
+-- name: CountFollowingByDomain :one
+SELECT COUNT(*)
+FROM follows f
+JOIN accounts a ON a.id = f.target_account_id
+WHERE f.account_id = $1
+  AND a.domain = $2;
+
+-- name: CountFollowersByDomain :one
+SELECT COUNT(*)
+FROM follows f
+JOIN accounts a ON a.id = f.account_id
+WHERE f.target_account_id = $1
+  AND a.domain = $2;
+
 -- name: GetRebloggers :many
 SELECT a.* FROM accounts a
 JOIN statuses s ON s.account_id = a.id AND s.reblog_of_id = $1

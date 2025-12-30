@@ -1032,6 +1032,52 @@ func (q *Queries) UpdateStatusPollID(ctx context.Context, arg UpdateStatusPollID
 	return err
 }
 
+const updateStatusQuoteApprovalPolicy = `-- name: UpdateStatusQuoteApprovalPolicy :one
+UPDATE statuses SET
+    quote_approval_policy = $2,
+    updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at, quote_approval_policy
+`
+
+type UpdateStatusQuoteApprovalPolicyParams struct {
+	ID                  int64 `db:"id" json:"id"`
+	QuoteApprovalPolicy int32 `db:"quote_approval_policy" json:"quote_approval_policy"`
+}
+
+func (q *Queries) UpdateStatusQuoteApprovalPolicy(ctx context.Context, arg UpdateStatusQuoteApprovalPolicyParams) (Status, error) {
+	row := q.db.QueryRow(ctx, updateStatusQuoteApprovalPolicy, arg.ID, arg.QuoteApprovalPolicy)
+	var i Status
+	err := row.Scan(
+		&i.ID,
+		&i.Uri,
+		&i.Text,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.InReplyToID,
+		&i.ReblogOfID,
+		&i.Url,
+		&i.Sensitive,
+		&i.Visibility,
+		&i.SpoilerText,
+		&i.Reply,
+		&i.Language,
+		&i.ConversationID,
+		&i.Local,
+		&i.AccountID,
+		&i.ApplicationID,
+		&i.InReplyToAccountID,
+		&i.PollID,
+		&i.DeletedAt,
+		&i.EditedAt,
+		&i.Trendable,
+		&i.OrderedMediaAttachmentIds,
+		&i.FetchedRepliesAt,
+		&i.QuoteApprovalPolicy,
+	)
+	return i, err
+}
+
 const updateStatusTimestamps = `-- name: UpdateStatusTimestamps :exec
 UPDATE statuses SET
     created_at = $2,

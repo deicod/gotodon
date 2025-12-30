@@ -4,10 +4,15 @@ package streaming
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/deicod/gotodon/internal/web"
 )
 
 // Event types for streaming
@@ -35,6 +40,17 @@ const (
 	StreamList             = "list"
 	StreamDirect           = "direct"
 )
+
+const streamingPathPrefix = "/api/v1/streaming"
+
+type streamRequestError struct {
+	status  int
+	message string
+}
+
+func (e *streamRequestError) Error() string {
+	return e.message
+}
 
 // Event represents a streaming event
 type Event struct {
@@ -224,6 +240,124 @@ func (h *Hub) PublishNotification(accountID int64, notification any) {
 	})
 }
 
+func resolveStreamSubscriptions(path string, query url.Values, defaultStream string) ([]string, error) {
+	pathStream, err := streamFromPath(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var streams []string
+	if pathStream != "" {
+		streams = []string{pathStream}
+	} else {
+		streams = queryValues(query, "stream", "stream[]")
+		if len(streams) == 0 && defaultStream != "" {
+			streams = []string{defaultStream}
+		}
+	}
+
+	if len(streams) == 0 {
+		return nil, nil
+	}
+
+	return expandStreamSubscriptions(streams, query)
+}
+
+func streamFromPath(path string) (string, error) {
+	if !strings.HasPrefix(path, streamingPathPrefix) {
+		return "", nil
+	}
+
+	tail := strings.TrimPrefix(path, streamingPathPrefix)
+	if tail == "" || tail == "/" {
+		return "", nil
+	}
+
+	tail = strings.Trim(tail, "/")
+
+	switch tail {
+	case StreamUser:
+		return StreamUser, nil
+	case "user/notification":
+		return StreamUserNotification, nil
+	case StreamPublic:
+		return StreamPublic, nil
+	case "public/local":
+		return StreamPublicLocal, nil
+	case "public/remote":
+		return StreamPublicRemote, nil
+	case StreamHashtag:
+		return StreamHashtag, nil
+	case "hashtag/local":
+		return StreamHashtagLocal, nil
+	case StreamDirect:
+		return StreamDirect, nil
+	case StreamList:
+		return StreamList, nil
+	default:
+		return "", &streamRequestError{status: http.StatusBadRequest, message: "Unknown stream type"}
+	}
+}
+
+func expandStreamSubscriptions(streams []string, query url.Values) ([]string, error) {
+	tags := queryValues(query, "tag", "tag[]")
+	lists := queryValues(query, "list", "list[]")
+	tagIndex := 0
+	listIndex := 0
+	subscriptions := make([]string, 0, len(streams))
+
+	for _, stream := range streams {
+		switch stream {
+		case StreamHashtag, StreamHashtagLocal:
+			if tagIndex >= len(tags) {
+				return nil, &streamRequestError{status: http.StatusBadRequest, message: "Missing tag name parameter"}
+			}
+			tag := tags[tagIndex]
+			tagIndex++
+			subscriptions = append(subscriptions, stream+":"+tag)
+		case StreamList:
+			if listIndex >= len(lists) {
+				return nil, &streamRequestError{status: http.StatusBadRequest, message: "Missing list name parameter"}
+			}
+			listID := lists[listIndex]
+			listIndex++
+			subscriptions = append(subscriptions, stream+":"+listID)
+		case StreamUser, StreamUserNotification, StreamPublic, StreamPublicLocal, StreamPublicRemote, StreamDirect:
+			subscriptions = append(subscriptions, stream)
+		default:
+			return nil, &streamRequestError{status: http.StatusBadRequest, message: "Unknown stream type"}
+		}
+	}
+
+	return subscriptions, nil
+}
+
+func queryValues(query url.Values, keys ...string) []string {
+	values := []string{}
+	for _, key := range keys {
+		for _, value := range query[key] {
+			trimmed := strings.TrimSpace(value)
+			if trimmed != "" {
+				values = append(values, trimmed)
+			}
+		}
+	}
+	return values
+}
+
+func streamErrorDetails(err error) (int, string) {
+	var reqErr *streamRequestError
+	if errors.As(err, &reqErr) && reqErr != nil {
+		return reqErr.status, reqErr.message
+	}
+	return http.StatusInternalServerError, "An unexpected error occurred"
+}
+
+func writeStreamError(w http.ResponseWriter, err error) {
+	status, message := streamErrorDetails(err)
+	web.JSONError(w, status, message)
+}
+
 // SSEHandler handles Server-Sent Events connections
 type SSEHandler struct {
 	hub *Hub
@@ -236,6 +370,16 @@ func NewSSEHandler(hub *Hub) *SSEHandler {
 
 // ServeHTTP handles SSE requests
 func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	subscriptions, err := resolveStreamSubscriptions(r.URL.Path, r.URL.Query(), StreamPublic)
+	if err != nil {
+		writeStreamError(w, err)
+		return
+	}
+	if len(subscriptions) == 0 {
+		web.JSONError(w, http.StatusBadRequest, "Missing stream parameter")
+		return
+	}
+
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -248,12 +392,6 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get stream from query param
-	stream := r.URL.Query().Get("stream")
-	if stream == "" {
-		stream = StreamPublic
-	}
-
 	// Get account ID from context (if authenticated)
 	var accountID int64
 	if id, ok := r.Context().Value("account_id").(int64); ok {
@@ -262,14 +400,8 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Create subscriber
 	sub := NewSubscriber(fmt.Sprintf("sse-%d-%d", accountID, time.Now().UnixNano()), accountID)
-	sub.Subscribe(stream)
-
-	// For list and hashtag streams, add the specific tag/list
-	if tag := r.URL.Query().Get("tag"); tag != "" {
-		sub.Subscribe(StreamHashtag + ":" + tag)
-	}
-	if list := r.URL.Query().Get("list"); list != "" {
-		sub.Subscribe(StreamList + ":" + list)
+	for _, stream := range subscriptions {
+		sub.Subscribe(stream)
 	}
 
 	h.hub.Register(sub)

@@ -24,7 +24,42 @@ RETURNING *;
 -- name: DeleteConversation :exec
 DELETE FROM conversations WHERE id = $1;
 
--- name: MarkConversationRead :exec
--- Placeholder: Requires conversation_mutes or new table for read state which implies 'unread' logic
--- Currently just creating a stub query if we add unread tracking later
-SELECT 1;
+-- name: CreateConversationMute :exec
+INSERT INTO conversation_mutes (account_id, conversation_id)
+VALUES ($1, $2)
+ON CONFLICT DO NOTHING;
+
+-- name: DeleteConversationMute :exec
+DELETE FROM conversation_mutes
+WHERE account_id = $1 AND conversation_id = $2;
+
+-- name: ListConversationMutes :many
+SELECT conversation_id
+FROM conversation_mutes
+WHERE account_id = $1
+  AND conversation_id = ANY(sqlc.arg('conversation_ids')::bigint[]);
+
+-- name: ListAccountConversations :many
+SELECT *
+FROM account_conversations
+WHERE account_id = $1
+ORDER BY last_status_id DESC NULLS LAST, id DESC
+LIMIT $2 OFFSET $3;
+
+-- name: GetAccountConversation :one
+SELECT * FROM account_conversations
+WHERE account_id = $1 AND id = $2;
+
+-- name: DeleteAccountConversation :execrows
+DELETE FROM account_conversations
+WHERE account_id = $1 AND id = $2;
+
+-- name: MarkConversationRead :execrows
+UPDATE account_conversations
+SET unread = false
+WHERE account_id = $1 AND id = $2;
+
+-- name: MarkConversationUnread :execrows
+UPDATE account_conversations
+SET unread = true
+WHERE account_id = $1 AND id = $2;

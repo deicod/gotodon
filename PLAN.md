@@ -1,6 +1,6 @@
 # Gotodon <-> Mastodon 4.5.3 Compatibility Plan
 
-Last updated: 2025-12-24
+Last updated: 2025-12-29
 Target: Mastodon 4.5.3
 Scope: Server-side compatibility (schema, API v1/v2/admin, federation, streaming, OAuth/OIDC, background jobs/services, tests).
 Out of scope for now: Web UI parity and /api/web endpoints.
@@ -19,7 +19,7 @@ Assumptions: No database provisioned yet, so new migrations can be authored but 
 - Admin API: Medium-low. Core CRUD exists, but report workflow, email domain blocks, instance config, metrics, roles, and audit logging are incomplete.
 - OAuth/OIDC: Low. Authorization code flow is stubbed; password grant uses plaintext compare; userinfo and discovery endpoints are missing.
 - ActivityPub/Federation: Low-medium. Inbox handlers exist, but outbox/collections/pages and alias routes are missing or empty.
-- Streaming: Low-medium. SSE/WS hub exists, but wildcard/multistream endpoints and full event coverage are missing.
+- Streaming: Medium. SSE/WS hub exists; wildcard and multistream support are in place; event coverage remains incomplete.
 - Jobs/Services: Medium-low. Delivery, media processing, link crawling, and cleanup exist; many Mastodon background features are missing.
 - Tests/Compatibility: Partial. Unit tests exist, but integration and compatibility suites are missing.
 
@@ -48,20 +48,20 @@ Status: Medium.
 Missing routes (from `mastodon/config/routes/api.rb`)
 - GET /api/oembed
 - GET /api/v1_alpha/async_refreshes/:id
-- GET /api/v1/statuses (index)
-- POST /api/v1/statuses/:id/mute
-- POST /api/v1/statuses/:id/unmute
-- PUT /api/v1/statuses/:id/interaction_policy
+- [x] GET /api/v1/statuses (index)
+- [x] POST /api/v1/statuses/:id/mute
+- [x] POST /api/v1/statuses/:id/unmute
+- [x] PUT /api/v1/statuses/:id/interaction_policy
 - GET /api/v1/timelines/link
 - GET /api/v1/streaming/(*any)
-- POST /api/v1/conversations/:id/unread
-- DELETE /api/v1/media/:id
+- [x] POST /api/v1/conversations/:id/unread
+- [x] DELETE /api/v1/media/:id
 - /api/v1/filters (all CRUD)
 - GET /api/v1/notifications/requests/:id
 - POST /api/v1/notifications/requests/accept (bulk)
 - POST /api/v1/notifications/requests/dismiss (bulk)
 - GET /api/v1/notifications/requests/merged
-- GET /api/v1/domain_blocks/preview
+- [x] GET /api/v1/domain_blocks/preview
 - GET /api/v1/instance/terms_of_service/:date
 - GET /api/v1/accounts (index)
 - GET /api/v1/accounts/:id/lists
@@ -71,11 +71,11 @@ Missing routes (from `mastodon/config/routes/api.rb`)
 - POST /api/v1/accounts/:id/endorse
 - POST /api/v1/accounts/:id/unendorse
 - GET /api/v1/featured_tags/suggestions
-- GET /api/v1/trends (alias for tags index)
+- [x] GET /api/v1/trends (alias for tags index)
 
 Behavior gaps
 - /api/v1/instance uses static data and mismatched version string.
-- Trends links, suggestions deletion, and several account/status payloads are minimal or mock.
+- Trends links now backed by preview cards; suggestions deletion and several account/status payloads are still minimal or mock.
 - Scheduled status creation is missing (no `scheduled_at` in POST /api/v1/statuses).
 
 Plan
@@ -91,15 +91,15 @@ Plan
 Status: Medium-low.
 
 Missing routes (from `mastodon/config/routes/api.rb`)
-- POST /api/v2/notifications/clear
-- GET /api/v2/filters/:filter_id/keywords
-- GET /api/v2/filters/keywords/:id
-- PUT /api/v2/filters/keywords/:id
-- GET /api/v2/filters/:filter_id/statuses
-- POST /api/v2/filters/:filter_id/statuses
-- GET /api/v2/filters/statuses/:id
-- DELETE /api/v2/filters/statuses/:id
-- GET /api/v2/admin/accounts
+- [x] POST /api/v2/notifications/clear
+- [x] GET /api/v2/filters/:filter_id/keywords
+- [x] GET /api/v2/filters/keywords/:id
+- [x] PUT /api/v2/filters/keywords/:id
+- [x] GET /api/v2/filters/:filter_id/statuses
+- [x] POST /api/v2/filters/:filter_id/statuses
+- [x] GET /api/v2/filters/statuses/:id
+- [x] DELETE /api/v2/filters/statuses/:id
+- [x] GET /api/v2/admin/accounts
 
 Behavior gaps
 - /api/v2/instance returns static placeholder data.
@@ -108,7 +108,7 @@ Behavior gaps
 
 Plan
 1) Implement full v2 filters keyword/status endpoints and align to custom_filters schema.
-2) Add /api/v2/notifications/clear and /api/v2/admin/accounts.
+2) [x] Add /api/v2/notifications/clear and /api/v2/admin/accounts.
 3) Align v2 instance, suggestions, and search payloads to Mastodon formats.
 4) Add tests for each new/changed v2 endpoint.
 
@@ -122,7 +122,7 @@ Missing routes or mismatches
 - Report workflow actions: assign_to_self, unassign, reopen, and update (PUT /api/v1/admin/reports/:id).
 - Admin trends publishers: /api/v1/admin/trends/links/publishers (preview_card_providers) + approve/reject.
 - Path mismatch: Mastodon uses /unsensitive; Gotodon currently registers /unsensitize.
-- /api/v2/admin/accounts (index).
+- [x] /api/v2/admin/accounts (index).
 
 Behavior gaps
 - Admin instance config is in-memory and not persisted.
@@ -139,7 +139,7 @@ Plan
 6) Persist admin instance config (backed by settings tables) and enforce auth.
 7) Implement real metrics for dimensions/measures/retention.
 8) Add custom emoji categories in admin responses.
-9) Add v2 admin accounts endpoint and tests.
+9) [x] Add v2 admin accounts endpoint and tests.
 
 ---
 
@@ -190,10 +190,10 @@ Gaps
 - Event coverage is incomplete vs Mastodon (filters_changed, conversation, announcements, status.update, etc).
 
 Plan
-1) Add wildcard streaming route and per-stream path handling.
-2) Support multi-stream subscriptions (stream[] + tag/list combos).
-3) Align event types and payload formats to Mastodon.
-4) Add streaming tests (SSE + WS) and multi-stream coverage.
+1) [x] Add wildcard streaming route and per-stream path handling.
+2) [x] Support multi-stream subscriptions (stream[] + tag/list combos).
+3) [ ] Align event types and payload formats to Mastodon.
+4) [x] Add streaming tests (SSE + WS) and multi-stream coverage.
 
 ---
 

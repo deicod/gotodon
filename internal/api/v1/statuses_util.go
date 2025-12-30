@@ -4,7 +4,9 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 )
@@ -24,12 +26,21 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 	statusIDs := make([]int64, len(dbStatuses))
 	accountIDs := make([]int64, 0, len(dbStatuses))
 	accountIDMap := make(map[int64]bool)
+	conversationIDs := make([]int64, 0, len(dbStatuses))
+	conversationIDMap := make(map[int64]bool)
 
 	for i, s := range dbStatuses {
 		statusIDs[i] = s.ID
 		if !accountIDMap[s.AccountID] {
 			accountIDs = append(accountIDs, s.AccountID)
 			accountIDMap[s.AccountID] = true
+		}
+		if s.ConversationID.Valid {
+			cid := s.ConversationID.Int64
+			if !conversationIDMap[cid] {
+				conversationIDs = append(conversationIDs, cid)
+				conversationIDMap[cid] = true
+			}
 		}
 	}
 
@@ -142,8 +153,40 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 		statsMap[s.StatusID] = s
 	}
 
+	mutedConversations := make(map[int64]bool)
+	if accountID, ok := middleware.GetAccountID(ctx); ok && len(conversationIDs) > 0 {
+		mutes, err := q.ListConversationMutes(ctx, db.ListConversationMutesParams{
+			AccountID:       accountID,
+			ConversationIds: conversationIDs,
+		})
+		if err == nil {
+			for _, cid := range mutes {
+				mutedConversations[cid] = true
+			}
+		}
+	}
+
 	previewCardsMap := make(map[int64]*PreviewCard)
 	if rows, err := q.GetPreviewCardsByStatusIDs(ctx, statusIDs); err == nil {
+		authorAccountIDs := make(map[int64]struct{})
+		for _, row := range rows {
+			if row.AuthorAccountID.Valid {
+				authorAccountIDs[row.AuthorAccountID.Int64] = struct{}{}
+			}
+		}
+		authorAccounts := map[int64]Account{}
+		if len(authorAccountIDs) > 0 {
+			ids := make([]int64, 0, len(authorAccountIDs))
+			for id := range authorAccountIDs {
+				ids = append(ids, id)
+			}
+			if dbAccounts, err := q.GetAccountsByIDs(ctx, ids); err == nil {
+				for _, acc := range dbAccounts {
+					authorAccounts[acc.ID] = SerializeAccount(cfg, acc)
+				}
+			}
+		}
+
 		for _, row := range rows {
 			if _, exists := previewCardsMap[row.StatusID]; exists {
 				continue
@@ -179,7 +222,7 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 				ImageDescription:          row.ImageDescription,
 				AuthorAccountID:           row.AuthorAccountID,
 			}
-			previewCardsMap[row.StatusID] = serializePreviewCard(card)
+			previewCardsMap[row.StatusID] = serializePreviewCard(card, authorAccounts)
 		}
 	}
 
@@ -277,6 +320,11 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 			language = &s
 		}
 
+		muted := false
+		if dbStatus.ConversationID.Valid {
+			muted = mutedConversations[dbStatus.ConversationID.Int64]
+		}
+
 		s := Status{
 			ID:                 strconv.FormatInt(dbStatus.ID, 10),
 			CreatedAt:          dbStatus.CreatedAt.Time,
@@ -293,7 +341,7 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 			FavouritesCount:    favouritesCount,
 			Favourited:         false,
 			Reblogged:          false,
-			Muted:              false,
+			Muted:              muted,
 			Bookmarked:         false,
 			Content:            dbStatus.Text,
 			Reblog:             nil,
@@ -388,7 +436,7 @@ func SerializeStatusSimple(ctx context.Context, q db.Querier, cfg *config.Config
 	}
 }
 
-func serializePreviewCard(card db.PreviewCard) *PreviewCard {
+func serializePreviewCard(card db.PreviewCard, authorAccounts map[int64]Account) *PreviewCard {
 	if card.ID == 0 {
 		return nil
 	}
@@ -412,20 +460,51 @@ func serializePreviewCard(card db.PreviewCard) *PreviewCard {
 		blurhash = &value
 	}
 
+	var language *string
+	if card.Language.Valid {
+		value := card.Language.String
+		language = &value
+	}
+
+	var publishedAt *time.Time
+	if card.PublishedAt.Valid {
+		value := card.PublishedAt.Time
+		publishedAt = &value
+	}
+
+	authors := []PreviewCardAuthor{}
+	if strings.TrimSpace(card.AuthorName) != "" || strings.TrimSpace(card.AuthorUrl) != "" || card.AuthorAccountID.Valid {
+		author := PreviewCardAuthor{
+			Name: card.AuthorName,
+			URL:  card.AuthorUrl,
+		}
+		if card.AuthorAccountID.Valid && authorAccounts != nil {
+			if acc, ok := authorAccounts[card.AuthorAccountID.Int64]; ok {
+				author.Account = &acc
+			}
+		}
+		authors = append(authors, author)
+	}
+
 	return &PreviewCard{
-		URL:          card.Url,
-		Title:        card.Title,
-		Description:  card.Description,
-		Type:         previewCardType(card.Type),
-		AuthorName:   card.AuthorName,
-		AuthorURL:    card.AuthorUrl,
-		ProviderName: card.ProviderName,
-		ProviderURL:  card.ProviderUrl,
-		HTML:         card.Html,
-		Width:        int(card.Width),
-		Height:       int(card.Height),
-		Image:        imageURL,
-		Blurhash:     blurhash,
+		URL:              card.Url,
+		Title:            card.Title,
+		Description:      card.Description,
+		Language:         language,
+		Type:             previewCardType(card.Type),
+		AuthorName:       card.AuthorName,
+		AuthorURL:        card.AuthorUrl,
+		ProviderName:     card.ProviderName,
+		ProviderURL:      card.ProviderUrl,
+		HTML:             card.Html,
+		Width:            int(card.Width),
+		Height:           int(card.Height),
+		Image:            imageURL,
+		ImageDescription: card.ImageDescription,
+		EmbedURL:         card.EmbedUrl,
+		Blurhash:         blurhash,
+		PublishedAt:      publishedAt,
+		Authors:          authors,
 	}
 }
 

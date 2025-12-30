@@ -255,11 +255,71 @@ func (h *MediaHandler) Update(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, dbMediaToAPI(updated))
 }
 
+// Delete handles DELETE /api/v1/media/:id
+// Deletes a media attachment if it is not attached to a status.
+func (h *MediaHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	idStr := web.Param(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	if h.queries == nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+
+	mediaRecord, err := h.queries.GetMediaAttachmentByAccount(r.Context(), db.GetMediaAttachmentByAccountParams{
+		ID:        id,
+		AccountID: pgtype.Int8{Int64: accountID, Valid: true},
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+	if mediaRecord.StatusID.Valid {
+		web.JSONError(w, http.StatusUnprocessableEntity, "Media attachment is currently used by a status")
+		return
+	}
+
+	paths := mediaAttachmentStoragePaths(mediaRecord)
+	if len(paths) > 0 {
+		if h.uploader == nil {
+			web.JSONError(w, http.StatusInternalServerError, "Media storage unavailable")
+			return
+		}
+		for _, path := range paths {
+			if err := h.uploader.Delete(r.Context(), path); err != nil {
+				web.JSONError(w, http.StatusInternalServerError, "Failed to delete media file")
+				return
+			}
+		}
+	}
+
+	if err := h.queries.DeleteMediaAttachment(r.Context(), db.DeleteMediaAttachmentParams{
+		ID:        id,
+		AccountID: pgtype.Int8{Int64: accountID, Valid: true},
+	}); err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to delete media attachment")
+		return
+	}
+
+	web.JSON(w, http.StatusOK, map[string]any{})
+}
+
 // RegisterRoutes registers the media routes
 func (h *MediaHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/media", h.Create)
 	mux.HandleFunc("GET /api/v1/media/{id}", h.Get)
 	mux.HandleFunc("PUT /api/v1/media/{id}", h.Update)
+	mux.HandleFunc("DELETE /api/v1/media/{id}", h.Delete)
 	// V2 endpoint alias
 	mux.HandleFunc("POST /api/v2/media", h.Create)
 }
@@ -314,4 +374,37 @@ func mapMediaType(t int32) string {
 	default:
 		return "unknown"
 	}
+}
+
+func mediaAttachmentStoragePaths(attachment db.MediaAttachment) []string {
+	if !attachment.AccountID.Valid || !attachment.CreatedAt.Valid {
+		return nil
+	}
+
+	accountID := attachment.AccountID.Int64
+	createdAt := attachment.CreatedAt.Time
+	paths := []string{}
+
+	addPath := func(filename pgtype.Text, ts time.Time) {
+		if !filename.Valid || filename.String == "" {
+			return
+		}
+		path := media.MediaStoragePath(accountID, ts, filename.String)
+		if path == "" {
+			return
+		}
+		for _, existing := range paths {
+			if existing == path {
+				return
+			}
+		}
+		paths = append(paths, path)
+	}
+
+	addPath(attachment.FileFileName, createdAt)
+	addPath(attachment.FileFileName, createdAt.In(time.Local))
+	addPath(attachment.ThumbnailFileName, createdAt)
+	addPath(attachment.ThumbnailFileName, createdAt.In(time.Local))
+
+	return paths
 }

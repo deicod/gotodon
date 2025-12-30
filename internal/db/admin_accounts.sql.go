@@ -207,6 +207,236 @@ func (q *Queries) AdminListAccounts(ctx context.Context, arg AdminListAccountsPa
 	return items, nil
 }
 
+const adminListAccountsV2 = `-- name: AdminListAccountsV2 :many
+SELECT
+    a.id,
+    a.username,
+    a.domain,
+    a.created_at,
+    s.followers_count,
+    s.following_count,
+    s.statuses_count,
+    s.last_status_at,
+    u.id AS user_id,
+    u.email,
+    u.sign_up_ip,
+    u.confirmed_at,
+    u.approved,
+    u.disabled,
+    a.silenced_at,
+    a.suspended_at,
+    a.sensitized_at,
+    u.invite_id,
+    u.created_by_application_id,
+    u.locale,
+    uir.text AS invite_request,
+    inviter.account_id AS invited_by_account_id,
+    r.id AS role_id,
+    r.name AS role_name,
+    r.permissions AS role_permissions,
+    r.color AS role_color,
+    r.highlighted AS role_highlighted
+FROM accounts a
+LEFT JOIN users u ON a.id = u.account_id
+LEFT JOIN account_stats s ON s.account_id = a.id
+LEFT JOIN invites i ON i.id = u.invite_id
+LEFT JOIN users inviter ON inviter.id = i.user_id
+LEFT JOIN user_roles r ON r.id = u.role_id
+LEFT JOIN user_invite_requests uir ON uir.user_id = u.id
+WHERE
+    (CASE
+        WHEN $2::text = 'local' THEN a.domain IS NULL
+        WHEN $2::text = 'remote' THEN a.domain IS NOT NULL
+        ELSE TRUE
+    END)
+    AND (CASE WHEN $3::text != '' THEN a.domain = $3 ELSE TRUE END)
+    AND (CASE WHEN $4::text = 'active' THEN a.suspended_at IS NULL ELSE TRUE END)
+    AND (CASE WHEN $4::text = 'pending' THEN u.approved = false ELSE TRUE END)
+    AND (CASE WHEN $4::text = 'disabled' THEN u.disabled = true AND a.suspended_at IS NULL ELSE TRUE END)
+    AND (CASE WHEN $4::text = 'suspended' THEN a.suspended_at IS NOT NULL ELSE TRUE END)
+    AND (CASE WHEN $4::text = 'silenced' THEN a.silenced_at IS NOT NULL ELSE TRUE END)
+    AND (CASE WHEN $4::text = 'sensitized' THEN a.sensitized_at IS NOT NULL ELSE TRUE END)
+    AND (CASE WHEN $5::text != '' THEN lower(a.username) LIKE lower($5 || '%') ELSE TRUE END)
+    AND (CASE WHEN $6::text != '' THEN a.display_name ILIKE $6 || '%' ELSE TRUE END)
+    AND (CASE WHEN $7::text != '' THEN u.email ILIKE $7 || '%' ELSE TRUE END)
+    AND (CASE WHEN $8::text != '' THEN (
+        (u.sign_up_ip IS NOT NULL AND u.sign_up_ip <<= $8::inet)
+        OR EXISTS (SELECT 1 FROM session_activations sa WHERE sa.user_id = u.id AND sa.ip IS NOT NULL AND sa.ip <<= $8::inet)
+        OR EXISTS (SELECT 1 FROM login_activities la WHERE la.user_id = u.id AND la.ip IS NOT NULL AND la.success = true AND la.ip <<= $8::inet)
+    ) ELSE TRUE END)
+    AND (CASE WHEN $9::bigint > 0 THEN i.user_id = $9 ELSE TRUE END)
+    AND (CASE WHEN $10::text = 'staff' THEN (r.permissions & 16) = 16 OR (r.permissions & 1) = 1 ELSE TRUE END)
+    AND (CASE WHEN $11::bigint[] IS NOT NULL AND cardinality($11::bigint[]) > 0 THEN u.role_id = ANY($11::bigint[]) ELSE TRUE END)
+    AND (CASE WHEN $12::bigint > 0 THEN a.id < $12 ELSE TRUE END)
+    AND (CASE WHEN $13::bigint > 0 THEN a.id > $13 ELSE TRUE END)
+    AND (CASE WHEN $14::bigint > 0 THEN a.id > $14 ELSE TRUE END)
+ORDER BY a.id DESC
+LIMIT $1
+`
+
+type AdminListAccountsV2Params struct {
+	Limit       int32   `db:"limit" json:"limit"`
+	Origin      string  `db:"origin" json:"origin"`
+	ByDomain    string  `db:"by_domain" json:"by_domain"`
+	Status      string  `db:"status" json:"status"`
+	Username    string  `db:"username" json:"username"`
+	DisplayName string  `db:"display_name" json:"display_name"`
+	Email       string  `db:"email" json:"email"`
+	Ip          string  `db:"ip" json:"ip"`
+	InvitedBy   int64   `db:"invited_by" json:"invited_by"`
+	Permissions string  `db:"permissions" json:"permissions"`
+	RoleIds     []int64 `db:"role_ids" json:"role_ids"`
+	MaxID       int64   `db:"max_id" json:"max_id"`
+	SinceID     int64   `db:"since_id" json:"since_id"`
+	MinID       int64   `db:"min_id" json:"min_id"`
+}
+
+type AdminListAccountsV2Row struct {
+	ID                     int64              `db:"id" json:"id"`
+	Username               string             `db:"username" json:"username"`
+	Domain                 pgtype.Text        `db:"domain" json:"domain"`
+	CreatedAt              pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	FollowersCount         pgtype.Int8        `db:"followers_count" json:"followers_count"`
+	FollowingCount         pgtype.Int8        `db:"following_count" json:"following_count"`
+	StatusesCount          pgtype.Int8        `db:"statuses_count" json:"statuses_count"`
+	LastStatusAt           pgtype.Timestamptz `db:"last_status_at" json:"last_status_at"`
+	UserID                 pgtype.Int8        `db:"user_id" json:"user_id"`
+	Email                  pgtype.Text        `db:"email" json:"email"`
+	SignUpIp               *netip.Addr        `db:"sign_up_ip" json:"sign_up_ip"`
+	ConfirmedAt            pgtype.Timestamptz `db:"confirmed_at" json:"confirmed_at"`
+	Approved               pgtype.Bool        `db:"approved" json:"approved"`
+	Disabled               pgtype.Bool        `db:"disabled" json:"disabled"`
+	SilencedAt             pgtype.Timestamptz `db:"silenced_at" json:"silenced_at"`
+	SuspendedAt            pgtype.Timestamptz `db:"suspended_at" json:"suspended_at"`
+	SensitizedAt           pgtype.Timestamptz `db:"sensitized_at" json:"sensitized_at"`
+	InviteID               pgtype.Int8        `db:"invite_id" json:"invite_id"`
+	CreatedByApplicationID pgtype.Int8        `db:"created_by_application_id" json:"created_by_application_id"`
+	Locale                 pgtype.Text        `db:"locale" json:"locale"`
+	InviteRequest          pgtype.Text        `db:"invite_request" json:"invite_request"`
+	InvitedByAccountID     pgtype.Int8        `db:"invited_by_account_id" json:"invited_by_account_id"`
+	RoleID                 pgtype.Int8        `db:"role_id" json:"role_id"`
+	RoleName               pgtype.Text        `db:"role_name" json:"role_name"`
+	RolePermissions        pgtype.Int8        `db:"role_permissions" json:"role_permissions"`
+	RoleColor              pgtype.Text        `db:"role_color" json:"role_color"`
+	RoleHighlighted        pgtype.Bool        `db:"role_highlighted" json:"role_highlighted"`
+}
+
+func (q *Queries) AdminListAccountsV2(ctx context.Context, arg AdminListAccountsV2Params) ([]AdminListAccountsV2Row, error) {
+	rows, err := q.db.Query(ctx, adminListAccountsV2,
+		arg.Limit,
+		arg.Origin,
+		arg.ByDomain,
+		arg.Status,
+		arg.Username,
+		arg.DisplayName,
+		arg.Email,
+		arg.Ip,
+		arg.InvitedBy,
+		arg.Permissions,
+		arg.RoleIds,
+		arg.MaxID,
+		arg.SinceID,
+		arg.MinID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AdminListAccountsV2Row{}
+	for rows.Next() {
+		var i AdminListAccountsV2Row
+		if err := rows.Scan(
+			&i.ID,
+			&i.Username,
+			&i.Domain,
+			&i.CreatedAt,
+			&i.FollowersCount,
+			&i.FollowingCount,
+			&i.StatusesCount,
+			&i.LastStatusAt,
+			&i.UserID,
+			&i.Email,
+			&i.SignUpIp,
+			&i.ConfirmedAt,
+			&i.Approved,
+			&i.Disabled,
+			&i.SilencedAt,
+			&i.SuspendedAt,
+			&i.SensitizedAt,
+			&i.InviteID,
+			&i.CreatedByApplicationID,
+			&i.Locale,
+			&i.InviteRequest,
+			&i.InvitedByAccountID,
+			&i.RoleID,
+			&i.RoleName,
+			&i.RolePermissions,
+			&i.RoleColor,
+			&i.RoleHighlighted,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const adminListUserIPs = `-- name: AdminListUserIPs :many
+SELECT
+    user_id,
+    ip,
+    max(used_at)::timestamptz AS used_at
+FROM (
+    SELECT users.id AS user_id,
+        users.sign_up_ip AS ip,
+        users.created_at AS used_at
+    FROM users
+    WHERE users.id = ANY($1::bigint[]) AND users.sign_up_ip IS NOT NULL
+    UNION ALL
+    SELECT session_activations.user_id,
+        session_activations.ip,
+        session_activations.updated_at
+    FROM session_activations
+    WHERE session_activations.user_id = ANY($1::bigint[]) AND session_activations.ip IS NOT NULL
+    UNION ALL
+    SELECT login_activities.user_id,
+        login_activities.ip,
+        login_activities.created_at
+    FROM login_activities
+    WHERE login_activities.user_id = ANY($1::bigint[]) AND login_activities.ip IS NOT NULL AND login_activities.success = true
+) ips
+GROUP BY user_id, ip
+`
+
+type AdminListUserIPsRow struct {
+	UserID int64              `db:"user_id" json:"user_id"`
+	Ip     *netip.Addr        `db:"ip" json:"ip"`
+	UsedAt pgtype.Timestamptz `db:"used_at" json:"used_at"`
+}
+
+func (q *Queries) AdminListUserIPs(ctx context.Context, userIds []int64) ([]AdminListUserIPsRow, error) {
+	rows, err := q.db.Query(ctx, adminListUserIPs, userIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AdminListUserIPsRow{}
+	for rows.Next() {
+		var i AdminListUserIPsRow
+		if err := rows.Scan(&i.UserID, &i.Ip, &i.UsedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const adminRejectAccount = `-- name: AdminRejectAccount :exec
 DELETE FROM users WHERE account_id = $1
 `

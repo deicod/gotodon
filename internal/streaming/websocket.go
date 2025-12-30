@@ -57,6 +57,15 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.hub.Register(sub)
 	defer h.hub.Unregister(sub)
 
+	if initialStreams, err := resolveStreamSubscriptions(r.URL.Path, r.URL.Query(), ""); err != nil {
+		status, message := streamErrorDetails(err)
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"error":%q,"status":%d}`, message, status)))
+	} else {
+		for _, stream := range initialStreams {
+			sub.Subscribe(stream)
+		}
+	}
+
 	// Set up ping/pong
 	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	conn.SetPongHandler(func(string) error {

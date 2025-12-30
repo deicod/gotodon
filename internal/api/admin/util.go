@@ -56,3 +56,8 @@ func requireAdmin(w http.ResponseWriter, r *http.Request, queries *db.Queries) e
 
 	return nil
 }
+
+// RequireAdmin exposes admin authorization for other API packages.
+func RequireAdmin(w http.ResponseWriter, r *http.Request, queries *db.Queries) error {
+	return requireAdmin(w, r, queries)
+}

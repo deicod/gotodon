@@ -158,3 +158,208 @@ func TestFilterContexts(t *testing.T) {
 		}
 	}
 }
+
+func TestFiltersHandler_KeywordRoutes_MockMode(t *testing.T) {
+	h := NewFiltersHandler(nil)
+
+	body := `{"title":"WithKeywords","context":["home"],"keywords_attributes":[{"keyword":"bad","whole_word":true}]}`
+	req, rec := mockAccountRequest(http.MethodPost, "/api/v2/filters", body)
+	h.Create(rec, req)
+
+	var created FilterV2
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	req, rec = mockAccountRequest(http.MethodGet, "/api/v2/filters/"+created.ID+"/keywords", "")
+	req.SetPathValue("filter_id", created.ID)
+	h.ListKeywords(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var keywords []FilterKeyword
+	if err := json.Unmarshal(rec.Body.Bytes(), &keywords); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+	if len(keywords) != 1 {
+		t.Fatalf("keywords length = %d, want 1", len(keywords))
+	}
+
+	keywordID := keywords[0].ID
+	req, rec = mockAccountRequest(http.MethodGet, "/api/v2/filters/keywords/"+keywordID, "")
+	req.SetPathValue("id", keywordID)
+	h.GetKeywordByID(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	updateBody := `{"keyword":"worse","whole_word":false}`
+	req, rec = mockAccountRequest(http.MethodPut, "/api/v2/filters/keywords/"+keywordID, updateBody)
+	req.SetPathValue("id", keywordID)
+	h.UpdateKeywordByID(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var updated FilterKeyword
+	if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+	if updated.Keyword != "worse" || updated.WholeWord {
+		t.Fatalf("unexpected update result: %+v", updated)
+	}
+
+	req, rec = mockAccountRequest(http.MethodDelete, "/api/v2/filters/keywords/"+keywordID, "")
+	req.SetPathValue("id", keywordID)
+	h.DeleteKeywordByID(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	req, rec = mockAccountRequest(http.MethodGet, "/api/v2/filters/keywords/"+keywordID, "")
+	req.SetPathValue("id", keywordID)
+	h.GetKeywordByID(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestFiltersHandler_DeleteKeyword_MismatchedFilter_MockMode(t *testing.T) {
+	h := NewFiltersHandler(nil)
+
+	body := `{"title":"FilterOne","context":["home"],"keywords_attributes":[{"keyword":"alpha","whole_word":true}]}`
+	req, rec := mockAccountRequest(http.MethodPost, "/api/v2/filters", body)
+	h.Create(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var filterOne FilterV2
+	if err := json.Unmarshal(rec.Body.Bytes(), &filterOne); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+	if len(filterOne.Keywords) != 1 {
+		t.Fatalf("keywords length = %d, want 1", len(filterOne.Keywords))
+	}
+
+	body = `{"title":"FilterTwo","context":["home"],"keywords_attributes":[{"keyword":"beta","whole_word":true}]}`
+	req, rec = mockAccountRequest(http.MethodPost, "/api/v2/filters", body)
+	h.Create(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var filterTwo FilterV2
+	if err := json.Unmarshal(rec.Body.Bytes(), &filterTwo); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	keywordID := filterOne.Keywords[0].ID
+	req, rec = mockAccountRequest(http.MethodDelete, "/api/v2/filters/"+filterTwo.ID+"/keywords/"+keywordID, "")
+	req.SetPathValue("filter_id", filterTwo.ID)
+	req.SetPathValue("id", keywordID)
+	h.DeleteKeyword(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+
+	req, rec = mockAccountRequest(http.MethodDelete, "/api/v2/filters/"+filterOne.ID+"/keywords/"+keywordID, "")
+	req.SetPathValue("filter_id", filterOne.ID)
+	req.SetPathValue("id", keywordID)
+	h.DeleteKeyword(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	req, rec = mockAccountRequest(http.MethodGet, "/api/v2/filters/"+filterOne.ID+"/keywords", "")
+	req.SetPathValue("filter_id", filterOne.ID)
+	h.ListKeywords(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var keywords []FilterKeyword
+	if err := json.Unmarshal(rec.Body.Bytes(), &keywords); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+	if len(keywords) != 0 {
+		t.Fatalf("keywords length = %d, want 0", len(keywords))
+	}
+}
+
+func TestFiltersHandler_StatusRoutes_MockMode(t *testing.T) {
+	h := NewFiltersHandler(nil)
+
+	body := `{"title":"WithStatuses","context":["home"]}`
+	req, rec := mockAccountRequest(http.MethodPost, "/api/v2/filters", body)
+	h.Create(rec, req)
+
+	var created FilterV2
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	statusBody := `{"status_id":"12345"}`
+	req, rec = mockAccountRequest(http.MethodPost, "/api/v2/filters/"+created.ID+"/statuses", statusBody)
+	req.SetPathValue("filter_id", created.ID)
+	h.CreateStatus(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var createdStatus FilterStatus
+	if err := json.Unmarshal(rec.Body.Bytes(), &createdStatus); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	req, rec = mockAccountRequest(http.MethodGet, "/api/v2/filters/"+created.ID+"/statuses", "")
+	req.SetPathValue("filter_id", created.ID)
+	h.ListStatuses(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var statuses []FilterStatus
+	if err := json.Unmarshal(rec.Body.Bytes(), &statuses); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("statuses length = %d, want 1", len(statuses))
+	}
+
+	req, rec = mockAccountRequest(http.MethodGet, "/api/v2/filters/statuses/"+createdStatus.ID, "")
+	req.SetPathValue("id", createdStatus.ID)
+	h.GetStatus(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	req, rec = mockAccountRequest(http.MethodDelete, "/api/v2/filters/statuses/"+createdStatus.ID, "")
+	req.SetPathValue("id", createdStatus.ID)
+	h.DeleteStatus(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	req, rec = mockAccountRequest(http.MethodGet, "/api/v2/filters/statuses/"+createdStatus.ID, "")
+	req.SetPathValue("id", createdStatus.ID)
+	h.GetStatus(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}

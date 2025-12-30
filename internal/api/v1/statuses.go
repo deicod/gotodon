@@ -3,8 +3,10 @@ package v1
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -37,6 +39,7 @@ const (
 	VisibilityUnlisted = 1
 	VisibilityPrivate  = 2
 	VisibilityDirect   = 3
+	VisibilityLimited  = 4
 )
 
 var visibilityToString = map[int32]string{
@@ -52,6 +55,15 @@ var stringToVisibility = map[string]int32{
 	"private":  VisibilityPrivate,
 	"direct":   VisibilityDirect,
 }
+
+const defaultStatusesLimit = 20
+
+const (
+	quotePolicyFlagUnsupported int32 = 1 << 0
+	quotePolicyFlagPublic      int32 = 1 << 1
+	quotePolicyFlagFollowers   int32 = 1 << 2
+	quotePolicyFlagFollowing   int32 = 1 << 3
+)
 
 // StatusesHandler handles status-related endpoints
 type StatusesHandler struct {
@@ -162,20 +174,31 @@ type Tag struct {
 }
 
 // PreviewCard represents a link preview card
+type PreviewCardAuthor struct {
+	Name    string   `json:"name"`
+	URL     string   `json:"url"`
+	Account *Account `json:"account"`
+}
+
 type PreviewCard struct {
-	URL          string  `json:"url"`
-	Title        string  `json:"title"`
-	Description  string  `json:"description"`
-	Type         string  `json:"type"`
-	AuthorName   string  `json:"author_name"`
-	AuthorURL    string  `json:"author_url"`
-	ProviderName string  `json:"provider_name"`
-	ProviderURL  string  `json:"provider_url"`
-	HTML         string  `json:"html"`
-	Width        int     `json:"width"`
-	Height       int     `json:"height"`
-	Image        *string `json:"image"`
-	Blurhash     *string `json:"blurhash"`
+	URL              string              `json:"url"`
+	Title            string              `json:"title"`
+	Description      string              `json:"description"`
+	Language         *string             `json:"language"`
+	Type             string              `json:"type"`
+	AuthorName       string              `json:"author_name"`
+	AuthorURL        string              `json:"author_url"`
+	ProviderName     string              `json:"provider_name"`
+	ProviderURL      string              `json:"provider_url"`
+	HTML             string              `json:"html"`
+	Width            int                 `json:"width"`
+	Height           int                 `json:"height"`
+	Image            *string             `json:"image"`
+	ImageDescription string              `json:"image_description"`
+	EmbedURL         string              `json:"embed_url"`
+	Blurhash         *string             `json:"blurhash"`
+	PublishedAt      *time.Time          `json:"published_at"`
+	Authors          []PreviewCardAuthor `json:"authors"`
 }
 
 // Poll represents a poll attached to a status
@@ -758,6 +781,238 @@ func trimTrailingPunctuation(value string) string {
 		break
 	}
 	return value
+}
+
+// Index handles GET /api/v1/statuses
+func (h *StatusesHandler) Index(w http.ResponseWriter, r *http.Request) {
+	scopes := middleware.GetScopes(r.Context())
+	if scopes != "" && !oauth.HasScope(scopes, "read:statuses") {
+		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
+		return
+	}
+
+	ids := parseStatusIDs(r)
+	if len(ids) > defaultStatusesLimit {
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed")
+		return
+	}
+
+	if !h.useDB() || len(ids) == 0 {
+		web.JSON(w, http.StatusOK, []Status{})
+		return
+	}
+
+	ctx := r.Context()
+	dbStatuses, err := h.queries.GetStatusesByIDs(ctx, ids)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to fetch statuses")
+		return
+	}
+	if len(dbStatuses) == 0 {
+		web.JSON(w, http.StatusOK, []Status{})
+		return
+	}
+
+	statusIDs := make([]int64, len(dbStatuses))
+	authorIDs := make([]int64, 0, len(dbStatuses))
+	authorIDSeen := make(map[int64]bool)
+	for i, s := range dbStatuses {
+		statusIDs[i] = s.ID
+		if !authorIDSeen[s.AccountID] {
+			authorIDs = append(authorIDs, s.AccountID)
+			authorIDSeen[s.AccountID] = true
+		}
+	}
+
+	dbAccounts, err := h.queries.GetAccountsByIDs(ctx, authorIDs)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to fetch accounts")
+		return
+	}
+	accountsByID := make(map[int64]db.Account, len(dbAccounts))
+	for _, acc := range dbAccounts {
+		accountsByID[acc.ID] = acc
+	}
+
+	viewerID, viewerOK := middleware.GetAccountID(ctx)
+	viewerDomain := ""
+	if viewerOK {
+		viewer, err := h.queries.GetAccountByID(ctx, viewerID)
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to fetch viewer account")
+			return
+		}
+		if viewer.Domain.Valid {
+			viewerDomain = viewer.Domain.String
+		}
+	}
+
+	mentionedByStatus := make(map[int64]bool)
+	if viewerOK {
+		mentions, err := h.queries.GetMentionsByStatusIDs(ctx, statusIDs)
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to fetch mentions")
+			return
+		}
+		for _, m := range mentions {
+			if m.AccountID == viewerID {
+				mentionedByStatus[m.StatusID] = true
+			}
+		}
+	}
+
+	followingAuthors := make(map[int64]bool)
+	mutedAuthors := make(map[int64]bool)
+	blockedAuthors := make(map[int64]bool)
+	authorsBlockingViewer := make(map[int64]bool)
+	blockedDomains := make(map[string]bool)
+	authorsBlockingViewerDomain := make(map[int64]bool)
+
+	if viewerOK && len(authorIDs) > 0 {
+		follows, err := h.queries.GetFollowsByAccountIDs(ctx, db.GetFollowsByAccountIDsParams{
+			AccountID:        viewerID,
+			TargetAccountIds: authorIDs,
+		})
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to fetch follows")
+			return
+		}
+		for _, targetID := range follows {
+			followingAuthors[targetID] = true
+		}
+
+		mutes, err := h.queries.GetMutesByAccountIDs(ctx, db.GetMutesByAccountIDsParams{
+			AccountID:        viewerID,
+			TargetAccountIds: authorIDs,
+		})
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to fetch mutes")
+			return
+		}
+		for _, m := range mutes {
+			mutedAuthors[m.TargetAccountID] = true
+		}
+
+		blocks, err := h.queries.GetBlocksByAccountIDs(ctx, db.GetBlocksByAccountIDsParams{
+			AccountID:        viewerID,
+			TargetAccountIds: authorIDs,
+		})
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to fetch blocks")
+			return
+		}
+		for _, b := range blocks {
+			blockedAuthors[b.TargetAccountID] = true
+		}
+
+		blockedBy, err := h.queries.GetBlocksFromAccounts(ctx, db.GetBlocksFromAccountsParams{
+			TargetAccountID: viewerID,
+			AccountIds:      authorIDs,
+		})
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to fetch blocking relationships")
+			return
+		}
+		for _, b := range blockedBy {
+			authorsBlockingViewer[b.AccountID] = true
+		}
+	}
+
+	if viewerOK {
+		domains, err := h.queries.ListDomainBlockDomains(ctx, viewerID)
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to fetch domain blocks")
+			return
+		}
+		for _, domain := range domains {
+			if domain != "" {
+				blockedDomains[domain] = true
+			}
+		}
+	}
+
+	if viewerOK && viewerDomain != "" && len(authorIDs) > 0 {
+		blockedByDomain, err := h.queries.GetDomainBlocksByAccountsAndDomain(ctx, db.GetDomainBlocksByAccountsAndDomainParams{
+			AccountIds: authorIDs,
+			Domain:     viewerDomain,
+		})
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to fetch domain blocking relationships")
+			return
+		}
+		for _, accountID := range blockedByDomain {
+			authorsBlockingViewerDomain[accountID] = true
+		}
+	}
+
+	isPermitted := func(status db.Status, author db.Account) bool {
+		if viewerOK && viewerID == author.ID {
+			return true
+		}
+		if author.SuspendedAt.Valid {
+			return false
+		}
+
+		requiresMention := status.Visibility == VisibilityDirect || status.Visibility == VisibilityLimited
+		isPrivate := status.Visibility == VisibilityPrivate
+
+		if requiresMention {
+			return viewerOK && mentionedByStatus[status.ID]
+		}
+
+		if isPrivate {
+			if !viewerOK {
+				return false
+			}
+			return mentionedByStatus[status.ID] || followingAuthors[author.ID]
+		}
+
+		if !viewerOK {
+			return true
+		}
+
+		if authorsBlockingViewer[author.ID] {
+			return false
+		}
+		if viewerDomain != "" && authorsBlockingViewerDomain[author.ID] {
+			return false
+		}
+		return true
+	}
+
+	isFiltered := func(status db.Status, author db.Account) bool {
+		if !viewerOK || viewerID == author.ID {
+			return false
+		}
+
+		if blockedAuthors[author.ID] || mutedAuthors[author.ID] {
+			return true
+		}
+
+		if author.Domain.Valid && blockedDomains[author.Domain.String] {
+			return true
+		}
+
+		if author.SilencedAt.Valid && !followingAuthors[author.ID] {
+			return true
+		}
+
+		return false
+	}
+
+	filtered := make([]db.Status, 0, len(dbStatuses))
+	for _, s := range dbStatuses {
+		author, ok := accountsByID[s.AccountID]
+		if !ok {
+			continue
+		}
+		if !isPermitted(s, author) || isFiltered(s, author) {
+			continue
+		}
+		filtered = append(filtered, s)
+	}
+
+	web.JSON(w, http.StatusOK, SerializeStatuses(ctx, h.queries, h.cfg, filtered))
 }
 
 // Create handles POST /api/v1/statuses
@@ -1390,6 +1645,110 @@ func (h *StatusesHandler) Unbookmark(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, status)
 }
 
+// Mute handles POST /api/v1/statuses/:id/mute
+func (h *StatusesHandler) Mute(w http.ResponseWriter, r *http.Request) {
+	idStr := web.Param(r, "id")
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	scopes := middleware.GetScopes(r.Context())
+	if !oauth.HasScope(scopes, "write:mutes") {
+		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
+		return
+	}
+
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	ctx := r.Context()
+	if h.useDB() {
+		status, err := h.queries.GetStatusByID(ctx, id)
+		if err != nil {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+		if !status.ConversationID.Valid {
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Conversation is missing")
+			return
+		}
+
+		if err := h.queries.CreateConversationMute(ctx, db.CreateConversationMuteParams{
+			AccountID:      accountID,
+			ConversationID: status.ConversationID.Int64,
+		}); err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to mute conversation")
+			return
+		}
+
+		s := SerializeStatus(ctx, h.queries, h.cfg, status)
+		s.Muted = true
+		web.JSON(w, http.StatusOK, s)
+		return
+	}
+
+	status, _ := h.getStatusByID(idStr)
+	status.Muted = true
+	web.JSON(w, http.StatusOK, status)
+}
+
+// Unmute handles POST /api/v1/statuses/:id/unmute
+func (h *StatusesHandler) Unmute(w http.ResponseWriter, r *http.Request) {
+	idStr := web.Param(r, "id")
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	scopes := middleware.GetScopes(r.Context())
+	if !oauth.HasScope(scopes, "write:mutes") {
+		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
+		return
+	}
+
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	ctx := r.Context()
+	if h.useDB() {
+		status, err := h.queries.GetStatusByID(ctx, id)
+		if err != nil {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+		if !status.ConversationID.Valid {
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Conversation is missing")
+			return
+		}
+
+		if err := h.queries.DeleteConversationMute(ctx, db.DeleteConversationMuteParams{
+			AccountID:      accountID,
+			ConversationID: status.ConversationID.Int64,
+		}); err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to unmute conversation")
+			return
+		}
+
+		s := SerializeStatus(ctx, h.queries, h.cfg, status)
+		s.Muted = false
+		web.JSON(w, http.StatusOK, s)
+		return
+	}
+
+	status, _ := h.getStatusByID(idStr)
+	status.Muted = false
+	web.JSON(w, http.StatusOK, status)
+}
+
 // Context handles GET /api/v1/statuses/:id/context
 func (h *StatusesHandler) Context(w http.ResponseWriter, r *http.Request) {
 	idStr := web.Param(r, "id")
@@ -1472,6 +1831,90 @@ func (h *StatusesHandler) getStatusByID(id string) (Status, error) {
 		Tags:             []Tag{},
 		Emojis:           []CustomEmoji{},
 	}, nil
+}
+
+func parseStatusIDs(r *http.Request) []int64 {
+	query := r.URL.Query()
+	rawIDs := append([]string{}, query["id"]...)
+	rawIDs = append(rawIDs, query["id[]"]...)
+	rawIDs = uniqueStrings(rawIDs)
+
+	ids := make([]int64, 0, len(rawIDs))
+	for _, value := range rawIDs {
+		id, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			id = 0
+		}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func uniqueStrings(values []string) []string {
+	if len(values) == 0 {
+		return values
+	}
+	seen := make(map[string]bool, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
+}
+
+type interactionPolicyRequest struct {
+	QuoteApprovalPolicy string `json:"quote_approval_policy" form:"quote_approval_policy"`
+}
+
+func decodeInteractionPolicyRequest(r *http.Request) (interactionPolicyRequest, error) {
+	var req interactionPolicyRequest
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&req); err != nil {
+		if errors.Is(err, io.EOF) {
+			return req, nil
+		}
+		return req, err
+	}
+	return req, nil
+}
+
+func quoteApprovalPolicyValue(name string) (int32, bool) {
+	switch name {
+	case "public":
+		return quotePolicyFlagPublic << 16, true
+	case "followers":
+		return quotePolicyFlagFollowers << 16, true
+	case "nobody":
+		return 0, true
+	default:
+		return 0, false
+	}
+}
+
+func defaultQuotePolicy(ctx context.Context, q db.Querier, accountID int64) string {
+	if q == nil {
+		return "public"
+	}
+
+	user, err := q.GetUserByAccountID(ctx, accountID)
+	if err != nil || !user.Settings.Valid {
+		return "public"
+	}
+
+	var settings map[string]any
+	if err := json.Unmarshal([]byte(user.Settings.String), &settings); err != nil {
+		return "public"
+	}
+
+	if value, ok := settings["default_quote_policy"].(string); ok && value != "" {
+		return value
+	}
+
+	return "public"
 }
 
 func ptrStr(s string) *string {
@@ -1707,6 +2150,81 @@ func (h *StatusesHandler) Edit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	web.JSONError(w, http.StatusNotFound, "Record not found")
+}
+
+// InteractionPolicy handles PUT /api/v1/statuses/:id/interaction_policy
+func (h *StatusesHandler) InteractionPolicy(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	scopes := middleware.GetScopes(r.Context())
+	if !oauth.HasScope(scopes, "write:statuses") {
+		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
+		return
+	}
+
+	statusID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	req, err := decodeInteractionPolicyRequest(r)
+	if err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	policyName := strings.ToLower(strings.TrimSpace(req.QuoteApprovalPolicy))
+	if policyName == "" {
+		policyName = defaultQuotePolicy(r.Context(), h.queries, accountID)
+	}
+
+	policyValue, ok := quoteApprovalPolicyValue(policyName)
+	if !ok {
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Quote approval policy is invalid")
+		return
+	}
+
+	if !h.useDB() {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	ctx := r.Context()
+	status, err := h.queries.GetStatusByID(ctx, statusID)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+	if status.AccountID != accountID {
+		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
+		return
+	}
+
+	if status.Local.Valid && status.Local.Bool && status.Visibility != VisibilityPublic && status.Visibility != VisibilityUnlisted {
+		policyValue = 0
+	}
+
+	updatedStatus, err := h.queries.UpdateStatusQuoteApprovalPolicy(ctx, db.UpdateStatusQuoteApprovalPolicyParams{
+		ID:                  statusID,
+		QuoteApprovalPolicy: policyValue,
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to update status")
+		return
+	}
+
+	if h.outgoing != nil {
+		if err := h.outgoing.DeliverStatusUpdate(ctx, statusID); err != nil {
+			fmt.Printf("Failed to deliver Update activity: %v\n", err)
+		}
+	}
+
+	web.JSON(w, http.StatusOK, SerializeStatus(ctx, h.queries, h.cfg, updatedStatus))
 }
 
 func (h *StatusesHandler) resolveAccountsFromText(ctx context.Context, q db.Querier, text string, userAccountID int64) ([]db.Account, error) {
@@ -2646,6 +3164,7 @@ func (h *StatusesHandler) RevokeQuote(w http.ResponseWriter, r *http.Request) {
 
 // RegisterRoutes registers the statuses routes
 func (h *StatusesHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v1/statuses", h.Index)
 	mux.HandleFunc("POST /api/v1/statuses", h.Create)
 	mux.HandleFunc("GET /api/v1/statuses/{id}", h.Get)
 	mux.HandleFunc("PUT /api/v1/statuses/{id}", h.Edit)
@@ -2653,6 +3172,7 @@ func (h *StatusesHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/statuses/{id}/context", h.Context)
 	mux.HandleFunc("GET /api/v1/statuses/{id}/history", h.History)
 	mux.HandleFunc("GET /api/v1/statuses/{id}/source", h.Source)
+	mux.HandleFunc("PUT /api/v1/statuses/{id}/interaction_policy", h.InteractionPolicy)
 	mux.HandleFunc("POST /api/v1/statuses/{id}/translate", h.Translate)
 	mux.HandleFunc("GET /api/v1/statuses/{id}/quotes", h.Quotes)
 	mux.HandleFunc("POST /api/v1/statuses/{id}/quotes/{quote_id}/revoke", h.RevokeQuote)
@@ -2662,6 +3182,8 @@ func (h *StatusesHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/statuses/{id}/unreblog", h.Unreblog)
 	mux.HandleFunc("POST /api/v1/statuses/{id}/bookmark", h.Bookmark)
 	mux.HandleFunc("POST /api/v1/statuses/{id}/unbookmark", h.Unbookmark)
+	mux.HandleFunc("POST /api/v1/statuses/{id}/mute", h.Mute)
+	mux.HandleFunc("POST /api/v1/statuses/{id}/unmute", h.Unmute)
 	mux.HandleFunc("POST /api/v1/statuses/{id}/pin", h.Pin)
 	mux.HandleFunc("POST /api/v1/statuses/{id}/unpin", h.Unpin)
 	mux.HandleFunc("GET /api/v1/statuses/{id}/favourited_by", h.FavouritedBy)

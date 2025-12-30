@@ -22,12 +22,52 @@ func (q *Queries) CountFollowers(ctx context.Context, targetAccountID int64) (in
 	return count, err
 }
 
+const countFollowersByDomain = `-- name: CountFollowersByDomain :one
+SELECT COUNT(*)
+FROM follows f
+JOIN accounts a ON a.id = f.account_id
+WHERE f.target_account_id = $1
+  AND a.domain = $2
+`
+
+type CountFollowersByDomainParams struct {
+	TargetAccountID int64       `db:"target_account_id" json:"target_account_id"`
+	Domain          pgtype.Text `db:"domain" json:"domain"`
+}
+
+func (q *Queries) CountFollowersByDomain(ctx context.Context, arg CountFollowersByDomainParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countFollowersByDomain, arg.TargetAccountID, arg.Domain)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countFollowing = `-- name: CountFollowing :one
 SELECT COUNT(*) FROM follows WHERE account_id = $1
 `
 
 func (q *Queries) CountFollowing(ctx context.Context, accountID int64) (int64, error) {
 	row := q.db.QueryRow(ctx, countFollowing, accountID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countFollowingByDomain = `-- name: CountFollowingByDomain :one
+SELECT COUNT(*)
+FROM follows f
+JOIN accounts a ON a.id = f.target_account_id
+WHERE f.account_id = $1
+  AND a.domain = $2
+`
+
+type CountFollowingByDomainParams struct {
+	AccountID int64       `db:"account_id" json:"account_id"`
+	Domain    pgtype.Text `db:"domain" json:"domain"`
+}
+
+func (q *Queries) CountFollowingByDomain(ctx context.Context, arg CountFollowingByDomainParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countFollowingByDomain, arg.AccountID, arg.Domain)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -419,6 +459,37 @@ func (q *Queries) GetDomainBlock(ctx context.Context, arg GetDomainBlockParams) 
 	return i, err
 }
 
+const getDomainBlocksByAccountsAndDomain = `-- name: GetDomainBlocksByAccountsAndDomain :many
+SELECT account_id FROM account_domain_blocks
+WHERE account_id = ANY($1::bigint[])
+  AND domain = $2
+`
+
+type GetDomainBlocksByAccountsAndDomainParams struct {
+	AccountIds []int64 `db:"account_ids" json:"account_ids"`
+	Domain     string  `db:"domain" json:"domain"`
+}
+
+func (q *Queries) GetDomainBlocksByAccountsAndDomain(ctx context.Context, arg GetDomainBlocksByAccountsAndDomainParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, getDomainBlocksByAccountsAndDomain, arg.AccountIds, arg.Domain)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int64{}
+	for rows.Next() {
+		var account_id int64
+		if err := rows.Scan(&account_id); err != nil {
+			return nil, err
+		}
+		items = append(items, account_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getFavourite = `-- name: GetFavourite :one
 SELECT id, created_at, updated_at, account_id, status_id FROM favourites WHERE account_id = $1 AND status_id = $2
 `
@@ -740,6 +811,37 @@ func (q *Queries) GetFollowing(ctx context.Context, arg GetFollowingParams) ([]A
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getFollowsByAccountIDs = `-- name: GetFollowsByAccountIDs :many
+SELECT target_account_id FROM follows
+WHERE account_id = $1
+  AND target_account_id = ANY($2::bigint[])
+`
+
+type GetFollowsByAccountIDsParams struct {
+	AccountID        int64   `db:"account_id" json:"account_id"`
+	TargetAccountIds []int64 `db:"target_account_ids" json:"target_account_ids"`
+}
+
+func (q *Queries) GetFollowsByAccountIDs(ctx context.Context, arg GetFollowsByAccountIDsParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, getFollowsByAccountIDs, arg.AccountID, arg.TargetAccountIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int64{}
+	for rows.Next() {
+		var target_account_id int64
+		if err := rows.Scan(&target_account_id); err != nil {
+			return nil, err
+		}
+		items = append(items, target_account_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -1078,6 +1180,31 @@ func (q *Queries) ListBlocks(ctx context.Context, arg ListBlocksParams) ([]Accou
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDomainBlockDomains = `-- name: ListDomainBlockDomains :many
+SELECT domain FROM account_domain_blocks
+WHERE account_id = $1
+`
+
+func (q *Queries) ListDomainBlockDomains(ctx context.Context, accountID int64) ([]string, error) {
+	rows, err := q.db.Query(ctx, listDomainBlockDomains, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var domain string
+		if err := rows.Scan(&domain); err != nil {
+			return nil, err
+		}
+		items = append(items, domain)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

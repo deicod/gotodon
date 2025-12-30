@@ -42,6 +42,11 @@ UPDATE custom_filter_keywords SET
 WHERE id = $1
 RETURNING *;
 
+-- name: GetFilterKeyword :one
+SELECT fk.* FROM custom_filter_keywords fk
+JOIN custom_filters f ON f.id = fk.custom_filter_id
+WHERE fk.id = $1 AND f.account_id = $2;
+
 -- name: DeleteFilterKeyword :exec
 DELETE FROM custom_filter_keywords WHERE id = $1;
 
@@ -52,6 +57,11 @@ RETURNING *;
 
 -- name: ListFilterStatuses :many
 SELECT * FROM custom_filter_statuses WHERE custom_filter_id = $1;
+
+-- name: GetFilterStatus :one
+SELECT fs.* FROM custom_filter_statuses fs
+JOIN custom_filters f ON f.id = fs.custom_filter_id
+WHERE fs.id = $1 AND f.account_id = $2;
 
 -- name: DeleteFilterStatus :exec
 DELETE FROM custom_filter_statuses WHERE id = $1;

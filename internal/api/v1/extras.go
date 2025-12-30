@@ -2,6 +2,8 @@
 package v1
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -9,6 +11,8 @@ import (
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
+	"github.com/jackc/pgx/v5"
 )
 
 // BookmarksHandler handles bookmarks endpoints
@@ -294,6 +298,10 @@ func NewConversationsHandler(queries db.Querier, cfg *config.Config) *Conversati
 	return &ConversationsHandler{queries: queries, cfg: cfg}
 }
 
+func (h *ConversationsHandler) useDB() bool {
+	return h.queries != nil
+}
+
 // Conversation represents a direct message conversation
 type Conversation struct {
 	ID         string    `json:"id"`
@@ -311,14 +319,20 @@ func (h *ConversationsHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	scopes := middleware.GetScopes(ctx)
+	if scopes != "" && !oauth.HasScope(scopes, "read:statuses") {
+		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
+		return
+	}
+
 	limit := parseBookmarksLimit(web.QueryParam(r, "limit"), 20, 40)
 
-	if h.queries == nil {
+	if !h.useDB() {
 		web.JSON(w, http.StatusOK, []Conversation{})
 		return
 	}
 
-	dbConversations, err := h.queries.ListConversations(ctx, db.ListConversationsParams{
+	dbConversations, err := h.queries.ListAccountConversations(ctx, db.ListAccountConversationsParams{
 		AccountID: accountID,
 		Limit:     int32(limit),
 		Offset:    0,
@@ -328,10 +342,27 @@ func (h *ConversationsHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Bulk fetch statuses
+	if len(dbConversations) == 0 {
+		web.JSON(w, http.StatusOK, []Conversation{})
+		return
+	}
+
 	statusIDs := make([]int64, 0, len(dbConversations))
+	statusIDSeen := make(map[int64]bool)
+	accountIDSeen := make(map[int64]bool)
 	for _, c := range dbConversations {
-		statusIDs = append(statusIDs, c.LastStatusID)
+		if c.LastStatusID.Valid {
+			statusID := c.LastStatusID.Int64
+			if !statusIDSeen[statusID] {
+				statusIDs = append(statusIDs, statusID)
+				statusIDSeen[statusID] = true
+			}
+		}
+		for _, pid := range c.ParticipantAccountIds {
+			if pid != accountID {
+				accountIDSeen[pid] = true
+			}
+		}
 	}
 
 	statusMap := make(map[int64]db.Status)
@@ -343,55 +374,85 @@ func (h *ConversationsHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, s := range statuses {
 			statusMap[s.ID] = s
+			accountIDSeen[s.AccountID] = true
+			if s.InReplyToAccountID.Valid {
+				accountIDSeen[s.InReplyToAccountID.Int64] = true
+			}
 		}
 	}
 
-	// Account fetching logic is now handled by the getAccount helper and on-demand fetching
-	// to avoid complex pre-fetching logic without a dedicated GetAccountsByIDs query.
-
-	// Local cache for accounts to minimize DB hits
-	cachedAccounts := make(map[int64]Account)
-	getAccount := func(id int64) (Account, error) {
-		if acc, ok := cachedAccounts[id]; ok {
-			return acc, nil
-		}
-		dbAcc, err := h.queries.GetAccountByID(ctx, id)
+	mentionsMap := make(map[int64][]db.Mention)
+	if len(statusIDs) > 0 {
+		mentions, err := h.queries.GetMentionsByStatusIDs(ctx, statusIDs)
 		if err != nil {
-			return Account{}, err
+			web.JSONError(w, http.StatusInternalServerError, "Failed to fetch conversation mentions")
+			return
 		}
-		acc := SerializeAccount(h.cfg, dbAcc)
-		cachedAccounts[id] = acc
-		return acc, nil
+		for _, m := range mentions {
+			mentionsMap[m.StatusID] = append(mentionsMap[m.StatusID], m)
+			if m.AccountID != accountID {
+				accountIDSeen[m.AccountID] = true
+			}
+		}
+	}
+
+	accountIDs := make([]int64, 0, len(accountIDSeen))
+	for id := range accountIDSeen {
+		accountIDs = append(accountIDs, id)
+	}
+	accountMap := make(map[int64]Account)
+	if len(accountIDs) > 0 {
+		accounts, err := h.queries.GetAccountsByIDs(ctx, accountIDs)
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to fetch conversation accounts")
+			return
+		}
+		for _, acc := range accounts {
+			accountMap[acc.ID] = SerializeAccount(h.cfg, acc)
+		}
 	}
 
 	conversations := make([]Conversation, 0, len(dbConversations))
 	for _, c := range dbConversations {
-		status, ok := statusMap[c.LastStatusID]
-		if !ok {
-			continue
+		var dbStatus db.Status
+		var lastStatus *Status
+		if c.LastStatusID.Valid {
+			if status, ok := statusMap[c.LastStatusID.Int64]; ok {
+				dbStatus = status
+				apiStatus := SerializeStatus(ctx, h.queries, h.cfg, status)
+				lastStatus = &apiStatus
+			}
 		}
 
-		apiStatus := SerializeStatus(ctx, h.queries, h.cfg, status)
-
 		accounts := []Account{}
-		if c.LastStatusAccountID != accountID {
-			// Sender is the other person
-			if acc, err := getAccount(c.LastStatusAccountID); err == nil {
+		seen := make(map[int64]bool)
+		for _, pid := range c.ParticipantAccountIds {
+			if pid == accountID || seen[pid] {
+				continue
+			}
+			seen[pid] = true
+			if acc, ok := accountMap[pid]; ok {
 				accounts = append(accounts, acc)
 			}
-		} else {
-			// I am the sender, find who I'm talking to
-			if status.InReplyToAccountID.Valid {
-				if acc, err := getAccount(status.InReplyToAccountID.Int64); err == nil {
+		}
+
+		if len(accounts) == 0 && lastStatus != nil {
+			if dbStatus.AccountID != accountID {
+				if acc, ok := accountMap[dbStatus.AccountID]; ok {
+					accounts = append(accounts, acc)
+				}
+			} else if dbStatus.InReplyToAccountID.Valid {
+				if acc, ok := accountMap[dbStatus.InReplyToAccountID.Int64]; ok {
 					accounts = append(accounts, acc)
 				}
 			} else {
-				// Check mentions
-				mentions, err := h.queries.GetMentionsByStatusID(ctx, status.ID)
-				if err == nil && len(mentions) > 0 {
-					// Just take the first mention for now as per Mastodon simplified logic often used
-					if acc, err := getAccount(mentions[0].AccountID); err == nil {
+				for _, mention := range mentionsMap[dbStatus.ID] {
+					if mention.AccountID == accountID {
+						continue
+					}
+					if acc, ok := accountMap[mention.AccountID]; ok {
 						accounts = append(accounts, acc)
+						break
 					}
 				}
 			}
@@ -399,9 +460,9 @@ func (h *ConversationsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 		conversations = append(conversations, Conversation{
 			ID:         strconv.FormatInt(c.ID, 10),
-			Unread:     false,
+			Unread:     c.Unread,
 			Accounts:   accounts,
-			LastStatus: &apiStatus,
+			LastStatus: lastStatus,
 		})
 	}
 
@@ -410,9 +471,15 @@ func (h *ConversationsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // Delete handles DELETE /api/v1/conversations/:id
 func (h *ConversationsHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	_, ok := middleware.GetAccountID(r.Context())
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	scopes := middleware.GetScopes(r.Context())
+	if !oauth.HasScope(scopes, "write:conversations") {
+		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
 		return
 	}
 
@@ -422,9 +489,19 @@ func (h *ConversationsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.queries != nil {
-		// Just delete the conversation entry for now. In Mastodon this hides it.
-		_ = h.queries.DeleteConversation(r.Context(), id)
+	if h.useDB() {
+		rows, err := h.queries.DeleteAccountConversation(r.Context(), db.DeleteAccountConversationParams{
+			AccountID: accountID,
+			ID:        id,
+		})
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to delete conversation")
+			return
+		}
+		if rows == 0 {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
 	}
 
 	web.JSON(w, http.StatusOK, map[string]any{})
@@ -432,18 +509,126 @@ func (h *ConversationsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 // MarkRead handles POST /api/v1/conversations/:id/read
 func (h *ConversationsHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
-	_, ok := middleware.GetAccountID(r.Context())
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
 		return
 	}
 
-	// Return empty conversation to indicate marked as read
-	web.JSON(w, http.StatusOK, Conversation{
-		ID:       web.Param(r, "id"),
-		Unread:   false,
-		Accounts: []Account{},
+	scopes := middleware.GetScopes(r.Context())
+	if !oauth.HasScope(scopes, "write:conversations") {
+		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
+		return
+	}
+
+	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid ID")
+		return
+	}
+
+	if !h.useDB() {
+		web.JSON(w, http.StatusOK, Conversation{
+			ID:         strconv.FormatInt(id, 10),
+			Unread:     false,
+			Accounts:   []Account{},
+			LastStatus: nil,
+		})
+		return
+	}
+
+	ctx := r.Context()
+	rows, err := h.queries.MarkConversationRead(ctx, db.MarkConversationReadParams{
+		AccountID: accountID,
+		ID:        id,
 	})
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to update conversation")
+		return
+	}
+	if rows == 0 {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	conv, err := h.queries.GetAccountConversation(ctx, db.GetAccountConversationParams{
+		AccountID: accountID,
+		ID:        id,
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	resp, err := h.buildConversation(ctx, accountID, conv)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to load conversation")
+		return
+	}
+
+	web.JSON(w, http.StatusOK, resp)
+}
+
+// MarkUnread handles POST /api/v1/conversations/:id/unread
+func (h *ConversationsHandler) MarkUnread(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	scopes := middleware.GetScopes(r.Context())
+	if !oauth.HasScope(scopes, "write:conversations") {
+		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
+		return
+	}
+
+	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid ID")
+		return
+	}
+
+	if !h.useDB() {
+		web.JSON(w, http.StatusOK, Conversation{
+			ID:         strconv.FormatInt(id, 10),
+			Unread:     true,
+			Accounts:   []Account{},
+			LastStatus: nil,
+		})
+		return
+	}
+
+	ctx := r.Context()
+	rows, err := h.queries.MarkConversationUnread(ctx, db.MarkConversationUnreadParams{
+		AccountID: accountID,
+		ID:        id,
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to update conversation")
+		return
+	}
+	if rows == 0 {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	conv, err := h.queries.GetAccountConversation(ctx, db.GetAccountConversationParams{
+		AccountID: accountID,
+		ID:        id,
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	resp, err := h.buildConversation(ctx, accountID, conv)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to load conversation")
+		return
+	}
+
+	web.JSON(w, http.StatusOK, resp)
 }
 
 // RegisterRoutes registers conversations routes
@@ -451,6 +636,76 @@ func (h *ConversationsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/conversations", h.List)
 	mux.HandleFunc("DELETE /api/v1/conversations/{id}", h.Delete)
 	mux.HandleFunc("POST /api/v1/conversations/{id}/read", h.MarkRead)
+	mux.HandleFunc("POST /api/v1/conversations/{id}/unread", h.MarkUnread)
+}
+
+func (h *ConversationsHandler) buildConversation(ctx context.Context, accountID int64, conv db.AccountConversation) (Conversation, error) {
+	var dbStatus db.Status
+	var lastStatus *Status
+	if conv.LastStatusID.Valid {
+		status, err := h.queries.GetStatusByID(ctx, conv.LastStatusID.Int64)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return Conversation{}, err
+		}
+		if err == nil {
+			dbStatus = status
+			apiStatus := SerializeStatus(ctx, h.queries, h.cfg, status)
+			lastStatus = &apiStatus
+		}
+	}
+
+	uniqueIDs := make(map[int64]bool)
+	accountIDs := make([]int64, 0, len(conv.ParticipantAccountIds))
+	for _, pid := range conv.ParticipantAccountIds {
+		if pid == accountID || uniqueIDs[pid] {
+			continue
+		}
+		uniqueIDs[pid] = true
+		accountIDs = append(accountIDs, pid)
+	}
+
+	if len(accountIDs) == 0 && lastStatus != nil {
+		if dbStatus.AccountID != accountID {
+			accountIDs = append(accountIDs, dbStatus.AccountID)
+		} else if dbStatus.InReplyToAccountID.Valid {
+			accountIDs = append(accountIDs, dbStatus.InReplyToAccountID.Int64)
+		} else {
+			mentions, err := h.queries.GetMentionsByStatusID(ctx, dbStatus.ID)
+			if err != nil {
+				return Conversation{}, err
+			}
+			for _, mention := range mentions {
+				if mention.AccountID != accountID {
+					accountIDs = append(accountIDs, mention.AccountID)
+					break
+				}
+			}
+		}
+	}
+
+	accounts := []Account{}
+	if len(accountIDs) > 0 {
+		dbAccounts, err := h.queries.GetAccountsByIDs(ctx, accountIDs)
+		if err != nil {
+			return Conversation{}, err
+		}
+		accountMap := make(map[int64]Account, len(dbAccounts))
+		for _, acc := range dbAccounts {
+			accountMap[acc.ID] = SerializeAccount(h.cfg, acc)
+		}
+		for _, pid := range accountIDs {
+			if acc, ok := accountMap[pid]; ok {
+				accounts = append(accounts, acc)
+			}
+		}
+	}
+
+	return Conversation{
+		ID:         strconv.FormatInt(conv.ID, 10),
+		Unread:     conv.Unread,
+		Accounts:   accounts,
+		LastStatus: lastStatus,
+	}, nil
 }
 
 // GetEmojiURL returns the URL for a custom emoji

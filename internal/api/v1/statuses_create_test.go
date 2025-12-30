@@ -5,9 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type statusCreateStoreStub struct {

@@ -33,6 +33,13 @@ UPDATE statuses SET
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;
 
+-- name: UpdateStatusQuoteApprovalPolicy :one
+UPDATE statuses SET
+    quote_approval_policy = $2,
+    updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING *;
+
 -- name: UpdateStatusURL :exec
 UPDATE statuses SET
     url = $2,

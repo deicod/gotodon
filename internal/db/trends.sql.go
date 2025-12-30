@@ -12,23 +12,132 @@ import (
 )
 
 const getTrendingLinks = `-- name: GetTrendingLinks :many
-SELECT 1
+SELECT
+    pc.id,
+    pc.url,
+    pc.title,
+    pc.description,
+    pc.image_file_name,
+    pc.image_content_type,
+    pc.image_file_size,
+    pc.image_updated_at,
+    pc.type,
+    pc.html,
+    pc.author_name,
+    pc.author_url,
+    pc.provider_name,
+    pc.provider_url,
+    pc.width,
+    pc.height,
+    pc.created_at,
+    pc.updated_at,
+    pc.embed_url,
+    pc.image_storage_schema_version,
+    pc.blurhash,
+    pc.language,
+    pc.max_score,
+    pc.max_score_at,
+    pc.trendable,
+    pc.link_type,
+    pc.published_at,
+    pc.image_description,
+    pc.author_account_id,
+    COUNT(pcs.status_id) FILTER (WHERE s.created_at > NOW() - INTERVAL '24 hours') AS usage_count,
+    COUNT(DISTINCT s.account_id) FILTER (WHERE s.created_at > NOW() - INTERVAL '24 hours') AS account_count
+FROM preview_cards pc
+JOIN preview_card_trends pct ON pct.preview_card_id = pc.id
+LEFT JOIN preview_cards_statuses pcs ON pcs.preview_card_id = pc.id
+LEFT JOIN statuses s ON s.id = pcs.status_id
+WHERE pct.allowed = true
+GROUP BY pc.id, pct.rank
+ORDER BY pct.rank ASC
+LIMIT $1 OFFSET $2
 `
 
-// Placeholder: In future, use preview_cards table
-func (q *Queries) GetTrendingLinks(ctx context.Context) ([]int32, error) {
-	rows, err := q.db.Query(ctx, getTrendingLinks)
+type GetTrendingLinksParams struct {
+	Limit  int32 `db:"limit" json:"limit"`
+	Offset int32 `db:"offset" json:"offset"`
+}
+
+type GetTrendingLinksRow struct {
+	ID                        int64              `db:"id" json:"id"`
+	Url                       string             `db:"url" json:"url"`
+	Title                     string             `db:"title" json:"title"`
+	Description               string             `db:"description" json:"description"`
+	ImageFileName             pgtype.Text        `db:"image_file_name" json:"image_file_name"`
+	ImageContentType          pgtype.Text        `db:"image_content_type" json:"image_content_type"`
+	ImageFileSize             pgtype.Int4        `db:"image_file_size" json:"image_file_size"`
+	ImageUpdatedAt            pgtype.Timestamptz `db:"image_updated_at" json:"image_updated_at"`
+	Type                      int32              `db:"type" json:"type"`
+	Html                      string             `db:"html" json:"html"`
+	AuthorName                string             `db:"author_name" json:"author_name"`
+	AuthorUrl                 string             `db:"author_url" json:"author_url"`
+	ProviderName              string             `db:"provider_name" json:"provider_name"`
+	ProviderUrl               string             `db:"provider_url" json:"provider_url"`
+	Width                     int32              `db:"width" json:"width"`
+	Height                    int32              `db:"height" json:"height"`
+	CreatedAt                 pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt                 pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	EmbedUrl                  string             `db:"embed_url" json:"embed_url"`
+	ImageStorageSchemaVersion pgtype.Int4        `db:"image_storage_schema_version" json:"image_storage_schema_version"`
+	Blurhash                  pgtype.Text        `db:"blurhash" json:"blurhash"`
+	Language                  pgtype.Text        `db:"language" json:"language"`
+	MaxScore                  pgtype.Float8      `db:"max_score" json:"max_score"`
+	MaxScoreAt                pgtype.Timestamptz `db:"max_score_at" json:"max_score_at"`
+	Trendable                 pgtype.Bool        `db:"trendable" json:"trendable"`
+	LinkType                  pgtype.Int4        `db:"link_type" json:"link_type"`
+	PublishedAt               pgtype.Timestamptz `db:"published_at" json:"published_at"`
+	ImageDescription          string             `db:"image_description" json:"image_description"`
+	AuthorAccountID           pgtype.Int8        `db:"author_account_id" json:"author_account_id"`
+	UsageCount                int64              `db:"usage_count" json:"usage_count"`
+	AccountCount              int64              `db:"account_count" json:"account_count"`
+}
+
+func (q *Queries) GetTrendingLinks(ctx context.Context, arg GetTrendingLinksParams) ([]GetTrendingLinksRow, error) {
+	rows, err := q.db.Query(ctx, getTrendingLinks, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []int32{}
+	items := []GetTrendingLinksRow{}
 	for rows.Next() {
-		var column_1 int32
-		if err := rows.Scan(&column_1); err != nil {
+		var i GetTrendingLinksRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Url,
+			&i.Title,
+			&i.Description,
+			&i.ImageFileName,
+			&i.ImageContentType,
+			&i.ImageFileSize,
+			&i.ImageUpdatedAt,
+			&i.Type,
+			&i.Html,
+			&i.AuthorName,
+			&i.AuthorUrl,
+			&i.ProviderName,
+			&i.ProviderUrl,
+			&i.Width,
+			&i.Height,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.EmbedUrl,
+			&i.ImageStorageSchemaVersion,
+			&i.Blurhash,
+			&i.Language,
+			&i.MaxScore,
+			&i.MaxScoreAt,
+			&i.Trendable,
+			&i.LinkType,
+			&i.PublishedAt,
+			&i.ImageDescription,
+			&i.AuthorAccountID,
+			&i.UsageCount,
+			&i.AccountCount,
+		); err != nil {
 			return nil, err
 		}
-		items = append(items, column_1)
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

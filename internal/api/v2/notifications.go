@@ -757,6 +757,21 @@ func (h *NotificationsHandler) Accounts(w http.ResponseWriter, r *http.Request) 
 	web.JSON(w, http.StatusOK, accounts)
 }
 
+// Clear handles POST /api/v2/notifications/clear
+func (h *NotificationsHandler) Clear(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	if h.useDB() {
+		_ = h.queries.ClearNotifications(r.Context(), accountID)
+	}
+
+	web.JSON(w, http.StatusOK, map[string]any{})
+}
+
 // UnreadCount handles GET /api/v2/notifications/unread_count
 func (h *NotificationsHandler) UnreadCount(w http.ResponseWriter, r *http.Request) {
 	accountID, ok := middleware.GetAccountID(r.Context())
@@ -800,6 +815,7 @@ func stringPtr(s string) *string {
 // RegisterRoutes registers v2 notification routes.
 func (h *NotificationsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v2/notifications", h.List)
+	mux.HandleFunc("POST /api/v2/notifications/clear", h.Clear)
 	mux.HandleFunc("GET /api/v2/notifications/unread_count", h.UnreadCount)
 	mux.HandleFunc("GET /api/v2/notifications/policy", h.GetPolicy)
 	mux.HandleFunc("PUT /api/v2/notifications/policy", h.UpdatePolicy)

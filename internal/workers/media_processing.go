@@ -160,7 +160,7 @@ func (h *MediaProcessingHandler) ProcessTask(ctx context.Context, task *asynq.Ta
 		return fmt.Errorf("mark in progress: %w", err)
 	}
 
-	storagePath := mediaStoragePath(attachment.AccountID.Int64, attachment.CreatedAt.Time, attachment.FileFileName.String)
+	storagePath := media.MediaStoragePath(attachment.AccountID.Int64, attachment.CreatedAt.Time, attachment.FileFileName.String)
 	if storagePath == "" {
 		return h.markProcessingFailed(ctx, attachment.ID, "storage path missing")
 	}
@@ -168,7 +168,7 @@ func (h *MediaProcessingHandler) ProcessTask(ctx context.Context, task *asynq.Ta
 	data, err := h.storage.Load(ctx, storagePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			altPath := mediaStoragePath(attachment.AccountID.Int64, attachment.CreatedAt.Time.In(time.Local), attachment.FileFileName.String)
+			altPath := media.MediaStoragePath(attachment.AccountID.Int64, attachment.CreatedAt.Time.In(time.Local), attachment.FileFileName.String)
 			if altPath != "" && altPath != storagePath {
 				if altData, altErr := h.storage.Load(ctx, altPath); altErr == nil {
 					data = altData
@@ -277,18 +277,4 @@ func mergeFocus(meta *media.FileMeta, existing []byte) *media.FileMeta {
 		meta.Focus = prior.Focus
 	}
 	return meta
-}
-
-func mediaStoragePath(accountID int64, createdAt time.Time, filename string) string {
-	if accountID <= 0 || filename == "" {
-		return ""
-	}
-	return filepath.Join(
-		"media_attachments",
-		"files",
-		fmt.Sprintf("%d", accountID%1000),
-		fmt.Sprintf("%d", accountID),
-		createdAt.Format("2006/01/02"),
-		filename,
-	)
 }

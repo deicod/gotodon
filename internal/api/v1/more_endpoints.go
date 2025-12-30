@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -225,6 +228,12 @@ func (h *DomainBlocksHandler) useDB() bool {
 	return h.queries != nil
 }
 
+// DomainBlockPreview represents a domain block preview response.
+type DomainBlockPreview struct {
+	FollowingCount int64 `json:"following_count"`
+	FollowersCount int64 `json:"followers_count"`
+}
+
 // List handles GET /api/v1/domain_blocks
 func (h *DomainBlocksHandler) List(w http.ResponseWriter, r *http.Request) {
 	accountID, ok := middleware.GetAccountID(r.Context())
@@ -312,11 +321,124 @@ func (h *DomainBlocksHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
+// Preview handles GET /api/v1/domain_blocks/preview
+func (h *DomainBlocksHandler) Preview(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	rawDomain := web.QueryParam(r, "domain")
+	if rawDomain == "" {
+		web.JSONError(w, http.StatusBadRequest, "Domain is required")
+		return
+	}
+
+	domain, err := normalizeDomainInput(rawDomain)
+	if err != nil {
+		web.JSONError(w, http.StatusUnprocessableEntity, "Invalid domain")
+		return
+	}
+
+	if !h.useDB() {
+		web.JSON(w, http.StatusOK, DomainBlockPreview{})
+		return
+	}
+
+	ctx := r.Context()
+	followingCount, err := h.queries.CountFollowingByDomain(ctx, db.CountFollowingByDomainParams{
+		AccountID: accountID,
+		Domain:    pgtype.Text{String: domain, Valid: true},
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+
+	followersCount, err := h.queries.CountFollowersByDomain(ctx, db.CountFollowersByDomainParams{
+		TargetAccountID: accountID,
+		Domain:          pgtype.Text{String: domain, Valid: true},
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+
+	web.JSON(w, http.StatusOK, DomainBlockPreview{
+		FollowingCount: followingCount,
+		FollowersCount: followersCount,
+	})
+}
+
 // RegisterRoutes registers domain blocks routes
 func (h *DomainBlocksHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/domain_blocks", h.List)
 	mux.HandleFunc("POST /api/v1/domain_blocks", h.Create)
 	mux.HandleFunc("DELETE /api/v1/domain_blocks", h.Delete)
+	mux.HandleFunc("GET /api/v1/domain_blocks/preview", h.Preview)
+}
+
+func normalizeDomainInput(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", errors.New("empty domain")
+	}
+
+	host := trimmed
+	if strings.Contains(trimmed, "://") {
+		parsed, err := url.Parse(trimmed)
+		if err != nil {
+			return "", err
+		}
+		host = parsed.Hostname()
+	} else if strings.Contains(trimmed, "/") {
+		return "", errors.New("invalid domain")
+	} else if strings.Contains(trimmed, ":") {
+		parsedHost, _, err := net.SplitHostPort(trimmed)
+		if err != nil {
+			return "", err
+		}
+		host = parsedHost
+	}
+
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if host == "" {
+		return "", errors.New("invalid domain")
+	}
+	if net.ParseIP(host) != nil {
+		return host, nil
+	}
+	if !isValidDomainName(host) {
+		return "", errors.New("invalid domain")
+	}
+
+	return host, nil
+}
+
+func isValidDomainName(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	if strings.Contains(host, "..") {
+		return false
+	}
+	labels := strings.Split(host, ".")
+	for _, label := range labels {
+		if label == "" || len(label) > 63 {
+			return false
+		}
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, r := range label {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
 }
 
 // ScheduledStatusesHandler handles scheduled statuses endpoints

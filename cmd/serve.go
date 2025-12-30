@@ -180,6 +180,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		})
 
 		mux.Handle("GET /api/v1/streaming", pubSubHandler)
+		mux.Handle("GET /api/v1/streaming/", pubSubHandler)
 	}
 
 	// Internal handlers
@@ -242,7 +243,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	suggestionsHandler := v1.NewSuggestionsHandler(queries)
 	suggestionsHandler.RegisterRoutes(mux)
 
-	trendsHandler := v1.NewTrendsHandler(queries)
+	trendsHandler := v1.NewTrendsHandler(queries, cfg)
 	trendsHandler.RegisterRoutes(mux)
 
 	directoryHandler := v1.NewDirectoryHandler(queries)
@@ -319,6 +320,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	v2NotificationsHandler := v2.NewNotificationsHandler(queries, cfg)
 	v2NotificationsHandler.RegisterRoutes(mux)
+
+	v2AdminAccountsHandler := v2.NewAdminAccountsHandler(queries, cfg)
+	v2AdminAccountsHandler.RegisterRoutes(mux)
 
 	// Register OAuth handlers
 	oauthHandler := oauthapi.NewHandler(queries)

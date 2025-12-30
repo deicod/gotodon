@@ -37,6 +37,40 @@ func (q *Queries) CreateConversation(ctx context.Context, arg CreateConversation
 	return i, err
 }
 
+const createConversationMute = `-- name: CreateConversationMute :exec
+INSERT INTO conversation_mutes (account_id, conversation_id)
+VALUES ($1, $2)
+ON CONFLICT DO NOTHING
+`
+
+type CreateConversationMuteParams struct {
+	AccountID      int64 `db:"account_id" json:"account_id"`
+	ConversationID int64 `db:"conversation_id" json:"conversation_id"`
+}
+
+func (q *Queries) CreateConversationMute(ctx context.Context, arg CreateConversationMuteParams) error {
+	_, err := q.db.Exec(ctx, createConversationMute, arg.AccountID, arg.ConversationID)
+	return err
+}
+
+const deleteAccountConversation = `-- name: DeleteAccountConversation :execrows
+DELETE FROM account_conversations
+WHERE account_id = $1 AND id = $2
+`
+
+type DeleteAccountConversationParams struct {
+	AccountID int64 `db:"account_id" json:"account_id"`
+	ID        int64 `db:"id" json:"id"`
+}
+
+func (q *Queries) DeleteAccountConversation(ctx context.Context, arg DeleteAccountConversationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAccountConversation, arg.AccountID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteConversation = `-- name: DeleteConversation :exec
 DELETE FROM conversations WHERE id = $1
 `
@@ -44,6 +78,47 @@ DELETE FROM conversations WHERE id = $1
 func (q *Queries) DeleteConversation(ctx context.Context, id int64) error {
 	_, err := q.db.Exec(ctx, deleteConversation, id)
 	return err
+}
+
+const deleteConversationMute = `-- name: DeleteConversationMute :exec
+DELETE FROM conversation_mutes
+WHERE account_id = $1 AND conversation_id = $2
+`
+
+type DeleteConversationMuteParams struct {
+	AccountID      int64 `db:"account_id" json:"account_id"`
+	ConversationID int64 `db:"conversation_id" json:"conversation_id"`
+}
+
+func (q *Queries) DeleteConversationMute(ctx context.Context, arg DeleteConversationMuteParams) error {
+	_, err := q.db.Exec(ctx, deleteConversationMute, arg.AccountID, arg.ConversationID)
+	return err
+}
+
+const getAccountConversation = `-- name: GetAccountConversation :one
+SELECT id, account_id, conversation_id, participant_account_ids, status_ids, last_status_id, lock_version, unread FROM account_conversations
+WHERE account_id = $1 AND id = $2
+`
+
+type GetAccountConversationParams struct {
+	AccountID int64 `db:"account_id" json:"account_id"`
+	ID        int64 `db:"id" json:"id"`
+}
+
+func (q *Queries) GetAccountConversation(ctx context.Context, arg GetAccountConversationParams) (AccountConversation, error) {
+	row := q.db.QueryRow(ctx, getAccountConversation, arg.AccountID, arg.ID)
+	var i AccountConversation
+	err := row.Scan(
+		&i.ID,
+		&i.AccountID,
+		&i.ConversationID,
+		&i.ParticipantAccountIds,
+		&i.StatusIds,
+		&i.LastStatusID,
+		&i.LockVersion,
+		&i.Unread,
+	)
+	return i, err
 }
 
 const getConversation = `-- name: GetConversation :one
@@ -62,6 +137,81 @@ func (q *Queries) GetConversation(ctx context.Context, id int64) (Conversation, 
 		&i.ParentAccountID,
 	)
 	return i, err
+}
+
+const listAccountConversations = `-- name: ListAccountConversations :many
+SELECT id, account_id, conversation_id, participant_account_ids, status_ids, last_status_id, lock_version, unread
+FROM account_conversations
+WHERE account_id = $1
+ORDER BY last_status_id DESC NULLS LAST, id DESC
+LIMIT $2 OFFSET $3
+`
+
+type ListAccountConversationsParams struct {
+	AccountID int64 `db:"account_id" json:"account_id"`
+	Limit     int32 `db:"limit" json:"limit"`
+	Offset    int32 `db:"offset" json:"offset"`
+}
+
+func (q *Queries) ListAccountConversations(ctx context.Context, arg ListAccountConversationsParams) ([]AccountConversation, error) {
+	rows, err := q.db.Query(ctx, listAccountConversations, arg.AccountID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AccountConversation{}
+	for rows.Next() {
+		var i AccountConversation
+		if err := rows.Scan(
+			&i.ID,
+			&i.AccountID,
+			&i.ConversationID,
+			&i.ParticipantAccountIds,
+			&i.StatusIds,
+			&i.LastStatusID,
+			&i.LockVersion,
+			&i.Unread,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConversationMutes = `-- name: ListConversationMutes :many
+SELECT conversation_id
+FROM conversation_mutes
+WHERE account_id = $1
+  AND conversation_id = ANY($2::bigint[])
+`
+
+type ListConversationMutesParams struct {
+	AccountID       int64   `db:"account_id" json:"account_id"`
+	ConversationIds []int64 `db:"conversation_ids" json:"conversation_ids"`
+}
+
+func (q *Queries) ListConversationMutes(ctx context.Context, arg ListConversationMutesParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listConversationMutes, arg.AccountID, arg.ConversationIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int64{}
+	for rows.Next() {
+		var conversation_id int64
+		if err := rows.Scan(&conversation_id); err != nil {
+			return nil, err
+		}
+		items = append(items, conversation_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listConversations = `-- name: ListConversations :many
@@ -124,13 +274,40 @@ func (q *Queries) ListConversations(ctx context.Context, arg ListConversationsPa
 	return items, nil
 }
 
-const markConversationRead = `-- name: MarkConversationRead :exec
-SELECT 1
+const markConversationRead = `-- name: MarkConversationRead :execrows
+UPDATE account_conversations
+SET unread = false
+WHERE account_id = $1 AND id = $2
 `
 
-// Placeholder: Requires conversation_mutes or new table for read state which implies 'unread' logic
-// Currently just creating a stub query if we add unread tracking later
-func (q *Queries) MarkConversationRead(ctx context.Context) error {
-	_, err := q.db.Exec(ctx, markConversationRead)
-	return err
+type MarkConversationReadParams struct {
+	AccountID int64 `db:"account_id" json:"account_id"`
+	ID        int64 `db:"id" json:"id"`
+}
+
+func (q *Queries) MarkConversationRead(ctx context.Context, arg MarkConversationReadParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markConversationRead, arg.AccountID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const markConversationUnread = `-- name: MarkConversationUnread :execrows
+UPDATE account_conversations
+SET unread = true
+WHERE account_id = $1 AND id = $2
+`
+
+type MarkConversationUnreadParams struct {
+	AccountID int64 `db:"account_id" json:"account_id"`
+	ID        int64 `db:"id" json:"id"`
+}
+
+func (q *Queries) MarkConversationUnread(ctx context.Context, arg MarkConversationUnreadParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markConversationUnread, arg.AccountID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

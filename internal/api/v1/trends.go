@@ -2,10 +2,12 @@
 package v1
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 )
@@ -13,11 +15,12 @@ import (
 // TrendsHandler handles trends endpoints
 type TrendsHandler struct {
 	queries *db.Queries
+	cfg     *config.Config
 }
 
 // NewTrendsHandler creates a new trends handler
-func NewTrendsHandler(queries *db.Queries) *TrendsHandler {
-	return &TrendsHandler{queries: queries}
+func NewTrendsHandler(queries *db.Queries, cfg *config.Config) *TrendsHandler {
+	return &TrendsHandler{queries: queries, cfg: cfg}
 }
 
 // TrendingTag represents a trending hashtag
@@ -42,20 +45,13 @@ type TrendingStatus struct {
 
 // TrendingLink represents a trending link
 type TrendingLink struct {
-	URL          string         `json:"url"`
-	Title        string         `json:"title"`
-	Description  string         `json:"description"`
-	Type         string         `json:"type"`
-	AuthorName   string         `json:"author_name"`
-	AuthorURL    string         `json:"author_url"`
-	ProviderName string         `json:"provider_name"`
-	ProviderURL  string         `json:"provider_url"`
-	HTML         string         `json:"html"`
-	Width        int            `json:"width"`
-	Height       int            `json:"height"`
-	Image        *string        `json:"image"`
-	Blurhash     *string        `json:"blurhash"`
-	History      []HashtagUsage `json:"history"`
+	PreviewCard
+	History []HashtagUsage `json:"history"`
+}
+
+// Index handles GET /api/v1/trends (alias for /api/v1/trends/tags)
+func (h *TrendsHandler) Index(w http.ResponseWriter, r *http.Request) {
+	h.Tags(w, r)
 }
 
 // Tags handles GET /api/v1/trends/tags
@@ -77,7 +73,7 @@ func (h *TrendsHandler) Tags(w http.ResponseWriter, r *http.Request) {
 	for _, t := range tags {
 		resp = append(resp, TrendingTag{
 			Name: t.Name,
-			URL:  "/tags/" + t.Name, // Construct proper URL
+			URL:  h.tagURL(t.Name),
 			History: []HashtagUsage{
 				{
 					Day:      strconv.FormatInt(time.Now().Unix(), 10),
@@ -130,8 +126,39 @@ func (h *TrendsHandler) Statuses(w http.ResponseWriter, r *http.Request) {
 
 // Links handles GET /api/v1/trends/links
 func (h *TrendsHandler) Links(w http.ResponseWriter, r *http.Request) {
-	// Mock trending links - empty for now
-	web.JSON(w, http.StatusOK, []TrendingLink{})
+	limit := parseTrendLimit(web.QueryParam(r, "limit"), 10, 20)
+	offset := parseTrendOffset(web.QueryParam(r, "offset"))
+
+	if h.queries == nil {
+		web.JSON(w, http.StatusOK, []TrendingLink{})
+		return
+	}
+
+	rows, err := h.queries.GetTrendingLinks(r.Context(), db.GetTrendingLinksParams{
+		Limit:  int32(limit),
+		Offset: int32(offset),
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	authorAccounts := h.previewCardAuthorAccounts(r.Context(), rows)
+
+	resp := make([]TrendingLink, 0, len(rows))
+	for _, row := range rows {
+		card := previewCardFromTrendRow(row)
+		preview := serializePreviewCard(card, authorAccounts)
+		if preview == nil {
+			continue
+		}
+		resp = append(resp, TrendingLink{
+			PreviewCard: *preview,
+			History:     []HashtagUsage{trendHistoryEntry(row.UsageCount, row.AccountCount)},
+		})
+	}
+
+	web.JSON(w, http.StatusOK, resp)
 }
 
 func parseTrendLimit(s string, defaultVal, maxVal int) int {
@@ -148,8 +175,96 @@ func parseTrendLimit(s string, defaultVal, maxVal int) int {
 	return v
 }
 
+func parseTrendOffset(s string) int {
+	if s == "" {
+		return 0
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil || v < 0 {
+		return 0
+	}
+	return v
+}
+
+func (h *TrendsHandler) tagURL(name string) string {
+	domain := "localhost:3000"
+	if h.cfg != nil && h.cfg.Instance.LocalDomain != "" {
+		domain = h.cfg.Instance.LocalDomain
+	}
+	return "https://" + domain + "/tags/" + name
+}
+
+func trendHistoryEntry(uses, accounts int64) HashtagUsage {
+	return HashtagUsage{
+		Day:      strconv.FormatInt(time.Now().Unix(), 10),
+		Uses:     strconv.FormatInt(uses, 10),
+		Accounts: strconv.FormatInt(accounts, 10),
+	}
+}
+
+func previewCardFromTrendRow(row db.GetTrendingLinksRow) db.PreviewCard {
+	return db.PreviewCard{
+		ID:                        row.ID,
+		Url:                       row.Url,
+		Title:                     row.Title,
+		Description:               row.Description,
+		ImageFileName:             row.ImageFileName,
+		ImageContentType:          row.ImageContentType,
+		ImageFileSize:             row.ImageFileSize,
+		ImageUpdatedAt:            row.ImageUpdatedAt,
+		Type:                      row.Type,
+		Html:                      row.Html,
+		AuthorName:                row.AuthorName,
+		AuthorUrl:                 row.AuthorUrl,
+		ProviderName:              row.ProviderName,
+		ProviderUrl:               row.ProviderUrl,
+		Width:                     row.Width,
+		Height:                    row.Height,
+		CreatedAt:                 row.CreatedAt,
+		UpdatedAt:                 row.UpdatedAt,
+		EmbedUrl:                  row.EmbedUrl,
+		ImageStorageSchemaVersion: row.ImageStorageSchemaVersion,
+		Blurhash:                  row.Blurhash,
+		Language:                  row.Language,
+		MaxScore:                  row.MaxScore,
+		MaxScoreAt:                row.MaxScoreAt,
+		Trendable:                 row.Trendable,
+		LinkType:                  row.LinkType,
+		PublishedAt:               row.PublishedAt,
+		ImageDescription:          row.ImageDescription,
+		AuthorAccountID:           row.AuthorAccountID,
+	}
+}
+
+func (h *TrendsHandler) previewCardAuthorAccounts(ctx context.Context, rows []db.GetTrendingLinksRow) map[int64]Account {
+	authorIDs := make(map[int64]struct{})
+	for _, row := range rows {
+		if row.AuthorAccountID.Valid {
+			authorIDs[row.AuthorAccountID.Int64] = struct{}{}
+		}
+	}
+	authorAccounts := map[int64]Account{}
+	if len(authorIDs) == 0 {
+		return authorAccounts
+	}
+
+	ids := make([]int64, 0, len(authorIDs))
+	for id := range authorIDs {
+		ids = append(ids, id)
+	}
+	dbAccounts, err := h.queries.GetAccountsByIDs(ctx, ids)
+	if err != nil {
+		return authorAccounts
+	}
+	for _, acc := range dbAccounts {
+		authorAccounts[acc.ID] = SerializeAccount(h.cfg, acc)
+	}
+	return authorAccounts
+}
+
 // RegisterRoutes registers trends routes
 func (h *TrendsHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v1/trends", h.Index)
 	mux.HandleFunc("GET /api/v1/trends/tags", h.Tags)
 	mux.HandleFunc("GET /api/v1/trends/statuses", h.Statuses)
 	mux.HandleFunc("GET /api/v1/trends/links", h.Links)

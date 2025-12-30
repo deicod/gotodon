@@ -114,6 +114,21 @@ func GenerateThumbnailPath(originalPath string) string {
 	return filepath.Join(dir, name+"_thumb"+ext)
 }
 
+// MediaStoragePath builds the storage path for a persisted media attachment.
+func MediaStoragePath(accountID int64, createdAt time.Time, filename string) string {
+	if accountID <= 0 || filename == "" || createdAt.IsZero() {
+		return ""
+	}
+	return filepath.Join(
+		"media_attachments",
+		"files",
+		fmt.Sprintf("%d", accountID%1000),
+		fmt.Sprintf("%d", accountID),
+		createdAt.Format("2006/01/02"),
+		filename,
+	)
+}
+
 // Uploader handles media uploads
 type Uploader struct {
 	storage Storage
@@ -132,6 +147,17 @@ func NewUploader(storage Storage) *Uploader {
 // Upload processes and stores an uploaded file
 func (u *Uploader) Upload(ctx context.Context, accountID int64, filename string, data []byte) (*UploadResult, error) {
 	return u.UploadWithOptions(ctx, accountID, filename, data, UploadOptions{})
+}
+
+// Delete removes a stored media file by path.
+func (u *Uploader) Delete(ctx context.Context, path string) error {
+	if u == nil || u.storage == nil {
+		return fmt.Errorf("media storage not configured")
+	}
+	if path == "" {
+		return nil
+	}
+	return u.storage.Delete(ctx, path)
 }
 
 // UploadWithOptions processes and stores an uploaded file with options.

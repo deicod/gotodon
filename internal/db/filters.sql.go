@@ -156,6 +156,55 @@ func (q *Queries) GetFilter(ctx context.Context, arg GetFilterParams) (CustomFil
 	return i, err
 }
 
+const getFilterKeyword = `-- name: GetFilterKeyword :one
+SELECT fk.id, fk.custom_filter_id, fk.keyword, fk.whole_word, fk.created_at, fk.updated_at FROM custom_filter_keywords fk
+JOIN custom_filters f ON f.id = fk.custom_filter_id
+WHERE fk.id = $1 AND f.account_id = $2
+`
+
+type GetFilterKeywordParams struct {
+	ID        int64 `db:"id" json:"id"`
+	AccountID int64 `db:"account_id" json:"account_id"`
+}
+
+func (q *Queries) GetFilterKeyword(ctx context.Context, arg GetFilterKeywordParams) (CustomFilterKeyword, error) {
+	row := q.db.QueryRow(ctx, getFilterKeyword, arg.ID, arg.AccountID)
+	var i CustomFilterKeyword
+	err := row.Scan(
+		&i.ID,
+		&i.CustomFilterID,
+		&i.Keyword,
+		&i.WholeWord,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getFilterStatus = `-- name: GetFilterStatus :one
+SELECT fs.id, fs.custom_filter_id, fs.status_id, fs.created_at, fs.updated_at FROM custom_filter_statuses fs
+JOIN custom_filters f ON f.id = fs.custom_filter_id
+WHERE fs.id = $1 AND f.account_id = $2
+`
+
+type GetFilterStatusParams struct {
+	ID        int64 `db:"id" json:"id"`
+	AccountID int64 `db:"account_id" json:"account_id"`
+}
+
+func (q *Queries) GetFilterStatus(ctx context.Context, arg GetFilterStatusParams) (CustomFilterStatus, error) {
+	row := q.db.QueryRow(ctx, getFilterStatus, arg.ID, arg.AccountID)
+	var i CustomFilterStatus
+	err := row.Scan(
+		&i.ID,
+		&i.CustomFilterID,
+		&i.StatusID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getFiltersForAccount = `-- name: GetFiltersForAccount :many
 SELECT f.id, f.account_id, f.expires_at, f.phrase, f.context, f.created_at, f.updated_at, f.action, 
     array_agg(DISTINCT fk.id) FILTER (WHERE fk.id IS NOT NULL) as keyword_ids,
