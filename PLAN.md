@@ -102,9 +102,9 @@ Missing routes (from `mastodon/config/routes/api.rb`)
 - [x] GET /api/v2/admin/accounts
 
 Behavior gaps
-- /api/v2/instance returns static placeholder data.
-- /api/v2/suggestions returns mock data.
-- /api/v2/search responses are minimal vs Mastodon payloads.
+- [x] /api/v2/instance returns static placeholder data.
+- [x] /api/v2/suggestions returns mock data.
+- [x] /api/v2/search responses are minimal vs Mastodon payloads.
 
 Plan
 1) Implement full v2 filters keyword/status endpoints and align to custom_filters schema.
@@ -120,13 +120,13 @@ Status: Medium-low.
 Missing routes or mismatches
 - [x] /api/v1/admin/email_domain_blocks (all CRUD).
 - [x] Report workflow actions: assign_to_self, unassign, reopen, and update (PUT /api/v1/admin/reports/:id).
-- Admin trends publishers: /api/v1/admin/trends/links/publishers (preview_card_providers) + approve/reject.
-- Path mismatch: Mastodon uses /unsensitive; Gotodon currently registers /unsensitize.
+- [x] Admin trends publishers: /api/v1/admin/trends/links/publishers (preview_card_providers) + approve/reject.
+- [x] Path mismatch: Mastodon uses /unsensitive; Gotodon currently registers /unsensitize.
 - [x] /api/v2/admin/accounts (index).
 
 Behavior gaps
 - Admin instance config is in-memory and not persisted.
-- Dimensions/measures/retention endpoints return empty arrays.
+- [x] Dimensions/measures/retention endpoints return empty arrays.
 - Admin action logs and role handling are stubbed.
 - Custom emoji categories are missing in responses.
 
@@ -134,11 +134,11 @@ Plan
 1) Implement email domain block endpoints (use `email_domain_blocks` table).
 2) [x] Add full report workflow actions and update endpoint.
 3) Add preview_card_providers moderation endpoints.
-4) Align admin account actions and path names (unsensitive) and wire audit logging.
-5) Implement role handling via `user_roles` and include role in admin responses.
-6) Persist admin instance config (backed by settings tables) and enforce auth.
-7) Implement real metrics for dimensions/measures/retention.
-8) Add custom emoji categories in admin responses.
+4) [x] Align admin account actions and path names (unsensitive) and wire audit logging.
+5) [x] Implement role handling via `user_roles` and include role in admin responses.
+6) [x] Persist admin instance config (backed by settings tables) and enforce auth.
+7) [x] Implement real metrics for dimensions/measures/retention.
+8) [x] Add custom emoji categories in admin responses.
 9) [x] Add v2 admin accounts endpoint and tests.
 
 ---

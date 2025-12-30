@@ -137,7 +137,7 @@ func TestInstanceHandler_GetUpdate(t *testing.T) {
 	// We could redesign to allow injecting a mock 'RoleChecker' or similar,
 	// but for now skipping consistent with other admin tests.
 
-	h := NewInstanceHandler()
+	h := NewInstanceHandler(nil, nil)
 
 	req1, rec1 := mockAdminRequest(http.MethodGet, "/api/v1/admin/instance", "")
 	h.Get(rec1, req1)

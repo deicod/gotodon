@@ -11,6 +11,98 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const adminListPreviewCardProviders = `-- name: AdminListPreviewCardProviders :many
+SELECT id, domain, icon_file_name, icon_content_type, icon_file_size, icon_updated_at, trendable, reviewed_at, requested_review_at, created_at, updated_at FROM preview_card_providers
+WHERE (CASE WHEN $2::bigint > 0 THEN id < $2 ELSE TRUE END)
+    AND (CASE WHEN $3::bigint > 0 THEN id > $3 ELSE TRUE END)
+ORDER BY id DESC
+LIMIT $1
+`
+
+type AdminListPreviewCardProvidersParams struct {
+	Limit   int32 `db:"limit" json:"limit"`
+	MaxID   int64 `db:"max_id" json:"max_id"`
+	SinceID int64 `db:"since_id" json:"since_id"`
+}
+
+func (q *Queries) AdminListPreviewCardProviders(ctx context.Context, arg AdminListPreviewCardProvidersParams) ([]PreviewCardProvider, error) {
+	rows, err := q.db.Query(ctx, adminListPreviewCardProviders, arg.Limit, arg.MaxID, arg.SinceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PreviewCardProvider{}
+	for rows.Next() {
+		var i PreviewCardProvider
+		if err := rows.Scan(
+			&i.ID,
+			&i.Domain,
+			&i.IconFileName,
+			&i.IconContentType,
+			&i.IconFileSize,
+			&i.IconUpdatedAt,
+			&i.Trendable,
+			&i.ReviewedAt,
+			&i.RequestedReviewAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const adminListPreviewCardProvidersMinID = `-- name: AdminListPreviewCardProvidersMinID :many
+SELECT id, domain, icon_file_name, icon_content_type, icon_file_size, icon_updated_at, trendable, reviewed_at, requested_review_at, created_at, updated_at FROM preview_card_providers
+WHERE (CASE WHEN $2::bigint > 0 THEN id > $2 ELSE TRUE END)
+    AND (CASE WHEN $3::bigint > 0 THEN id < $3 ELSE TRUE END)
+ORDER BY id ASC
+LIMIT $1
+`
+
+type AdminListPreviewCardProvidersMinIDParams struct {
+	Limit int32 `db:"limit" json:"limit"`
+	MinID int64 `db:"min_id" json:"min_id"`
+	MaxID int64 `db:"max_id" json:"max_id"`
+}
+
+func (q *Queries) AdminListPreviewCardProvidersMinID(ctx context.Context, arg AdminListPreviewCardProvidersMinIDParams) ([]PreviewCardProvider, error) {
+	rows, err := q.db.Query(ctx, adminListPreviewCardProvidersMinID, arg.Limit, arg.MinID, arg.MaxID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PreviewCardProvider{}
+	for rows.Next() {
+		var i PreviewCardProvider
+		if err := rows.Scan(
+			&i.ID,
+			&i.Domain,
+			&i.IconFileName,
+			&i.IconContentType,
+			&i.IconFileSize,
+			&i.IconUpdatedAt,
+			&i.Trendable,
+			&i.ReviewedAt,
+			&i.RequestedReviewAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const attachPreviewCardToStatus = `-- name: AttachPreviewCardToStatus :exec
 INSERT INTO preview_cards_statuses (preview_card_id, status_id, url)
 VALUES ($1, $2, $3)

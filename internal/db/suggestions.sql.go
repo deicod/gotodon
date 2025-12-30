@@ -9,25 +9,55 @@ import (
 	"context"
 )
 
+const createFollowRecommendationMute = `-- name: CreateFollowRecommendationMute :exec
+INSERT INTO follow_recommendation_mutes (account_id, target_account_id)
+VALUES ($1, $2)
+ON CONFLICT (account_id, target_account_id) DO NOTHING
+`
+
+type CreateFollowRecommendationMuteParams struct {
+	AccountID       int64 `db:"account_id" json:"account_id"`
+	TargetAccountID int64 `db:"target_account_id" json:"target_account_id"`
+}
+
+func (q *Queries) CreateFollowRecommendationMute(ctx context.Context, arg CreateFollowRecommendationMuteParams) error {
+	_, err := q.db.Exec(ctx, createFollowRecommendationMute, arg.AccountID, arg.TargetAccountID)
+	return err
+}
+
 const getFollowSuggestions = `-- name: GetFollowSuggestions :many
 SELECT a.id, a.username, a.domain, a.private_key, a.public_key, a.created_at, a.updated_at, a.note, a.display_name, a.uri, a.url, a.avatar_file_name, a.avatar_content_type, a.avatar_file_size, a.avatar_updated_at, a.header_file_name, a.header_content_type, a.header_file_size, a.header_updated_at, a.avatar_remote_url, a.locked, a.header_remote_url, a.last_webfingered_at, a.inbox_url, a.outbox_url, a.shared_inbox_url, a.followers_url, a.following_url, a.protocol, a.memorial, a.moved_to_account_id, a.featured_collection_url, a.fields, a.actor_type, a.discoverable, a.also_known_as, a.silenced_at, a.suspended_at, a.hide_collections, a.avatar_storage_schema_version, a.header_storage_schema_version, a.suspension_origin, a.sensitized_at, a.trendable, a.reviewed_at, a.requested_review_at, a.indexable, a.attribution_domains, a.id_scheme
 FROM accounts a
 LEFT JOIN follows f ON f.target_account_id = a.id AND f.account_id = $1
+LEFT JOIN follow_requests fr ON fr.target_account_id = a.id AND fr.account_id = $1
+LEFT JOIN follow_recommendation_mutes frm ON frm.account_id = $1 AND frm.target_account_id = a.id
+LEFT JOIN blocks b ON b.account_id = $1 AND b.target_account_id = a.id
+LEFT JOIN blocks bb ON bb.account_id = a.id AND bb.target_account_id = $1
+LEFT JOIN mutes m ON m.account_id = $1 AND m.target_account_id = a.id
+LEFT JOIN account_domain_blocks adb ON adb.account_id = $1 AND adb.domain = a.domain
 WHERE a.id != $1
   AND f.id IS NULL -- Not already followed
+  AND fr.id IS NULL -- Not already requested
+  AND frm.id IS NULL -- Not dismissed
+  AND b.id IS NULL -- Not blocked
+  AND bb.id IS NULL -- Not blocked by
+  AND m.id IS NULL -- Not muted
+  AND adb.id IS NULL -- Not domain blocked
   AND a.locked = false
   AND a.discoverable = true
+  AND a.suspended_at IS NULL
 ORDER BY a.created_at DESC -- Suggest new users for now, ideally by popularity
-LIMIT $2
+LIMIT $2 OFFSET $3
 `
 
 type GetFollowSuggestionsParams struct {
 	AccountID int64 `db:"account_id" json:"account_id"`
 	Limit     int32 `db:"limit" json:"limit"`
+	Offset    int32 `db:"offset" json:"offset"`
 }
 
 func (q *Queries) GetFollowSuggestions(ctx context.Context, arg GetFollowSuggestionsParams) ([]Account, error) {
-	rows, err := q.db.Query(ctx, getFollowSuggestions, arg.AccountID, arg.Limit)
+	rows, err := q.db.Query(ctx, getFollowSuggestions, arg.AccountID, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -94,4 +124,17 @@ func (q *Queries) GetFollowSuggestions(ctx context.Context, arg GetFollowSuggest
 		return nil, err
 	}
 	return items, nil
+}
+
+const isFollowRecommendationSuppressed = `-- name: IsFollowRecommendationSuppressed :one
+SELECT EXISTS(
+    SELECT 1 FROM follow_recommendation_suppressions WHERE account_id = $1
+) AS suppressed
+`
+
+func (q *Queries) IsFollowRecommendationSuppressed(ctx context.Context, accountID int64) (bool, error) {
+	row := q.db.QueryRow(ctx, isFollowRecommendationSuppressed, accountID)
+	var suppressed bool
+	err := row.Scan(&suppressed)
+	return suppressed, err
 }

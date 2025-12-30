@@ -1,6 +1,9 @@
 -- name: GetAccountByID :one
 SELECT * FROM accounts WHERE id = $1 AND suspended_at IS NULL;
 
+-- name: GetAccountByIDAllowSuspended :one
+SELECT * FROM accounts WHERE id = $1;
+
 -- name: GetAccountByUsername :one
 SELECT * FROM accounts 
 WHERE lower(username) = lower(@username) AND domain IS NULL AND suspended_at IS NULL;

@@ -34,6 +34,12 @@ func (h *SuggestionsHandler) Get(w http.ResponseWriter, r *http.Request) {
 			limit = parsed
 		}
 	}
+	offset := 0
+	if o := web.QueryParam(r, "offset"); o != "" {
+		if parsed, err := strconv.Atoi(o); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
 
 	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
@@ -49,6 +55,7 @@ func (h *SuggestionsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	accounts, err := h.queries.GetFollowSuggestions(r.Context(), db.GetFollowSuggestionsParams{
 		AccountID: accountID,
 		Limit:     int32(limit),
+		Offset:    int32(offset),
 	})
 	if err != nil {
 		web.JSONError(w, http.StatusInternalServerError, err.Error())

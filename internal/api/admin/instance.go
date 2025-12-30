@@ -2,6 +2,8 @@
 package admin
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -20,31 +22,13 @@ import (
 
 // InstanceHandler handles admin instance endpoints
 type InstanceHandler struct {
-	config *InstanceConfig
+	queries *db.Queries
+	cfg     *config.Config
 }
 
 // NewInstanceHandler creates a new instance handler
-func NewInstanceHandler() *InstanceHandler {
-	return &InstanceHandler{
-		config: &InstanceConfig{
-			Domain:               "example.com",
-			Title:                "Gotodon",
-			Version:              "4.0.0-gotodon",
-			SourceURL:            "https://github.com/deicod/gotodon",
-			Description:          "A Mastodon-compatible server",
-			Languages:            []string{"en"},
-			Registrations:        true,
-			ApprovalRequired:     false,
-			InvitesEnabled:       true,
-			MaxTootChars:         500,
-			MaxPollOptions:       4,
-			MaxPollCharPerOption: 50,
-			MaxImageSize:         10485760,
-			MaxVideoSize:         41943040,
-			MaxMediaAttachments:  4,
-			MaxCustomEmojis:      5000,
-		},
-	}
+func NewInstanceHandler(queries *db.Queries, cfg *config.Config) *InstanceHandler {
+	return &InstanceHandler{queries: queries, cfg: cfg}
 }
 
 // InstanceConfig holds instance configuration
@@ -67,32 +51,182 @@ type InstanceConfig struct {
 	MaxCustomEmojis      int      `json:"max_custom_emojis"`
 }
 
+const (
+	settingSiteTitle              = "site_title"
+	settingSiteDescription        = "site_description"
+	settingSiteLanguages          = "site_languages"
+	settingRegistrationsEnabled   = "registrations_enabled"
+	settingApprovalRequired       = "approval_required"
+	settingInvitesEnabled         = "invites_enabled"
+	settingMaxTootChars           = "max_toot_chars"
+	settingMaxPollOptions         = "max_poll_options"
+	settingMaxPollOptionChars     = "max_poll_option_chars"
+	settingMaxImageSize           = "max_image_size"
+	settingMaxVideoSize           = "max_video_size"
+	settingMaxMediaAttachments    = "max_media_attachments"
+	settingMaxCustomEmojis        = "max_custom_emojis"
+	defaultInstanceTitle          = "Gotodon"
+	defaultInstanceVersion        = "4.0.0-gotodon"
+	defaultInstanceSourceURL      = "https://github.com/deicod/gotodon"
+	defaultInstanceDescription    = "A Mastodon-compatible server"
+	defaultInstanceDomainFallback = "example.com"
+)
+
+var instanceSettingKeys = []string{
+	settingSiteTitle,
+	settingSiteDescription,
+	settingSiteLanguages,
+	settingRegistrationsEnabled,
+	settingApprovalRequired,
+	settingInvitesEnabled,
+	settingMaxTootChars,
+	settingMaxPollOptions,
+	settingMaxPollOptionChars,
+	settingMaxImageSize,
+	settingMaxVideoSize,
+	settingMaxMediaAttachments,
+	settingMaxCustomEmojis,
+}
+
+func instanceDomain(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	if strings.TrimSpace(cfg.Instance.WebDomain) != "" {
+		return cfg.Instance.WebDomain
+	}
+	return cfg.Instance.LocalDomain
+}
+
+func defaultRegistrations(cfg *config.Config) (bool, bool) {
+	mode := ""
+	singleUser := false
+	if cfg != nil {
+		mode = strings.ToLower(strings.TrimSpace(cfg.Instance.RegistrationsMode))
+		singleUser = cfg.Instance.SingleUserMode
+	}
+	if mode == "" {
+		mode = "open"
+	}
+	registrations := mode != "none" && !singleUser
+	approvalRequired := mode == "approved"
+	return registrations, approvalRequired
+}
+
+func defaultInstanceConfig(cfg *config.Config) InstanceConfig {
+	registrations, approvalRequired := defaultRegistrations(cfg)
+	domain := strings.TrimSpace(instanceDomain(cfg))
+	if domain == "" {
+		domain = defaultInstanceDomainFallback
+	}
+	return InstanceConfig{
+		Domain:               domain,
+		Title:                defaultInstanceTitle,
+		Version:              defaultInstanceVersion,
+		SourceURL:            defaultInstanceSourceURL,
+		Description:          defaultInstanceDescription,
+		Languages:            []string{"en"},
+		Registrations:        registrations,
+		ApprovalRequired:     approvalRequired,
+		InvitesEnabled:       true,
+		MaxTootChars:         500,
+		MaxPollOptions:       4,
+		MaxPollCharPerOption: 50,
+		MaxImageSize:         10485760,
+		MaxVideoSize:         41943040,
+		MaxMediaAttachments:  4,
+		MaxCustomEmojis:      5000,
+	}
+}
+
+func applyInstanceSetting(cfg *InstanceConfig, key, value string) {
+	switch key {
+	case settingSiteTitle:
+		cfg.Title = value
+	case settingSiteDescription:
+		cfg.Description = value
+	case settingSiteLanguages:
+		var languages []string
+		if err := json.Unmarshal([]byte(value), &languages); err == nil {
+			cfg.Languages = languages
+		}
+	case settingRegistrationsEnabled:
+		if parsed, err := strconv.ParseBool(value); err == nil {
+			cfg.Registrations = parsed
+		}
+	case settingApprovalRequired:
+		if parsed, err := strconv.ParseBool(value); err == nil {
+			cfg.ApprovalRequired = parsed
+		}
+	case settingInvitesEnabled:
+		if parsed, err := strconv.ParseBool(value); err == nil {
+			cfg.InvitesEnabled = parsed
+		}
+	case settingMaxTootChars:
+		if parsed, err := strconv.Atoi(value); err == nil {
+			cfg.MaxTootChars = parsed
+		}
+	case settingMaxPollOptions:
+		if parsed, err := strconv.Atoi(value); err == nil {
+			cfg.MaxPollOptions = parsed
+		}
+	case settingMaxPollOptionChars:
+		if parsed, err := strconv.Atoi(value); err == nil {
+			cfg.MaxPollCharPerOption = parsed
+		}
+	case settingMaxMediaAttachments:
+		if parsed, err := strconv.Atoi(value); err == nil {
+			cfg.MaxMediaAttachments = parsed
+		}
+	case settingMaxCustomEmojis:
+		if parsed, err := strconv.Atoi(value); err == nil {
+			cfg.MaxCustomEmojis = parsed
+		}
+	case settingMaxImageSize:
+		if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
+			cfg.MaxImageSize = parsed
+		}
+	case settingMaxVideoSize:
+		if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
+			cfg.MaxVideoSize = parsed
+		}
+	}
+}
+
+func (h *InstanceHandler) loadInstanceConfig(ctx context.Context) InstanceConfig {
+	if h == nil {
+		return defaultInstanceConfig(nil)
+	}
+	cfg := defaultInstanceConfig(h.cfg)
+	if h.queries == nil {
+		return cfg
+	}
+	settings, err := h.queries.GetSettingsByVars(ctx, instanceSettingKeys)
+	if err != nil {
+		return cfg
+	}
+	for _, setting := range settings {
+		if !setting.Value.Valid {
+			continue
+		}
+		applyInstanceSetting(&cfg, setting.Var, setting.Value.String)
+	}
+	return cfg
+}
+
 // Get handles GET /api/v1/admin/instance
 func (h *InstanceHandler) Get(w http.ResponseWriter, r *http.Request) {
-	// Instance config usually doesn't need admin check for GET?
-	// The original code checked requireAdmin.
-	// We pass nil for queries because InstanceHandler doesn't use DB in this struct yet?
-	// But requireAdmin needs queries to check role.
-	// If InstanceHandler doesn't have queries, we can't check role against DB.
-	// We should probably inject queries into InstanceHandler if we need auth checks.
-	// For now, let's assume if it's nil it bypasses or we need to add it.
-	// The struct doesn't have queries.
-	// I'll skip requireAdmin here for now or I should add queries to struct.
-	// The `NewInstanceHandler` didn't take queries.
-	// I'll add `queries *db.Queries` to struct and constructor.
-	// But `serve.go` usage needs update.
-	// If I change constructor, I need to look at `serve.go`.
-
-	// Wait, `requireAdmin` helper now requires `queries`.
-	// I will update the struct.
-	web.JSON(w, http.StatusOK, h.config)
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
+	}
+	web.JSON(w, http.StatusOK, h.loadInstanceConfig(r.Context()))
 }
 
 // Update handles PATCH /api/v1/admin/instance
 func (h *InstanceHandler) Update(w http.ResponseWriter, r *http.Request) {
-	// Need checking.
-	// Since I'm not updating `serve.go` immediately in this tool call, proceed with struct update later.
-	// Actually I CAN update struct now.
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
+	}
 
 	var req struct {
 		Title            *string  `json:"title" form:"title"`
@@ -107,26 +241,51 @@ func (h *InstanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	updates := map[string]string{}
 	if req.Title != nil {
-		h.config.Title = *req.Title
+		updates[settingSiteTitle] = *req.Title
 	}
 	if req.Description != nil {
-		h.config.Description = *req.Description
+		updates[settingSiteDescription] = *req.Description
 	}
 	if len(req.Languages) > 0 {
-		h.config.Languages = req.Languages
+		encoded, err := json.Marshal(req.Languages)
+		if err != nil {
+			web.JSONError(w, http.StatusBadRequest, "Invalid languages value")
+			return
+		}
+		updates[settingSiteLanguages] = string(encoded)
 	}
 	if req.Registrations != nil {
-		h.config.Registrations = *req.Registrations
+		updates[settingRegistrationsEnabled] = strconv.FormatBool(*req.Registrations)
 	}
 	if req.ApprovalRequired != nil {
-		h.config.ApprovalRequired = *req.ApprovalRequired
+		updates[settingApprovalRequired] = strconv.FormatBool(*req.ApprovalRequired)
 	}
 	if req.InvitesEnabled != nil {
-		h.config.InvitesEnabled = *req.InvitesEnabled
+		updates[settingInvitesEnabled] = strconv.FormatBool(*req.InvitesEnabled)
 	}
 
-	web.JSON(w, http.StatusOK, h.config)
+	if h.queries == nil {
+		cfg := h.loadInstanceConfig(r.Context())
+		for key, value := range updates {
+			applyInstanceSetting(&cfg, key, value)
+		}
+		web.JSON(w, http.StatusOK, cfg)
+		return
+	}
+
+	for key, value := range updates {
+		if err := h.queries.UpsertSetting(r.Context(), db.UpsertSettingParams{
+			Var:   key,
+			Value: pgtype.Text{String: value, Valid: true},
+		}); err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+	}
+
+	web.JSON(w, http.StatusOK, h.loadInstanceConfig(r.Context()))
 }
 
 // TrendsHandler handles admin trends endpoints
@@ -169,6 +328,16 @@ type AdminTrendLink struct {
 	RequiresReview bool         `json:"requires_review"`
 }
 
+// AdminTrendLinkPublisher represents a link publisher in admin trends responses.
+type AdminTrendLinkPublisher struct {
+	ID                string  `json:"id"`
+	Domain            string  `json:"domain"`
+	Trendable         bool    `json:"trendable"`
+	ReviewedAt        *string `json:"reviewed_at"`
+	RequestedReviewAt *string `json:"requested_review_at"`
+	RequiresReview    bool    `json:"requires_review"`
+}
+
 func parseTrendLimit(s string, defaultVal, maxVal int) int {
 	if s == "" {
 		return defaultVal
@@ -185,6 +354,25 @@ func parseTrendLimit(s string, defaultVal, maxVal int) int {
 
 func trendableParam(value bool) pgtype.Bool {
 	return pgtype.Bool{Bool: value, Valid: true}
+}
+
+func previewCardProviderTrendable(value pgtype.Bool) bool {
+	if value.Valid {
+		return value.Bool
+	}
+	return false
+}
+
+func previewCardProviderRequiresReview(reviewedAt pgtype.Timestamptz) bool {
+	return !reviewedAt.Valid
+}
+
+func timestamptzToString(value pgtype.Timestamptz) *string {
+	if !value.Valid {
+		return nil
+	}
+	formatted := value.Time.Format(time.RFC3339)
+	return &formatted
 }
 
 func trendHistoryEntry(uses, accounts int64) TagHistory {
@@ -286,6 +474,17 @@ func mapAdminTrendLink(card db.PreviewCard, requiresReview bool) AdminTrendLink 
 		Blurhash:       blurhash,
 		History:        []TagHistory{},
 		RequiresReview: requiresReview,
+	}
+}
+
+func mapAdminTrendLinkPublisher(provider db.PreviewCardProvider) AdminTrendLinkPublisher {
+	return AdminTrendLinkPublisher{
+		ID:                strconv.FormatInt(provider.ID, 10),
+		Domain:            provider.Domain,
+		Trendable:         previewCardProviderTrendable(provider.Trendable),
+		ReviewedAt:        timestamptzToString(provider.ReviewedAt),
+		RequestedReviewAt: timestamptzToString(provider.RequestedReviewAt),
+		RequiresReview:    previewCardProviderRequiresReview(provider.ReviewedAt),
 	}
 }
 
@@ -405,6 +604,55 @@ func (h *TrendsHandler) GetLinks(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		resp = append(resp, mapAdminTrendLink(link, previewCardRequiresReview(link, provider)))
+	}
+
+	web.JSON(w, http.StatusOK, resp)
+}
+
+// GetLinkPublishers handles GET /api/v1/admin/trends/links/publishers
+func (h *TrendsHandler) GetLinkPublishers(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
+	}
+	if h.queries == nil {
+		web.JSON(w, http.StatusOK, []AdminTrendLinkPublisher{})
+		return
+	}
+
+	limit := parseTrendLimit(web.QueryParam(r, "limit"), 100, 100)
+	maxID, _ := strconv.ParseInt(web.QueryParam(r, "max_id"), 10, 64)
+	sinceID, _ := strconv.ParseInt(web.QueryParam(r, "since_id"), 10, 64)
+	minID, _ := strconv.ParseInt(web.QueryParam(r, "min_id"), 10, 64)
+
+	var providers []db.PreviewCardProvider
+	var err error
+	if minID > 0 {
+		providers, err = h.queries.AdminListPreviewCardProvidersMinID(r.Context(), db.AdminListPreviewCardProvidersMinIDParams{
+			Limit: int32(limit),
+			MinID: minID,
+			MaxID: maxID,
+		})
+	} else {
+		providers, err = h.queries.AdminListPreviewCardProviders(r.Context(), db.AdminListPreviewCardProvidersParams{
+			Limit:   int32(limit),
+			MaxID:   maxID,
+			SinceID: sinceID,
+		})
+	}
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+
+	if minID > 0 && len(providers) > 1 {
+		for i, j := 0, len(providers)-1; i < j; i, j = i+1, j-1 {
+			providers[i], providers[j] = providers[j], providers[i]
+		}
+	}
+
+	resp := make([]AdminTrendLinkPublisher, 0, len(providers))
+	for _, provider := range providers {
+		resp = append(resp, mapAdminTrendLinkPublisher(provider))
 	}
 
 	web.JSON(w, http.StatusOK, resp)
@@ -604,45 +852,68 @@ func (h *TrendsHandler) RejectLink(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, mapAdminTrendLink(link, false))
 }
 
-// DimensionsHandler handles admin dimensions endpoints
-type DimensionsHandler struct{}
+// ApproveLinkPublisher handles POST /api/v1/admin/trends/links/publishers/{id}/approve.
+func (h *TrendsHandler) ApproveLinkPublisher(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
+	}
+	if h.queries == nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
 
-// NewDimensionsHandler creates a new dimensions handler
-func NewDimensionsHandler() *DimensionsHandler {
-	return &DimensionsHandler{}
+	providerID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	provider, err := h.queries.UpdatePreviewCardProviderTrendable(r.Context(), db.UpdatePreviewCardProviderTrendableParams{
+		ID:        providerID,
+		Trendable: trendableParam(true),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+
+	web.JSON(w, http.StatusOK, mapAdminTrendLinkPublisher(provider))
 }
 
-// Get handles POST /api/v1/admin/dimensions
-func (h *DimensionsHandler) Get(w http.ResponseWriter, r *http.Request) {
-	// Dimensions are used for statistics
-	web.JSON(w, http.StatusOK, []any{})
-}
+// RejectLinkPublisher handles POST /api/v1/admin/trends/links/publishers/{id}/reject.
+func (h *TrendsHandler) RejectLinkPublisher(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
+	}
+	if h.queries == nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
 
-// MeasuresHandler handles admin measures endpoints
-type MeasuresHandler struct{}
+	providerID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
 
-// NewMeasuresHandler creates a new measures handler
-func NewMeasuresHandler() *MeasuresHandler {
-	return &MeasuresHandler{}
-}
+	provider, err := h.queries.UpdatePreviewCardProviderTrendable(r.Context(), db.UpdatePreviewCardProviderTrendableParams{
+		ID:        providerID,
+		Trendable: trendableParam(false),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
 
-// Get handles POST /api/v1/admin/measures
-func (h *MeasuresHandler) Get(w http.ResponseWriter, r *http.Request) {
-	// Measures are used for statistics
-	web.JSON(w, http.StatusOK, []any{})
-}
-
-// RetentionHandler handles admin retention endpoints
-type RetentionHandler struct{}
-
-// NewRetentionHandler creates a new retention handler
-func NewRetentionHandler() *RetentionHandler {
-	return &RetentionHandler{}
-}
-
-// Get handles POST /api/v1/admin/retention
-func (h *RetentionHandler) Get(w http.ResponseWriter, r *http.Request) {
-	web.JSON(w, http.StatusOK, []any{})
+	web.JSON(w, http.StatusOK, mapAdminTrendLinkPublisher(provider))
 }
 
 // RegisterInstanceRoutes registers instance route
@@ -662,19 +933,7 @@ func (h *TrendsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/admin/trends/links", h.GetLinks)
 	mux.HandleFunc("POST /api/v1/admin/trends/links/{id}/approve", h.ApproveLink)
 	mux.HandleFunc("POST /api/v1/admin/trends/links/{id}/reject", h.RejectLink)
-}
-
-// RegisterDimensionsRoutes registers dimensions route
-func (h *DimensionsHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/v1/admin/dimensions", h.Get)
-}
-
-// RegisterMeasuresRoutes registers measures route
-func (h *MeasuresHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/v1/admin/measures", h.Get)
-}
-
-// RegisterRetentionRoutes registers retention route
-func (h *RetentionHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/v1/admin/retention", h.Get)
+	mux.HandleFunc("GET /api/v1/admin/trends/links/publishers", h.GetLinkPublishers)
+	mux.HandleFunc("POST /api/v1/admin/trends/links/publishers/{id}/approve", h.ApproveLinkPublisher)
+	mux.HandleFunc("POST /api/v1/admin/trends/links/publishers/{id}/reject", h.RejectLinkPublisher)
 }

@@ -54,12 +54,62 @@ type Querier interface {
 	AdminListDomainBlocks(ctx context.Context, arg AdminListDomainBlocksParams) ([]DomainBlock, error)
 	AdminListEmailDomainBlocks(ctx context.Context, arg AdminListEmailDomainBlocksParams) ([]AdminListEmailDomainBlocksRow, error)
 	AdminListIpBlocks(ctx context.Context, arg AdminListIpBlocksParams) ([]AdminListIpBlocksRow, error)
+	AdminListPreviewCardProviders(ctx context.Context, arg AdminListPreviewCardProvidersParams) ([]PreviewCardProvider, error)
+	AdminListPreviewCardProvidersMinID(ctx context.Context, arg AdminListPreviewCardProvidersMinIDParams) ([]PreviewCardProvider, error)
 	AdminListReports(ctx context.Context, arg AdminListReportsParams) ([]AdminListReportsRow, error)
 	AdminListTags(ctx context.Context, arg AdminListTagsParams) ([]Tag, error)
 	AdminListTrendingLinks(ctx context.Context, limit int32) ([]PreviewCard, error)
 	AdminListTrendingStatuses(ctx context.Context, limit int32) ([]Status, error)
 	AdminListTrendingTags(ctx context.Context, limit int32) ([]AdminListTrendingTagsRow, error)
 	AdminListUserIPs(ctx context.Context, userIds []int64) ([]AdminListUserIPsRow, error)
+	AdminMetricsActiveUsersByDay(ctx context.Context, arg AdminMetricsActiveUsersByDayParams) ([]AdminMetricsActiveUsersByDayRow, error)
+	// Metrics: measures
+	AdminMetricsActiveUsersTotal(ctx context.Context, arg AdminMetricsActiveUsersTotalParams) (int64, error)
+	AdminMetricsFavouritesByDay(ctx context.Context, arg AdminMetricsFavouritesByDayParams) ([]AdminMetricsFavouritesByDayRow, error)
+	AdminMetricsFavouritesTotal(ctx context.Context, arg AdminMetricsFavouritesTotalParams) (int64, error)
+	AdminMetricsFollowsByDay(ctx context.Context, arg AdminMetricsFollowsByDayParams) ([]AdminMetricsFollowsByDayRow, error)
+	AdminMetricsFollowsTotal(ctx context.Context, arg AdminMetricsFollowsTotalParams) (int64, error)
+	AdminMetricsInstanceAccountsByDay(ctx context.Context, arg AdminMetricsInstanceAccountsByDayParams) ([]AdminMetricsInstanceAccountsByDayRow, error)
+	AdminMetricsInstanceAccountsDimension(ctx context.Context, arg AdminMetricsInstanceAccountsDimensionParams) ([]AdminMetricsInstanceAccountsDimensionRow, error)
+	AdminMetricsInstanceAccountsTotal(ctx context.Context, arg AdminMetricsInstanceAccountsTotalParams) (int64, error)
+	AdminMetricsInstanceFollowersByDay(ctx context.Context, arg AdminMetricsInstanceFollowersByDayParams) ([]AdminMetricsInstanceFollowersByDayRow, error)
+	AdminMetricsInstanceFollowersTotal(ctx context.Context, arg AdminMetricsInstanceFollowersTotalParams) (int64, error)
+	AdminMetricsInstanceFollowsByDay(ctx context.Context, arg AdminMetricsInstanceFollowsByDayParams) ([]AdminMetricsInstanceFollowsByDayRow, error)
+	AdminMetricsInstanceFollowsTotal(ctx context.Context, arg AdminMetricsInstanceFollowsTotalParams) (int64, error)
+	AdminMetricsInstanceLanguages(ctx context.Context, arg AdminMetricsInstanceLanguagesParams) ([]AdminMetricsInstanceLanguagesRow, error)
+	AdminMetricsInstanceMediaByDay(ctx context.Context, arg AdminMetricsInstanceMediaByDayParams) ([]AdminMetricsInstanceMediaByDayRow, error)
+	AdminMetricsInstanceMediaTotal(ctx context.Context, arg AdminMetricsInstanceMediaTotalParams) (int64, error)
+	AdminMetricsInstanceReportsByDay(ctx context.Context, arg AdminMetricsInstanceReportsByDayParams) ([]AdminMetricsInstanceReportsByDayRow, error)
+	AdminMetricsInstanceReportsTotal(ctx context.Context, arg AdminMetricsInstanceReportsTotalParams) (int64, error)
+	AdminMetricsInstanceStatusesByDay(ctx context.Context, arg AdminMetricsInstanceStatusesByDayParams) ([]AdminMetricsInstanceStatusesByDayRow, error)
+	AdminMetricsInstanceStatusesTotal(ctx context.Context, arg AdminMetricsInstanceStatusesTotalParams) (int64, error)
+	// Metrics: dimensions
+	AdminMetricsLanguages(ctx context.Context, arg AdminMetricsLanguagesParams) ([]AdminMetricsLanguagesRow, error)
+	AdminMetricsMediaSizeComponents(ctx context.Context) (AdminMetricsMediaSizeComponentsRow, error)
+	AdminMetricsNewUsersByDay(ctx context.Context, arg AdminMetricsNewUsersByDayParams) ([]AdminMetricsNewUsersByDayRow, error)
+	AdminMetricsNewUsersTotal(ctx context.Context, arg AdminMetricsNewUsersTotalParams) (int64, error)
+	AdminMetricsOpenedReportsByDay(ctx context.Context, arg AdminMetricsOpenedReportsByDayParams) ([]AdminMetricsOpenedReportsByDayRow, error)
+	AdminMetricsOpenedReportsTotal(ctx context.Context, arg AdminMetricsOpenedReportsTotalParams) (int64, error)
+	AdminMetricsPollVotesByDay(ctx context.Context, arg AdminMetricsPollVotesByDayParams) ([]AdminMetricsPollVotesByDayRow, error)
+	AdminMetricsPollVotesTotal(ctx context.Context, arg AdminMetricsPollVotesTotalParams) (int64, error)
+	AdminMetricsPostgresSize(ctx context.Context) (int64, error)
+	AdminMetricsPostgresVersion(ctx context.Context) (string, error)
+	AdminMetricsResolvedReportsByDay(ctx context.Context, arg AdminMetricsResolvedReportsByDayParams) ([]AdminMetricsResolvedReportsByDayRow, error)
+	AdminMetricsResolvedReportsTotal(ctx context.Context, arg AdminMetricsResolvedReportsTotalParams) (int64, error)
+	// Metrics: retention
+	AdminMetricsRetention(ctx context.Context, arg AdminMetricsRetentionParams) ([]AdminMetricsRetentionRow, error)
+	AdminMetricsServers(ctx context.Context, arg AdminMetricsServersParams) ([]AdminMetricsServersRow, error)
+	AdminMetricsSources(ctx context.Context, arg AdminMetricsSourcesParams) ([]AdminMetricsSourcesRow, error)
+	AdminMetricsStatusesByDay(ctx context.Context, arg AdminMetricsStatusesByDayParams) ([]AdminMetricsStatusesByDayRow, error)
+	AdminMetricsStatusesTotal(ctx context.Context, arg AdminMetricsStatusesTotalParams) (int64, error)
+	AdminMetricsTagAccountsByDay(ctx context.Context, arg AdminMetricsTagAccountsByDayParams) ([]AdminMetricsTagAccountsByDayRow, error)
+	AdminMetricsTagAccountsTotal(ctx context.Context, arg AdminMetricsTagAccountsTotalParams) (int64, error)
+	AdminMetricsTagLanguages(ctx context.Context, arg AdminMetricsTagLanguagesParams) ([]AdminMetricsTagLanguagesRow, error)
+	AdminMetricsTagServers(ctx context.Context, arg AdminMetricsTagServersParams) ([]AdminMetricsTagServersRow, error)
+	AdminMetricsTagServersByDay(ctx context.Context, arg AdminMetricsTagServersByDayParams) ([]AdminMetricsTagServersByDayRow, error)
+	AdminMetricsTagServersTotal(ctx context.Context, arg AdminMetricsTagServersTotalParams) (int64, error)
+	AdminMetricsTagUsesByDay(ctx context.Context, arg AdminMetricsTagUsesByDayParams) ([]AdminMetricsTagUsesByDayRow, error)
+	AdminMetricsTagUsesTotal(ctx context.Context, arg AdminMetricsTagUsesTotalParams) (int64, error)
 	AdminRejectAccount(ctx context.Context, accountID int64) error
 	AdminResolveReport(ctx context.Context, arg AdminResolveReportParams) error
 	AdminSensitizeAccount(ctx context.Context, id int64) error
@@ -110,6 +160,7 @@ type Querier interface {
 	CreateAccountNote(ctx context.Context, arg CreateAccountNoteParams) (AccountNote, error)
 	CreateAccountPin(ctx context.Context, arg CreateAccountPinParams) (AccountPin, error)
 	CreateAccountStats(ctx context.Context, accountID int64) (AccountStat, error)
+	CreateAdminActionLog(ctx context.Context, arg CreateAdminActionLogParams) error
 	CreateAnnualReport(ctx context.Context, arg CreateAnnualReportParams) (GeneratedAnnualReport, error)
 	CreateBlock(ctx context.Context, arg CreateBlockParams) (Block, error)
 	CreateBookmark(ctx context.Context, arg CreateBookmarkParams) error
@@ -124,6 +175,7 @@ type Querier interface {
 	CreateFilterKeyword(ctx context.Context, arg CreateFilterKeywordParams) (CustomFilterKeyword, error)
 	CreateFilterStatus(ctx context.Context, arg CreateFilterStatusParams) (CustomFilterStatus, error)
 	CreateFollow(ctx context.Context, arg CreateFollowParams) (Follow, error)
+	CreateFollowRecommendationMute(ctx context.Context, arg CreateFollowRecommendationMuteParams) error
 	CreateFollowRequest(ctx context.Context, arg CreateFollowRequestParams) (FollowRequest, error)
 	CreateList(ctx context.Context, arg CreateListParams) (List, error)
 	// Login Activities queries
@@ -220,6 +272,7 @@ type Querier interface {
 	// Account Aliases queries (for account migration)
 	GetAccountAliases(ctx context.Context, accountID int64) ([]AccountAlias, error)
 	GetAccountByID(ctx context.Context, id int64) (Account, error)
+	GetAccountByIDAllowSuspended(ctx context.Context, id int64) (Account, error)
 	GetAccountByURI(ctx context.Context, uri string) (Account, error)
 	GetAccountByUsername(ctx context.Context, username string) (Account, error)
 	GetAccountByUsernameAndDomain(ctx context.Context, arg GetAccountByUsernameAndDomainParams) (Account, error)
@@ -248,6 +301,7 @@ type Querier interface {
 	GetConversation(ctx context.Context, id int64) (Conversation, error)
 	GetCurrentTermsOfService(ctx context.Context) (TermsOfService, error)
 	GetCustomEmoji(ctx context.Context, arg GetCustomEmojiParams) (CustomEmoji, error)
+	GetCustomEmojiCategoriesByIDs(ctx context.Context, dollar_1 []int64) ([]GetCustomEmojiCategoriesByIDsRow, error)
 	// Domain Allows queries
 	GetDomainAllow(ctx context.Context, id int64) (DomainAllow, error)
 	GetDomainAllowByDomain(ctx context.Context, domain string) (DomainAllow, error)
@@ -335,6 +389,7 @@ type Querier interface {
 	// Session Activations queries
 	GetSessionActivation(ctx context.Context, id int64) (SessionActivation, error)
 	GetSessionActivationBySessionID(ctx context.Context, sessionID string) (SessionActivation, error)
+	GetSettingsByVars(ctx context.Context, vars []string) ([]GetSettingsByVarsRow, error)
 	GetStatusAncestors(ctx context.Context, statusID int64) ([]Status, error)
 	GetStatusByID(ctx context.Context, id int64) (Status, error)
 	GetStatusByURI(ctx context.Context, uri pgtype.Text) (Status, error)
@@ -387,6 +442,7 @@ type Querier interface {
 	IncrementVotersCount(ctx context.Context, id int64) error
 	IsBookmarked(ctx context.Context, arg IsBookmarkedParams) (bool, error)
 	IsDomainAllowed(ctx context.Context, domain string) (bool, error)
+	IsFollowRecommendationSuppressed(ctx context.Context, accountID int64) (bool, error)
 	IsFollowingTag(ctx context.Context, arg IsFollowingTagParams) (bool, error)
 	ListAccountConversations(ctx context.Context, arg ListAccountConversationsParams) ([]AccountConversation, error)
 	ListAccountPins(ctx context.Context, accountID int64) ([]ListAccountPinsRow, error)
@@ -407,6 +463,7 @@ type Querier interface {
 	ListDomainBlocks(ctx context.Context, arg ListDomainBlocksParams) ([]AccountDomainBlock, error)
 	ListDueScheduledStatuses(ctx context.Context) ([]ScheduledStatus, error)
 	ListFavourites(ctx context.Context, arg ListFavouritesParams) ([]Status, error)
+	ListFeaturedTagIDs(ctx context.Context, arg ListFeaturedTagIDsParams) ([]pgtype.Int8, error)
 	ListFeaturedTags(ctx context.Context, accountID int64) ([]FeaturedTag, error)
 	ListFilterKeywords(ctx context.Context, customFilterID int64) ([]CustomFilterKeyword, error)
 	ListFilterKeywordsForAccount(ctx context.Context, accountID int64) ([]ListFilterKeywordsForAccountRow, error)
@@ -501,6 +558,7 @@ type Querier interface {
 	// Preview Card Trends
 	UpsertPreviewCardTrend(ctx context.Context, arg UpsertPreviewCardTrendParams) (PreviewCardTrend, error)
 	UpsertRuleTranslation(ctx context.Context, arg UpsertRuleTranslationParams) (RuleTranslation, error)
+	UpsertSetting(ctx context.Context, arg UpsertSettingParams) error
 	UpsertStatusTrend(ctx context.Context, arg UpsertStatusTrendParams) (StatusTrend, error)
 	UpsertTagTrend(ctx context.Context, arg UpsertTagTrendParams) (TagTrend, error)
 	UpsertTags(ctx context.Context, dollar_1 []string) error

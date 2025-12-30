@@ -3,9 +3,18 @@ SELECT
     a.id, a.username, a.domain, a.created_at, 
     u.email, u.current_sign_in_at as ip, -- Placeholder for IP, using timestamps or actual IP if available in users
     u.confirmed_at, u.approved, u.disabled, a.silenced_at, a.suspended_at, a.sensitized_at,
-    u.invite_id, u.created_by_application_id
+    u.invite_id, u.created_by_application_id,
+    r.id AS role_id,
+    r.name AS role_name,
+    r.permissions AS role_permissions,
+    r.color AS role_color,
+    r.position AS role_position,
+    r.highlighted AS role_highlighted,
+    r.created_at AS role_created_at,
+    r.updated_at AS role_updated_at
 FROM accounts a
 JOIN users u ON a.id = u.account_id
+LEFT JOIN user_roles r ON r.id = u.role_id
 WHERE 
     (CASE WHEN @local_only::boolean THEN a.domain IS NULL ELSE TRUE END)
     AND (CASE WHEN @status_active::boolean THEN u.disabled = false AND a.suspended_at IS NULL ELSE TRUE END)
@@ -24,9 +33,18 @@ SELECT
     a.id, a.username, a.domain, a.created_at, 
     u.email, u.sign_up_ip,
     u.confirmed_at, u.approved, u.disabled, a.silenced_at, a.suspended_at, a.sensitized_at,
-    u.invite_id, u.created_by_application_id
+    u.invite_id, u.created_by_application_id,
+    r.id AS role_id,
+    r.name AS role_name,
+    r.permissions AS role_permissions,
+    r.color AS role_color,
+    r.position AS role_position,
+    r.highlighted AS role_highlighted,
+    r.created_at AS role_created_at,
+    r.updated_at AS role_updated_at
 FROM accounts a
 JOIN users u ON a.id = u.account_id
+LEFT JOIN user_roles r ON r.id = u.role_id
 WHERE a.id = $1;
 
 -- name: AdminListAccountsV2 :many

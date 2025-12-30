@@ -10,6 +10,7 @@ import (
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	v1 "github.com/deicod/gotodon/internal/api/v1"
+	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 )
@@ -17,11 +18,15 @@ import (
 // SearchHandler handles search endpoints
 type SearchHandler struct {
 	queries *db.Queries
+	cfg     *config.Config
 }
 
 // NewSearchHandler creates a new search handler
-func NewSearchHandler(queries *db.Queries) *SearchHandler {
-	return &SearchHandler{queries: queries}
+func NewSearchHandler(queries *db.Queries, cfg *config.Config) *SearchHandler {
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
+	return &SearchHandler{queries: queries, cfg: cfg}
 }
 
 func (h *SearchHandler) useDB() bool {
@@ -32,15 +37,17 @@ func (h *SearchHandler) useDB() bool {
 type SearchResult struct {
 	Accounts []v1.Account `json:"accounts"`
 	Statuses []v1.Status  `json:"statuses"`
-	Hashtags []Hashtag    `json:"hashtags"`
+	Hashtags []Tag        `json:"hashtags"`
 }
 
-// Hashtag represents a hashtag in search results
-type Hashtag struct {
+// Tag represents a hashtag in search results
+type Tag struct {
+	ID        string         `json:"id"`
 	Name      string         `json:"name"`
 	URL       string         `json:"url"`
 	History   []HashtagUsage `json:"history"`
-	Following bool           `json:"following,omitempty"`
+	Following *bool          `json:"following,omitempty"`
+	Featuring *bool          `json:"featuring,omitempty"`
 }
 
 // HashtagUsage represents usage statistics for a hashtag
@@ -80,7 +87,7 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	result := SearchResult{
 		Accounts: []v1.Account{},
 		Statuses: []v1.Status{},
-		Hashtags: []Hashtag{},
+		Hashtags: []Tag{},
 	}
 
 	ctx := r.Context()
@@ -99,36 +106,61 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 		})
 		if err == nil {
 			for _, a := range accounts {
-				discoverable := a.Discoverable.Valid && a.Discoverable.Bool
-				result.Accounts = append(result.Accounts, v1.Account{
-					ID:           strconv.FormatInt(a.ID, 10),
-					Username:     a.Username,
-					Acct:         a.Username, // Should be domain aware
-					DisplayName:  a.DisplayName,
-					Note:         a.Note,
-					Locked:       a.Locked,
-					Discoverable: &discoverable,
-					Emojis:       []v1.CustomEmoji{},
-
-					Fields: []v1.Field{},
-				})
+				result.Accounts = append(result.Accounts, v1.SerializeAccount(h.cfg, a))
 			}
 		}
 	}
 
 	if searchType == "hashtags" || searchType == "" {
+		tagQuery := strings.TrimPrefix(q, "#")
 		hashtags, err := h.queries.SearchHashtags(ctx, db.SearchHashtagsParams{
-			Query:  pgtype.Text{String: q, Valid: true},
+			Query:  pgtype.Text{String: tagQuery, Valid: true},
 			Limit:  int32(limit),
 			Offset: int32(offset),
 		})
 		if err == nil {
-			for _, t := range hashtags {
-				result.Hashtags = append(result.Hashtags, Hashtag{
-					Name:    t.Name,
-					URL:     "/tags/" + t.Name, // Construct proper URL
+			tagIDs := make([]int64, 0, len(hashtags))
+			for _, tag := range hashtags {
+				tagIDs = append(tagIDs, tag.ID)
+			}
+
+			followed := map[int64]bool{}
+			featured := map[int64]bool{}
+			if accountID != 0 && len(tagIDs) > 0 {
+				if ids, err := h.queries.ListFollowedTagIDs(ctx, db.ListFollowedTagIDsParams{
+					AccountID: accountID,
+					TagIds:    tagIDs,
+				}); err == nil {
+					for _, id := range ids {
+						followed[id] = true
+					}
+				}
+				if ids, err := h.queries.ListFeaturedTagIDs(ctx, db.ListFeaturedTagIDsParams{
+					AccountID: accountID,
+					TagIds:    tagIDs,
+				}); err == nil {
+					for _, id := range ids {
+						if id.Valid {
+							featured[id.Int64] = true
+						}
+					}
+				}
+			}
+
+			for _, tag := range hashtags {
+				entry := Tag{
+					ID:      strconv.FormatInt(tag.ID, 10),
+					Name:    tagDisplayName(tag),
+					URL:     tagURL(tag.Name, h.cfg),
 					History: []HashtagUsage{},
-				})
+				}
+				if accountID != 0 {
+					isFollowing := followed[tag.ID]
+					isFeaturing := featured[tag.ID]
+					entry.Following = &isFollowing
+					entry.Featuring = &isFeaturing
+				}
+				result.Hashtags = append(result.Hashtags, entry)
 			}
 		}
 	}
@@ -140,24 +172,11 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 			Offset: int32(offset),
 		})
 		if err == nil {
+			dbStatuses := make([]db.Status, 0, len(statuses))
 			for _, s := range statuses {
-				account := v1.Account{
-					Username:    s.AccountUsername,
-					DisplayName: s.AccountDisplayName,
-					// Basic account info, could be enriched
-				}
-				if s.AccountAvatar.Valid {
-					account.Avatar = s.AccountAvatar.String
-				}
-
-				result.Statuses = append(result.Statuses, v1.Status{
-					ID:         strconv.FormatInt(s.ID, 10),
-					Content:    s.Text,
-					Account:    account,
-					Visibility: "public", // Filtered by query
-					// Fill strictly necessary fields
-				})
+				dbStatuses = append(dbStatuses, statusFromSearchRow(s))
 			}
+			result.Statuses = v1.SerializeStatuses(ctx, h.queries, h.cfg, dbStatuses)
 		}
 	}
 
@@ -167,4 +186,55 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 // RegisterRoutes registers search routes
 func (h *SearchHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v2/search", h.Search)
+}
+
+func tagDisplayName(tag db.Tag) string {
+	if tag.DisplayName.Valid && strings.TrimSpace(tag.DisplayName.String) != "" {
+		return tag.DisplayName.String
+	}
+	return tag.Name
+}
+
+func tagURL(name string, cfg *config.Config) string {
+	domain := ""
+	if cfg != nil {
+		domain = strings.TrimSpace(cfg.Instance.WebDomain)
+		if domain == "" {
+			domain = cfg.Instance.LocalDomain
+		}
+	}
+	if domain == "" {
+		return "/tags/" + name
+	}
+	return "https://" + domain + "/tags/" + name
+}
+
+func statusFromSearchRow(row db.SearchStatusesRow) db.Status {
+	return db.Status{
+		ID:                        row.ID,
+		Uri:                       row.Uri,
+		Text:                      row.Text,
+		CreatedAt:                 row.CreatedAt,
+		UpdatedAt:                 row.UpdatedAt,
+		InReplyToID:               row.InReplyToID,
+		ReblogOfID:                row.ReblogOfID,
+		Url:                       row.Url,
+		Sensitive:                 row.Sensitive,
+		Visibility:                row.Visibility,
+		SpoilerText:               row.SpoilerText,
+		Reply:                     row.Reply,
+		Language:                  row.Language,
+		ConversationID:            row.ConversationID,
+		Local:                     row.Local,
+		AccountID:                 row.AccountID,
+		ApplicationID:             row.ApplicationID,
+		InReplyToAccountID:        row.InReplyToAccountID,
+		PollID:                    row.PollID,
+		DeletedAt:                 row.DeletedAt,
+		EditedAt:                  row.EditedAt,
+		Trendable:                 row.Trendable,
+		OrderedMediaAttachmentIds: row.OrderedMediaAttachmentIds,
+		FetchedRepliesAt:          row.FetchedRepliesAt,
+		QuoteApprovalPolicy:       row.QuoteApprovalPolicy,
+	}
 }

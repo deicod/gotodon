@@ -41,3 +41,7 @@ WHERE NOT EXISTS (
 GROUP BY t.id, t.name, t.created_at, t.updated_at, t.usable, t.trendable, t.listable, t.reviewed_at, t.requested_review_at, t.last_status_at, t.max_score, t.max_score_at, t.display_name
 ORDER BY COUNT(*) DESC, t.id DESC
 LIMIT $2;
+
+-- name: ListFeaturedTagIDs :many
+SELECT tag_id FROM featured_tags
+WHERE account_id = $1 AND tag_id = ANY(sqlc.arg(tag_ids)::bigint[]);

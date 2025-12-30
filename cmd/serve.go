@@ -313,17 +313,17 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	// Register v2 handlers
 	// V2 Generic
-	v2InstanceHandler := v2.NewInstanceHandler(cfg)
+	v2InstanceHandler := v2.NewInstanceHandler(queries, cfg)
 	v2InstanceHandler.RegisterRoutes(mux)
 
 	// Filters
 	v2FiltersHandler := v2.NewFiltersHandler(queries)
 	v2FiltersHandler.RegisterRoutes(mux)
 
-	searchHandler := v2.NewSearchHandler(queries)
+	searchHandler := v2.NewSearchHandler(queries, cfg)
 	searchHandler.RegisterRoutes(mux)
 
-	v2SuggestionsHandler := v2.NewSuggestionsHandler(queries)
+	v2SuggestionsHandler := v2.NewSuggestionsHandler(queries, cfg)
 	v2SuggestionsHandler.RegisterRoutes(mux)
 
 	v2NotificationsHandler := v2.NewNotificationsHandler(queries, cfg)
@@ -445,19 +445,19 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	adminReportsHandler := admin.NewReportsHandler(queries)
 	adminReportsHandler.RegisterRoutes(mux)
 
-	adminInstanceHandler := admin.NewInstanceHandler()
+	adminInstanceHandler := admin.NewInstanceHandler(queries, cfg)
 	adminInstanceHandler.RegisterRoutes(mux)
 
 	adminTrendsHandler := admin.NewTrendsHandler(queries, cfg)
 	adminTrendsHandler.RegisterRoutes(mux)
 
-	adminDimensionsHandler := admin.NewDimensionsHandler()
+	adminDimensionsHandler := admin.NewDimensionsHandler(queries, cfg, rdb)
 	adminDimensionsHandler.RegisterRoutes(mux)
 
-	adminMeasuresHandler := admin.NewMeasuresHandler()
+	adminMeasuresHandler := admin.NewMeasuresHandler(queries)
 	adminMeasuresHandler.RegisterRoutes(mux)
 
-	adminRetentionHandler := admin.NewRetentionHandler()
+	adminRetentionHandler := admin.NewRetentionHandler(queries)
 	adminRetentionHandler.RegisterRoutes(mux)
 
 	adminCustomEmojisHandler := admin.NewCustomEmojisHandler(queries, mediaUploader)

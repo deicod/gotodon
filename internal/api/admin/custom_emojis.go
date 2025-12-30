@@ -25,6 +25,22 @@ func NewCustomEmojisHandler(queries *db.Queries, uploader *media.Uploader) *Cust
 	}
 }
 
+func mapAdminCustomEmoji(emoji db.CustomEmoji, categoryName string) map[string]any {
+	resp := map[string]any{
+		"id":                strconv.FormatInt(emoji.ID, 10),
+		"shortcode":         emoji.Shortcode,
+		"url":               v1.GetEmojiURL(emoji),
+		"static_url":        v1.GetEmojiURL(emoji),
+		"visible_in_picker": emoji.VisibleInPicker,
+		"disabled":          emoji.Disabled,
+		"domain":            emoji.Domain.String,
+	}
+	if categoryName != "" {
+		resp["category"] = categoryName
+	}
+	return resp
+}
+
 // List handles GET /api/v1/admin/custom_emojis
 func (h *CustomEmojisHandler) List(w http.ResponseWriter, r *http.Request) {
 	_, ok := middleware.GetAccountID(r.Context())
@@ -45,19 +61,42 @@ func (h *CustomEmojisHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	categoryNames := map[int64]string{}
+	if len(emojis) > 0 {
+		seen := map[int64]struct{}{}
+		categoryIDs := make([]int64, 0, len(emojis))
+		for _, emoji := range emojis {
+			if !emoji.CategoryID.Valid || emoji.CategoryID.Int64 <= 0 {
+				continue
+			}
+			if _, exists := seen[emoji.CategoryID.Int64]; exists {
+				continue
+			}
+			seen[emoji.CategoryID.Int64] = struct{}{}
+			categoryIDs = append(categoryIDs, emoji.CategoryID.Int64)
+		}
+		if len(categoryIDs) > 0 {
+			rows, err := h.queries.GetCustomEmojiCategoriesByIDs(r.Context(), categoryIDs)
+			if err != nil {
+				web.JSONError(w, http.StatusInternalServerError, "Failed to load emoji categories")
+				return
+			}
+			for _, row := range rows {
+				if row.Name.Valid {
+					categoryNames[row.ID] = row.Name.String
+				}
+			}
+		}
+	}
+
 	// Response format matches Admin API
 	resp := make([]map[string]any, len(emojis))
 	for i, e := range emojis {
-		resp[i] = map[string]any{
-			"id":                strconv.FormatInt(e.ID, 10),
-			"shortcode":         e.Shortcode,
-			"url":               v1.GetEmojiURL(e),
-			"static_url":        v1.GetEmojiURL(e),
-			"visible_in_picker": e.VisibleInPicker,
-			"disabled":          e.Disabled,
-			"domain":            e.Domain.String,
-			// "category": ... TODO
+		categoryName := ""
+		if e.CategoryID.Valid {
+			categoryName = categoryNames[e.CategoryID.Int64]
 		}
+		resp[i] = mapAdminCustomEmoji(e, categoryName)
 	}
 
 	web.JSON(w, http.StatusOK, resp)

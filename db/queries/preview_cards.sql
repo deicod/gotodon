@@ -90,6 +90,20 @@ UPDATE preview_card_providers SET
 WHERE id = $1
 RETURNING *;
 
+-- name: AdminListPreviewCardProviders :many
+SELECT * FROM preview_card_providers
+WHERE (CASE WHEN @max_id::bigint > 0 THEN id < @max_id ELSE TRUE END)
+    AND (CASE WHEN @since_id::bigint > 0 THEN id > @since_id ELSE TRUE END)
+ORDER BY id DESC
+LIMIT $1;
+
+-- name: AdminListPreviewCardProvidersMinID :many
+SELECT * FROM preview_card_providers
+WHERE (CASE WHEN @min_id::bigint > 0 THEN id > @min_id ELSE TRUE END)
+    AND (CASE WHEN @max_id::bigint > 0 THEN id < @max_id ELSE TRUE END)
+ORDER BY id ASC
+LIMIT $1;
+
 -- Preview Card Trends
 -- name: UpsertPreviewCardTrend :one
 INSERT INTO preview_card_trends (preview_card_id, score, rank, allowed, language)

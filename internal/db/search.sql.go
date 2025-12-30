@@ -14,6 +14,7 @@ import (
 const searchAccountsV2 = `-- name: SearchAccountsV2 :many
 SELECT id, username, domain, private_key, public_key, created_at, updated_at, note, display_name, uri, url, avatar_file_name, avatar_content_type, avatar_file_size, avatar_updated_at, header_file_name, header_content_type, header_file_size, header_updated_at, avatar_remote_url, locked, header_remote_url, last_webfingered_at, inbox_url, outbox_url, shared_inbox_url, followers_url, following_url, protocol, memorial, moved_to_account_id, featured_collection_url, fields, actor_type, discoverable, also_known_as, silenced_at, suspended_at, hide_collections, avatar_storage_schema_version, header_storage_schema_version, suspension_origin, sensitized_at, trendable, reviewed_at, requested_review_at, indexable, attribution_domains, id_scheme FROM accounts
 WHERE search_index @@ websearch_to_tsquery('english', $3)
+  AND suspended_at IS NULL
 ORDER BY ts_rank(search_index, websearch_to_tsquery('english', $3)) DESC
 LIMIT $1 OFFSET $2
 `
@@ -151,6 +152,7 @@ FROM statuses s
 JOIN accounts a ON s.account_id = a.id
 WHERE s.search_index @@ websearch_to_tsquery('english', $3)
   AND (s.visibility = 0 OR s.visibility = 1) -- Public or Unlisted
+  AND s.deleted_at IS NULL
 ORDER BY ts_rank(s.search_index, websearch_to_tsquery('english', $3)) DESC
 LIMIT $1 OFFSET $2
 `

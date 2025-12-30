@@ -2,11 +2,15 @@
 package admin
 
 import (
-	"fmt"
+	"context"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 )
@@ -55,8 +59,7 @@ type Role struct {
 	UpdatedAt   string `json:"updated_at"`
 }
 
-// AccountAction represents an action taken on an account
-// TODO: Store this in a proper admin_actions or audit log table
+// AccountAction represents an action taken on an account.
 type AccountAction struct {
 	ID        string    `json:"id"`
 	AccountID string    `json:"account_id"`
@@ -65,6 +68,98 @@ type AccountAction struct {
 	Text      string    `json:"text,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	SendEmail bool      `json:"send_email_notification"`
+}
+
+const (
+	adminActionTargetAccount = "Account"
+	adminActionTargetUser    = "User"
+)
+
+func accountHumanIdentifier(username string, domain pgtype.Text) string {
+	if strings.TrimSpace(username) == "" {
+		return ""
+	}
+	if domain.Valid && strings.TrimSpace(domain.String) != "" {
+		return username + "@" + domain.String
+	}
+	return username
+}
+
+func roleFromRow(roleID pgtype.Int8, roleName pgtype.Text, roleColor pgtype.Text, rolePosition pgtype.Int4, rolePermissions pgtype.Int8, roleHighlighted pgtype.Bool, roleCreatedAt pgtype.Timestamptz, roleUpdatedAt pgtype.Timestamptz) *Role {
+	if !roleID.Valid {
+		return nil
+	}
+
+	role := Role{
+		ID:          int(roleID.Int64),
+		Name:        roleName.String,
+		Color:       roleColor.String,
+		Position:    int(rolePosition.Int32),
+		Permissions: rolePermissions.Int64,
+		Highlighted: roleHighlighted.Bool,
+	}
+	if roleCreatedAt.Valid {
+		role.CreatedAt = roleCreatedAt.Time.Format(time.RFC3339)
+	}
+	if roleUpdatedAt.Valid {
+		role.UpdatedAt = roleUpdatedAt.Time.Format(time.RFC3339)
+	}
+	return &role
+}
+
+func (h *AccountsHandler) accountIdentifier(ctx context.Context, accountID int64) string {
+	if h.queries == nil {
+		return strconv.FormatInt(accountID, 10)
+	}
+	account, err := h.queries.GetAccountByIDAllowSuspended(ctx, accountID)
+	if err != nil {
+		return strconv.FormatInt(accountID, 10)
+	}
+	identifier := accountHumanIdentifier(account.Username, account.Domain)
+	if identifier == "" {
+		return strconv.FormatInt(accountID, 10)
+	}
+	return identifier
+}
+
+func (h *AccountsHandler) logAdminAction(ctx context.Context, adminID int64, action string, targetType string, targetID int64, humanIdentifier string, routeParam string, permalink string) {
+	if h.queries == nil || adminID <= 0 || action == "" || targetType == "" || targetID <= 0 {
+		return
+	}
+	_ = h.queries.CreateAdminActionLog(ctx, db.CreateAdminActionLogParams{
+		AccountID:  adminID,
+		Action:     action,
+		TargetType: pgtype.Text{String: targetType, Valid: true},
+		TargetID:   pgtype.Int8{Int64: targetID, Valid: true},
+		HumanIdentifier: pgtype.Text{
+			String: humanIdentifier,
+			Valid:  strings.TrimSpace(humanIdentifier) != "",
+		},
+		RouteParam: pgtype.Text{
+			String: routeParam,
+			Valid:  strings.TrimSpace(routeParam) != "",
+		},
+		Permalink: pgtype.Text{
+			String: permalink,
+			Valid:  strings.TrimSpace(permalink) != "",
+		},
+	})
+}
+
+func (h *AccountsHandler) logAccountAction(ctx context.Context, adminID, targetAccountID int64, action string) {
+	h.logAdminAction(ctx, adminID, action, adminActionTargetAccount, targetAccountID, h.accountIdentifier(ctx, targetAccountID), "", "")
+}
+
+func (h *AccountsHandler) logUserAction(ctx context.Context, adminID, targetAccountID int64, action string) {
+	if h.queries == nil {
+		return
+	}
+	user, err := h.queries.GetUserByAccountID(ctx, targetAccountID)
+	if err != nil {
+		return
+	}
+	routeParam := strconv.FormatInt(targetAccountID, 10)
+	h.logAdminAction(ctx, adminID, action, adminActionTargetUser, user.ID, h.accountIdentifier(ctx, targetAccountID), routeParam, "")
 }
 
 // GetAll handles GET /api/v1/admin/accounts
@@ -120,14 +215,21 @@ func (h *AccountsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
 			Silenced:   row.SilencedAt.Valid,
 			Suspended:  row.SuspendedAt.Valid,
 			Sensitized: row.SensitizedAt.Valid,
+			Role: roleFromRow(
+				row.RoleID,
+				row.RoleName,
+				row.RoleColor,
+				row.RolePosition,
+				row.RolePermissions,
+				row.RoleHighlighted,
+				row.RoleCreatedAt,
+				row.RoleUpdatedAt,
+			),
 		}
 		if row.Domain.Valid {
 			d := row.Domain.String
 			acc.Domain = &d
 		}
-
-		// Map Role (Stub)
-		// acc.Role = ...
 
 		accounts = append(accounts, acc)
 	}
@@ -164,6 +266,16 @@ func (h *AccountsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		Silenced:   row.SilencedAt.Valid,
 		Suspended:  row.SuspendedAt.Valid,
 		Sensitized: row.SensitizedAt.Valid,
+		Role: roleFromRow(
+			row.RoleID,
+			row.RoleName,
+			row.RoleColor,
+			row.RolePosition,
+			row.RolePermissions,
+			row.RoleHighlighted,
+			row.RoleCreatedAt,
+			row.RoleUpdatedAt,
+		),
 	}
 	if row.Domain.Valid {
 		d := row.Domain.String
@@ -172,11 +284,6 @@ func (h *AccountsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	if row.SignUpIp != nil {
 		ip := row.SignUpIp.String()
 		acc.IP = &ip
-	}
-
-	// Roles logic left as TODO or stub
-	acc.Role = &Role{
-		ID: 3, Name: "User", Position: 0, Permissions: 0,
 	}
 
 	web.JSON(w, http.StatusOK, acc)
@@ -207,16 +314,22 @@ func (h *AccountsHandler) TakeAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	adminID, _ := middleware.GetAccountID(ctx)
+	var logFn func()
 
 	switch req.Type {
 	case "disable":
 		err = h.queries.AdminDisableAccount(ctx, accountID)
+		logFn = func() { h.logUserAction(ctx, adminID, accountID, "disable") }
 	case "sensitive":
 		err = h.queries.AdminSensitizeAccount(ctx, accountID)
+		logFn = func() { h.logAccountAction(ctx, adminID, accountID, "sensitive") }
 	case "silence":
 		err = h.queries.AdminSilenceAccount(ctx, accountID)
+		logFn = func() { h.logAccountAction(ctx, adminID, accountID, "silence") }
 	case "suspend":
 		err = h.queries.AdminSuspendAccount(ctx, accountID)
+		logFn = func() { h.logAccountAction(ctx, adminID, accountID, "suspend") }
 	case "none":
 		// Do nothing, just log action?
 	default:
@@ -229,8 +342,9 @@ func (h *AccountsHandler) TakeAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Audit Log
-	fmt.Printf("Admin Action: %s on account %d details: %s\n", req.Type, accountID, req.Text)
+	if logFn != nil {
+		logFn()
+	}
 
 	web.JSON(w, http.StatusOK, map[string]any{})
 }
@@ -250,6 +364,10 @@ func (h *AccountsHandler) Approve(w http.ResponseWriter, r *http.Request) {
 	if err := h.queries.AdminApproveAccount(r.Context(), accountID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
+	}
+
+	if adminID, ok := middleware.GetAccountID(r.Context()); ok {
+		h.logUserAction(r.Context(), adminID, accountID, "approve")
 	}
 
 	// Fetch updated
@@ -273,6 +391,10 @@ func (h *AccountsHandler) Reject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if adminID, ok := middleware.GetAccountID(r.Context()); ok {
+		h.logUserAction(r.Context(), adminID, accountID, "reject")
+	}
+
 	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -291,6 +413,10 @@ func (h *AccountsHandler) Enable(w http.ResponseWriter, r *http.Request) {
 	if err := h.queries.AdminEnableAccount(r.Context(), accountID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
+	}
+
+	if adminID, ok := middleware.GetAccountID(r.Context()); ok {
+		h.logUserAction(r.Context(), adminID, accountID, "enable")
 	}
 
 	h.Get(w, r)
@@ -313,6 +439,10 @@ func (h *AccountsHandler) Unsilence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if adminID, ok := middleware.GetAccountID(r.Context()); ok {
+		h.logAccountAction(r.Context(), adminID, accountID, "unsilence")
+	}
+
 	h.Get(w, r)
 }
 
@@ -333,6 +463,10 @@ func (h *AccountsHandler) Unsuspend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if adminID, ok := middleware.GetAccountID(r.Context()); ok {
+		h.logAccountAction(r.Context(), adminID, accountID, "unsuspend")
+	}
+
 	h.Get(w, r)
 }
 
@@ -351,6 +485,10 @@ func (h *AccountsHandler) Unsensitize(w http.ResponseWriter, r *http.Request) {
 	if err := h.queries.AdminUnsensitizeAccount(r.Context(), accountID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
+	}
+
+	if adminID, ok := middleware.GetAccountID(r.Context()); ok {
+		h.logAccountAction(r.Context(), adminID, accountID, "unsensitive")
 	}
 
 	h.Get(w, r)
@@ -393,4 +531,5 @@ func (h *AccountsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unsilence", h.Unsilence)
 	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unsuspend", h.Unsuspend)
 	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unsensitize", h.Unsensitize)
+	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unsensitive", h.Unsensitize)
 }

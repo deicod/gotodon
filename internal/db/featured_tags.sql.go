@@ -114,6 +114,36 @@ func (q *Queries) GetFeaturedTagByTagID(ctx context.Context, arg GetFeaturedTagB
 	return i, err
 }
 
+const listFeaturedTagIDs = `-- name: ListFeaturedTagIDs :many
+SELECT tag_id FROM featured_tags
+WHERE account_id = $1 AND tag_id = ANY($2::bigint[])
+`
+
+type ListFeaturedTagIDsParams struct {
+	AccountID int64   `db:"account_id" json:"account_id"`
+	TagIds    []int64 `db:"tag_ids" json:"tag_ids"`
+}
+
+func (q *Queries) ListFeaturedTagIDs(ctx context.Context, arg ListFeaturedTagIDsParams) ([]pgtype.Int8, error) {
+	rows, err := q.db.Query(ctx, listFeaturedTagIDs, arg.AccountID, arg.TagIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.Int8{}
+	for rows.Next() {
+		var tag_id pgtype.Int8
+		if err := rows.Scan(&tag_id); err != nil {
+			return nil, err
+		}
+		items = append(items, tag_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listFeaturedTags = `-- name: ListFeaturedTags :many
 SELECT id, account_id, tag_id, name, statuses_count, last_status_at, created_at, updated_at FROM featured_tags
 WHERE account_id = $1
