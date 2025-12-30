@@ -1776,20 +1776,16 @@ func (h *StatusesHandler) Context(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			ancestors = []db.Status{}
 		}
-		ancestorStatuses := make([]Status, len(ancestors))
-		for i, s := range ancestors {
-			ancestorStatuses[i] = SerializeStatus(ctx, h.queries, h.cfg, s)
-		}
+		// Batch serialize ancestors to avoid N+1 queries
+		ancestorStatuses := SerializeStatuses(ctx, h.queries, h.cfg, ancestors)
 
 		// Get descendants
 		descendants, err := h.queries.GetStatusDescendants(ctx, pgtype.Int8{Int64: id, Valid: true})
 		if err != nil {
 			descendants = []db.Status{}
 		}
-		descendantStatuses := make([]Status, len(descendants))
-		for i, s := range descendants {
-			descendantStatuses[i] = SerializeStatus(ctx, h.queries, h.cfg, s)
-		}
+		// Batch serialize descendants to avoid N+1 queries
+		descendantStatuses := SerializeStatuses(ctx, h.queries, h.cfg, descendants)
 
 		web.JSON(w, http.StatusOK, map[string][]Status{
 			"ancestors":   ancestorStatuses,
