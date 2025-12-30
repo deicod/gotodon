@@ -33,3 +33,16 @@ WHERE id = $1;
 UPDATE reports 
 SET assigned_account_id = $2, updated_at = now()
 WHERE id = $1;
+
+-- name: AdminUnresolveReport :exec
+UPDATE reports
+SET action_taken_by_account_id = NULL, action_taken_at = NULL, updated_at = now()
+WHERE id = $1;
+
+-- name: AdminUpdateReport :one
+UPDATE reports
+SET category = COALESCE(sqlc.narg('category'), category),
+    rule_ids = COALESCE(sqlc.narg('rule_ids'), rule_ids),
+    updated_at = now()
+WHERE id = $1
+RETURNING *;

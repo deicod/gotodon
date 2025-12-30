@@ -23,6 +23,7 @@ import (
 	oauthapi "github.com/deicod/gotodon/internal/api/oauth"
 	oembedapi "github.com/deicod/gotodon/internal/api/oembed"
 	v1 "github.com/deicod/gotodon/internal/api/v1"
+	v1alpha "github.com/deicod/gotodon/internal/api/v1alpha"
 	v2 "github.com/deicod/gotodon/internal/api/v2"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
@@ -209,8 +210,11 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	appsHandler := v1.NewAppsHandler(queries)
 	appsHandler.RegisterRoutes(mux)
 
-	notificationsHandler := v1.NewNotificationsHandler(queries, streamingHub)
+	notificationsHandler := v1.NewNotificationsHandler(queries, streamingHub, cfg, rdb)
 	notificationsHandler.RegisterRoutes(mux)
+
+	filtersHandler := v1.NewFiltersHandler(queries, pool)
+	filtersHandler.RegisterRoutes(mux)
 
 	mediaStorage := media.NewLocalStorage("./uploads", fmt.Sprintf("https://%s/files", cfg.Instance.LocalDomain))
 	mediaUploader := media.NewUploader(mediaStorage)
@@ -237,6 +241,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	markersHandler := v1.NewMarkersHandler(queries)
 	markersHandler.RegisterRoutes(mux)
+
+	v1AlphaAsyncRefreshHandler := v1alpha.NewAsyncRefreshHandler(cfg, v1alpha.NewRedisAsyncRefreshStore(rdb))
+	v1AlphaAsyncRefreshHandler.RegisterRoutes(mux)
 
 	preferencesHandler := v1.NewPreferencesHandler(queries)
 	preferencesHandler.RegisterRoutes(mux)
@@ -283,7 +290,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	v1EndorsementsHandler := v1.NewEndorsementsHandler(queries)
 	v1EndorsementsHandler.RegisterRoutes(mux)
 
-	v1FeaturedTagsHandler := v1.NewFeaturedTagsHandler(queries)
+	v1FeaturedTagsHandler := v1.NewFeaturedTagsHandler(queries, cfg)
 	v1FeaturedTagsHandler.RegisterRoutes(mux)
 
 	v1TagsHandler := v1.NewTagsHandler(queries, cfg)
@@ -428,6 +435,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	adminCanonicalEmailBlocksHandler := admin.NewCanonicalEmailBlocksHandler(queries)
 	adminCanonicalEmailBlocksHandler.RegisterRoutes(mux)
+
+	adminEmailDomainBlocksHandler := admin.NewEmailDomainBlocksHandler(queries, rdb)
+	adminEmailDomainBlocksHandler.RegisterRoutes(mux)
 
 	adminTagsHandler := admin.NewTagsHandler(queries)
 	adminTagsHandler.RegisterRoutes(mux)

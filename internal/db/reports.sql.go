@@ -162,6 +162,55 @@ func (q *Queries) AdminResolveReport(ctx context.Context, arg AdminResolveReport
 	return err
 }
 
+const adminUnresolveReport = `-- name: AdminUnresolveReport :exec
+UPDATE reports
+SET action_taken_by_account_id = NULL, action_taken_at = NULL, updated_at = now()
+WHERE id = $1
+`
+
+func (q *Queries) AdminUnresolveReport(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, adminUnresolveReport, id)
+	return err
+}
+
+const adminUpdateReport = `-- name: AdminUpdateReport :one
+UPDATE reports
+SET category = COALESCE($2, category),
+    rule_ids = COALESCE($3, rule_ids),
+    updated_at = now()
+WHERE id = $1
+RETURNING id, status_ids, comment, created_at, updated_at, account_id, action_taken_by_account_id, target_account_id, action_taken_at, forwarded, category, assigned_account_id, rule_ids, uri, application_id
+`
+
+type AdminUpdateReportParams struct {
+	ID       int64       `db:"id" json:"id"`
+	Category pgtype.Int4 `db:"category" json:"category"`
+	RuleIds  []int64     `db:"rule_ids" json:"rule_ids"`
+}
+
+func (q *Queries) AdminUpdateReport(ctx context.Context, arg AdminUpdateReportParams) (Report, error) {
+	row := q.db.QueryRow(ctx, adminUpdateReport, arg.ID, arg.Category, arg.RuleIds)
+	var i Report
+	err := row.Scan(
+		&i.ID,
+		&i.StatusIds,
+		&i.Comment,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AccountID,
+		&i.ActionTakenByAccountID,
+		&i.TargetAccountID,
+		&i.ActionTakenAt,
+		&i.Forwarded,
+		&i.Category,
+		&i.AssignedAccountID,
+		&i.RuleIds,
+		&i.Uri,
+		&i.ApplicationID,
+	)
+	return i, err
+}
+
 const createReport = `-- name: CreateReport :one
 INSERT INTO reports (
     account_id, target_account_id, status_ids, comment, category, forwarded, created_at, updated_at

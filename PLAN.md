@@ -47,22 +47,22 @@ Status: Medium.
 
 Missing routes (from `mastodon/config/routes/api.rb`)
 - [x] GET /api/oembed
-- GET /api/v1_alpha/async_refreshes/:id
+- [x] GET /api/v1_alpha/async_refreshes/:id
 - [x] GET /api/v1/statuses (index)
 - [x] POST /api/v1/statuses/:id/mute
 - [x] POST /api/v1/statuses/:id/unmute
 - [x] PUT /api/v1/statuses/:id/interaction_policy
-- GET /api/v1/timelines/link
+- [x] GET /api/v1/timelines/link
 - GET /api/v1/streaming/(*any)
 - [x] POST /api/v1/conversations/:id/unread
 - [x] DELETE /api/v1/media/:id
-- /api/v1/filters (all CRUD)
-- GET /api/v1/notifications/requests/:id
-- POST /api/v1/notifications/requests/accept (bulk)
-- POST /api/v1/notifications/requests/dismiss (bulk)
-- GET /api/v1/notifications/requests/merged
+- [x] /api/v1/filters (all CRUD)
+- [x] GET /api/v1/notifications/requests/:id
+- [x] POST /api/v1/notifications/requests/accept (bulk)
+- [x] POST /api/v1/notifications/requests/dismiss (bulk)
+- [x] GET /api/v1/notifications/requests/merged
 - [x] GET /api/v1/domain_blocks/preview
-- GET /api/v1/instance/terms_of_service/:date
+- [x] GET /api/v1/instance/terms_of_service/:date
 - [x] GET /api/v1/accounts (index)
 - [x] GET /api/v1/accounts/:id/lists
 - [x] GET /api/v1/accounts/:id/identity_proofs
@@ -70,7 +70,7 @@ Missing routes (from `mastodon/config/routes/api.rb`)
 - [x] GET /api/v1/accounts/:id/endorsements
 - [x] POST /api/v1/accounts/:id/endorse
 - [x] POST /api/v1/accounts/:id/unendorse
-- GET /api/v1/featured_tags/suggestions
+- [x] GET /api/v1/featured_tags/suggestions
 - [x] GET /api/v1/trends (alias for tags index)
 
 Behavior gaps
@@ -118,8 +118,8 @@ Plan
 Status: Medium-low.
 
 Missing routes or mismatches
-- /api/v1/admin/email_domain_blocks (all CRUD).
-- Report workflow actions: assign_to_self, unassign, reopen, and update (PUT /api/v1/admin/reports/:id).
+- [x] /api/v1/admin/email_domain_blocks (all CRUD).
+- [x] Report workflow actions: assign_to_self, unassign, reopen, and update (PUT /api/v1/admin/reports/:id).
 - Admin trends publishers: /api/v1/admin/trends/links/publishers (preview_card_providers) + approve/reject.
 - Path mismatch: Mastodon uses /unsensitive; Gotodon currently registers /unsensitize.
 - [x] /api/v2/admin/accounts (index).
@@ -132,7 +132,7 @@ Behavior gaps
 
 Plan
 1) Implement email domain block endpoints (use `email_domain_blocks` table).
-2) Add full report workflow actions and update endpoint.
+2) [x] Add full report workflow actions and update endpoint.
 3) Add preview_card_providers moderation endpoints.
 4) Align admin account actions and path names (unsensitive) and wire audit logging.
 5) Implement role handling via `user_roles` and include role in admin responses.

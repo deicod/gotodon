@@ -269,6 +269,36 @@ func (q *Queries) ListAllTrendingTags(ctx context.Context, arg ListAllTrendingTa
 	return items, nil
 }
 
+const listFollowedTagIDs = `-- name: ListFollowedTagIDs :many
+SELECT tag_id FROM tag_follows
+WHERE account_id = $1 AND tag_id = ANY($2::bigint[])
+`
+
+type ListFollowedTagIDsParams struct {
+	AccountID int64   `db:"account_id" json:"account_id"`
+	TagIds    []int64 `db:"tag_ids" json:"tag_ids"`
+}
+
+func (q *Queries) ListFollowedTagIDs(ctx context.Context, arg ListFollowedTagIDsParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listFollowedTagIDs, arg.AccountID, arg.TagIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int64{}
+	for rows.Next() {
+		var tag_id int64
+		if err := rows.Scan(&tag_id); err != nil {
+			return nil, err
+		}
+		items = append(items, tag_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listFollowedTags = `-- name: ListFollowedTags :many
 SELECT t.id, t.name, t.created_at, t.updated_at, t.usable, t.trendable, t.listable, t.reviewed_at, t.requested_review_at, t.last_status_at, t.max_score, t.max_score_at, t.display_name FROM tags t
 JOIN tag_follows tf ON tf.tag_id = t.id

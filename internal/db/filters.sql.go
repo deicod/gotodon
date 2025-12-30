@@ -293,6 +293,50 @@ func (q *Queries) ListFilterKeywords(ctx context.Context, customFilterID int64) 
 	return items, nil
 }
 
+const listFilterKeywordsForAccount = `-- name: ListFilterKeywordsForAccount :many
+SELECT fk.id, fk.keyword, fk.whole_word, f.context, f.expires_at, f.action
+FROM custom_filter_keywords fk
+JOIN custom_filters f ON f.id = fk.custom_filter_id
+WHERE f.account_id = $1
+ORDER BY fk.id DESC
+`
+
+type ListFilterKeywordsForAccountRow struct {
+	ID        int64              `db:"id" json:"id"`
+	Keyword   string             `db:"keyword" json:"keyword"`
+	WholeWord bool               `db:"whole_word" json:"whole_word"`
+	Context   []string           `db:"context" json:"context"`
+	ExpiresAt pgtype.Timestamptz `db:"expires_at" json:"expires_at"`
+	Action    int32              `db:"action" json:"action"`
+}
+
+func (q *Queries) ListFilterKeywordsForAccount(ctx context.Context, accountID int64) ([]ListFilterKeywordsForAccountRow, error) {
+	rows, err := q.db.Query(ctx, listFilterKeywordsForAccount, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListFilterKeywordsForAccountRow{}
+	for rows.Next() {
+		var i ListFilterKeywordsForAccountRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Keyword,
+			&i.WholeWord,
+			&i.Context,
+			&i.ExpiresAt,
+			&i.Action,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listFilterStatuses = `-- name: ListFilterStatuses :many
 SELECT id, custom_filter_id, status_id, created_at, updated_at FROM custom_filter_statuses WHERE custom_filter_id = $1
 `

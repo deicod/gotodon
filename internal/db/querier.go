@@ -21,6 +21,7 @@ type Querier interface {
 	AdminCreateCanonicalEmailBlock(ctx context.Context, arg AdminCreateCanonicalEmailBlockParams) (CanonicalEmailBlock, error)
 	AdminCreateCustomEmoji(ctx context.Context, arg AdminCreateCustomEmojiParams) (CustomEmoji, error)
 	AdminCreateDomainBlock(ctx context.Context, arg AdminCreateDomainBlockParams) (DomainBlock, error)
+	AdminCreateEmailDomainBlock(ctx context.Context, arg AdminCreateEmailDomainBlockParams) (AdminCreateEmailDomainBlockRow, error)
 	AdminCreateIpBlock(ctx context.Context, arg AdminCreateIpBlockParams) (AdminCreateIpBlockRow, error)
 	// Note: Cascades to accounts usually, or we should delete account separately? Schema has fk_users_account -> accounts(id).
 	// Accounts table is the parent. FK is in users pointing to accounts.
@@ -32,6 +33,7 @@ type Querier interface {
 	AdminDeleteAccount(ctx context.Context, id int64) error
 	AdminDeleteCanonicalEmailBlock(ctx context.Context, id int64) error
 	AdminDeleteDomainBlock(ctx context.Context, id int64) error
+	AdminDeleteEmailDomainBlock(ctx context.Context, id int64) error
 	AdminDeleteIpBlock(ctx context.Context, id int64) error
 	AdminDisableAccount(ctx context.Context, accountID int64) error
 	AdminEnableAccount(ctx context.Context, accountID int64) error
@@ -39,6 +41,8 @@ type Querier interface {
 	AdminGetCanonicalEmailBlock(ctx context.Context, id int64) (CanonicalEmailBlock, error)
 	AdminGetCanonicalEmailBlockByHash(ctx context.Context, canonicalEmailHash string) (CanonicalEmailBlock, error)
 	AdminGetDomainBlock(ctx context.Context, id int64) (DomainBlock, error)
+	AdminGetEmailDomainBlock(ctx context.Context, id int64) (AdminGetEmailDomainBlockRow, error)
+	AdminGetEmailDomainBlockByDomain(ctx context.Context, domain string) (AdminGetEmailDomainBlockByDomainRow, error)
 	AdminGetIpBlock(ctx context.Context, id int64) (AdminGetIpBlockRow, error)
 	AdminGetIpBlockByIP(ctx context.Context, ip string) (AdminGetIpBlockByIPRow, error)
 	AdminGetReport(ctx context.Context, id int64) (Report, error)
@@ -48,6 +52,7 @@ type Querier interface {
 	AdminListCanonicalEmailBlocks(ctx context.Context, arg AdminListCanonicalEmailBlocksParams) ([]CanonicalEmailBlock, error)
 	AdminListCustomEmojis(ctx context.Context, arg AdminListCustomEmojisParams) ([]CustomEmoji, error)
 	AdminListDomainBlocks(ctx context.Context, arg AdminListDomainBlocksParams) ([]DomainBlock, error)
+	AdminListEmailDomainBlocks(ctx context.Context, arg AdminListEmailDomainBlocksParams) ([]AdminListEmailDomainBlocksRow, error)
 	AdminListIpBlocks(ctx context.Context, arg AdminListIpBlocksParams) ([]AdminListIpBlocksRow, error)
 	AdminListReports(ctx context.Context, arg AdminListReportsParams) ([]AdminListReportsRow, error)
 	AdminListTags(ctx context.Context, arg AdminListTagsParams) ([]Tag, error)
@@ -60,12 +65,14 @@ type Querier interface {
 	AdminSensitizeAccount(ctx context.Context, id int64) error
 	AdminSilenceAccount(ctx context.Context, id int64) error
 	AdminSuspendAccount(ctx context.Context, id int64) error
+	AdminUnresolveReport(ctx context.Context, id int64) error
 	AdminUnsensitizeAccount(ctx context.Context, id int64) error
 	AdminUnsilenceAccount(ctx context.Context, id int64) error
 	AdminUnsuspendAccount(ctx context.Context, id int64) error
 	AdminUpdateDomainBlock(ctx context.Context, arg AdminUpdateDomainBlockParams) (DomainBlock, error)
 	AdminUpdateIpBlock(ctx context.Context, arg AdminUpdateIpBlockParams) (AdminUpdateIpBlockRow, error)
 	AdminUpdatePreviewCardTrendable(ctx context.Context, arg AdminUpdatePreviewCardTrendableParams) (PreviewCard, error)
+	AdminUpdateReport(ctx context.Context, arg AdminUpdateReportParams) (Report, error)
 	AdminUpdateStatusTrendable(ctx context.Context, arg AdminUpdateStatusTrendableParams) (Status, error)
 	AdminUpdateTag(ctx context.Context, arg AdminUpdateTagParams) (Tag, error)
 	AdminUpdateTagTrendable(ctx context.Context, arg AdminUpdateTagTrendableParams) (Tag, error)
@@ -239,6 +246,7 @@ type Querier interface {
 	GetBlocksFromAccounts(ctx context.Context, arg GetBlocksFromAccountsParams) ([]Block, error)
 	GetBookmark(ctx context.Context, arg GetBookmarkParams) (Bookmark, error)
 	GetConversation(ctx context.Context, id int64) (Conversation, error)
+	GetCurrentTermsOfService(ctx context.Context) (TermsOfService, error)
 	GetCustomEmoji(ctx context.Context, arg GetCustomEmojiParams) (CustomEmoji, error)
 	// Domain Allows queries
 	GetDomainAllow(ctx context.Context, id int64) (DomainAllow, error)
@@ -263,6 +271,8 @@ type Querier interface {
 	GetKnownDomains(ctx context.Context) ([]pgtype.Text, error)
 	GetLastSuccessfulLogin(ctx context.Context, userID int64) (LoginActivity, error)
 	GetLatestAccountMigration(ctx context.Context, accountID int64) (AccountMigration, error)
+	GetLinkTimelineStatuses(ctx context.Context, arg GetLinkTimelineStatusesParams) ([]Status, error)
+	GetLinkTimelineStatusesMinID(ctx context.Context, arg GetLinkTimelineStatusesMinIDParams) ([]Status, error)
 	GetList(ctx context.Context, arg GetListParams) (List, error)
 	GetListTimeline(ctx context.Context, arg GetListTimelineParams) ([]Status, error)
 	GetListsContainingAccount(ctx context.Context, arg GetListsContainingAccountParams) ([]List, error)
@@ -347,6 +357,8 @@ type Querier interface {
 	GetTagTrend(ctx context.Context, arg GetTagTrendParams) (TagTrend, error)
 	GetTagsByNames(ctx context.Context, dollar_1 []string) ([]Tag, error)
 	GetTagsByStatusIDs(ctx context.Context, statusIds []int64) ([]GetTagsByStatusIDsRow, error)
+	GetTermsOfServiceByEffectiveDate(ctx context.Context, effectiveDate pgtype.Date) (TermsOfService, error)
+	GetTermsOfServiceSucceededBy(ctx context.Context, arg GetTermsOfServiceSucceededByParams) (TermsOfService, error)
 	// Tombstones queries
 	GetTombstone(ctx context.Context, id int64) (Tombstone, error)
 	GetTombstoneByURI(ctx context.Context, uri string) (Tombstone, error)
@@ -355,6 +367,7 @@ type Querier interface {
 	GetTrendingStatuses(ctx context.Context, limit int32) ([]GetTrendingStatusesRow, error)
 	GetTrendingTags(ctx context.Context, limit int32) ([]GetTrendingTagsRow, error)
 	GetUnviewedAnnualReports(ctx context.Context, accountID int64) ([]GeneratedAnnualReport, error)
+	GetUpcomingTermsOfService(ctx context.Context) (TermsOfService, error)
 	GetUserByAccountID(ctx context.Context, accountID int64) (User, error)
 	GetUserByConfirmationToken(ctx context.Context, confirmationToken pgtype.Text) (User, error)
 	GetUserByEmail(ctx context.Context, lower string) (User, error)
@@ -396,9 +409,11 @@ type Querier interface {
 	ListFavourites(ctx context.Context, arg ListFavouritesParams) ([]Status, error)
 	ListFeaturedTags(ctx context.Context, accountID int64) ([]FeaturedTag, error)
 	ListFilterKeywords(ctx context.Context, customFilterID int64) ([]CustomFilterKeyword, error)
+	ListFilterKeywordsForAccount(ctx context.Context, accountID int64) ([]ListFilterKeywordsForAccountRow, error)
 	ListFilterStatuses(ctx context.Context, customFilterID int64) ([]CustomFilterStatus, error)
 	ListFilters(ctx context.Context, accountID int64) ([]CustomFilter, error)
 	ListFollowRequests(ctx context.Context, arg ListFollowRequestsParams) ([]Account, error)
+	ListFollowedTagIDs(ctx context.Context, arg ListFollowedTagIDsParams) ([]int64, error)
 	ListFollowedTags(ctx context.Context, arg ListFollowedTagsParams) ([]Tag, error)
 	ListLists(ctx context.Context, accountID int64) ([]List, error)
 	ListLocalAccounts(ctx context.Context, arg ListLocalAccountsParams) ([]Account, error)
@@ -418,6 +433,7 @@ type Querier interface {
 	ListScheduledStatuses(ctx context.Context, arg ListScheduledStatusesParams) ([]ScheduledStatus, error)
 	ListSessionActivationsByUser(ctx context.Context, userID int64) ([]SessionActivation, error)
 	ListStatusesForCleanup(ctx context.Context, arg ListStatusesForCleanupParams) ([]Status, error)
+	ListSuggestedFeaturedTags(ctx context.Context, arg ListSuggestedFeaturedTagsParams) ([]Tag, error)
 	ListTombstonesByAccount(ctx context.Context, arg ListTombstonesByAccountParams) ([]Tombstone, error)
 	ListTrendingStatuses(ctx context.Context, arg ListTrendingStatusesParams) ([]Status, error)
 	ListTrendingTags(ctx context.Context, arg ListTrendingTagsParams) ([]ListTrendingTagsRow, error)

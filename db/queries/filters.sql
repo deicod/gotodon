@@ -34,6 +34,13 @@ RETURNING *;
 -- name: ListFilterKeywords :many
 SELECT * FROM custom_filter_keywords WHERE custom_filter_id = $1;
 
+-- name: ListFilterKeywordsForAccount :many
+SELECT fk.id, fk.keyword, fk.whole_word, f.context, f.expires_at, f.action
+FROM custom_filter_keywords fk
+JOIN custom_filters f ON f.id = fk.custom_filter_id
+WHERE f.account_id = $1
+ORDER BY fk.id DESC;
+
 -- name: UpdateFilterKeyword :one
 UPDATE custom_filter_keywords SET
     keyword = COALESCE(sqlc.narg('keyword'), keyword),

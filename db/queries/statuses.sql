@@ -180,6 +180,28 @@ WHERE la.list_id = @list_id
 ORDER BY s.id DESC
 LIMIT $1 OFFSET $2;
 
+-- name: GetLinkTimelineStatuses :many
+SELECT s.* FROM statuses s
+JOIN preview_cards_statuses pcs ON pcs.status_id = s.id
+WHERE pcs.preview_card_id = $1
+  AND s.deleted_at IS NULL
+  AND s.visibility IN (0, 1)
+  AND (sqlc.narg('max_id')::bigint IS NULL OR s.id < sqlc.narg('max_id')::bigint)
+  AND (sqlc.narg('since_id')::bigint IS NULL OR s.id > sqlc.narg('since_id')::bigint)
+ORDER BY s.id DESC
+LIMIT $2;
+
+-- name: GetLinkTimelineStatusesMinID :many
+SELECT s.* FROM statuses s
+JOIN preview_cards_statuses pcs ON pcs.status_id = s.id
+WHERE pcs.preview_card_id = $1
+  AND s.deleted_at IS NULL
+  AND s.visibility IN (0, 1)
+  AND s.id > $2
+  AND (sqlc.narg('max_id')::bigint IS NULL OR s.id < sqlc.narg('max_id')::bigint)
+ORDER BY s.id ASC
+LIMIT $3;
+
 -- name: UpdateStatusURI :exec
 UPDATE statuses SET uri = $1, updated_at = now()
 WHERE id = $2;

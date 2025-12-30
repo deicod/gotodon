@@ -149,7 +149,7 @@ DELETE FROM notification_requests WHERE id = $1 AND account_id = $2;
 -- name: BulkAcceptNotificationRequests :exec
 WITH deleted AS (
     DELETE FROM notification_requests nr
-    WHERE nr.account_id = $1 AND nr.id = ANY($2::bigint[])
+    WHERE nr.account_id = $1 AND nr.id = ANY(sqlc.arg(ids)::bigint[])
     RETURNING nr.account_id, nr.from_account_id
 )
 INSERT INTO notification_permissions (account_id, from_account_id)
@@ -158,4 +158,4 @@ ON CONFLICT (account_id, from_account_id) DO NOTHING;
 
 -- name: BulkDismissNotificationRequests :exec
 DELETE FROM notification_requests 
-WHERE account_id = $1 AND id = ANY($2::bigint[]);
+WHERE account_id = $1 AND id = ANY(sqlc.arg(ids)::bigint[]);

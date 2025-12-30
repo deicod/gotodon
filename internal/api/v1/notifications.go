@@ -3,32 +3,85 @@ package v1
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/streaming"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/redis/go-redis/v9"
 )
 
 // NotificationsHandler handles notification endpoints
 type NotificationsHandler struct {
 	queries   *db.Queries
 	publisher streaming.Publisher
+	cfg       *config.Config
+	redis     *redis.Client
 }
 
 // NewNotificationsHandler creates a new notifications handler
-func NewNotificationsHandler(queries *db.Queries, publisher streaming.Publisher) *NotificationsHandler {
+func NewNotificationsHandler(queries *db.Queries, publisher streaming.Publisher, cfg *config.Config, redisClient *redis.Client) *NotificationsHandler {
 	return &NotificationsHandler{
 		queries:   queries,
 		publisher: publisher,
+		cfg:       cfg,
+		redis:     redisClient,
 	}
 }
 
 func (h *NotificationsHandler) useDB() bool {
 	return h.queries != nil
+}
+
+func (h *NotificationsHandler) accountWithStats(ctx context.Context, dbAcc db.Account) Account {
+	acc := SerializeAccount(h.cfg, dbAcc)
+	if h.useDB() {
+		stats, err := h.queries.GetAccountStats(ctx, dbAcc.ID)
+		if err == nil {
+			acc.FollowersCount = stats.FollowersCount
+			acc.FollowingCount = stats.FollowingCount
+			acc.StatusesCount = stats.StatusesCount
+			if stats.LastStatusAt.Valid {
+				lastStatus := stats.LastStatusAt.Time.Format("2006-01-02")
+				acc.LastStatusAt = &lastStatus
+			}
+		}
+	}
+	return acc
+}
+
+func (h *NotificationsHandler) notificationRequestFromDB(ctx context.Context, dbReq db.NotificationRequest) NotificationRequest {
+	req := NotificationRequest{
+		ID:                 strconv.FormatInt(dbReq.ID, 10),
+		NotificationsCount: dbReq.NotificationsCount,
+	}
+	if dbReq.CreatedAt.Valid {
+		req.CreatedAt = dbReq.CreatedAt.Time
+	}
+	if dbReq.UpdatedAt.Valid {
+		req.UpdatedAt = dbReq.UpdatedAt.Time
+	}
+	if dbReq.FromAccountID > 0 {
+		dbAcc, err := h.queries.GetAccountByID(ctx, dbReq.FromAccountID)
+		if err == nil {
+			req.Account = h.accountWithStats(ctx, dbAcc)
+		}
+	}
+	if dbReq.LastStatusID.Valid && h.cfg != nil {
+		dbStatus, err := h.queries.GetStatusByID(ctx, dbReq.LastStatusID.Int64)
+		if err == nil {
+			status := SerializeStatus(ctx, h.queries, h.cfg, dbStatus)
+			req.LastStatus = &status
+		}
+	}
+	return req
 }
 
 // Notification represents a Mastodon notification
@@ -410,38 +463,90 @@ func (h *NotificationsHandler) ListRequests(w http.ResponseWriter, r *http.Reque
 
 		requests := make([]NotificationRequest, len(dbRequests))
 		for i, req := range dbRequests {
-			requests[i] = NotificationRequest{
-				ID:                 strconv.FormatInt(req.ID, 10),
-				NotificationsCount: req.NotificationsCount,
-			}
-			if req.CreatedAt.Valid {
-				requests[i].CreatedAt = req.CreatedAt.Time
-			}
-			if req.UpdatedAt.Valid {
-				requests[i].UpdatedAt = req.UpdatedAt.Time
-			}
-			// Load account info
-			if req.FromAccountID > 0 {
-				dbAcc, err := h.queries.GetAccountByID(ctx, req.FromAccountID)
-				if err == nil {
-					discoverable := dbAcc.Discoverable.Valid && dbAcc.Discoverable.Bool
-					requests[i].Account = Account{
-						ID:           strconv.FormatInt(dbAcc.ID, 10),
-						Username:     dbAcc.Username,
-						Acct:         dbAcc.Username,
-						DisplayName:  dbAcc.DisplayName,
-						Discoverable: &discoverable,
-						Emojis:       []CustomEmoji{},
-						Fields:       []Field{},
-					}
-				}
-			}
+			requests[i] = h.notificationRequestFromDB(ctx, req)
 		}
 		web.JSON(w, http.StatusOK, requests)
 		return
 	}
 
 	web.JSON(w, http.StatusOK, []NotificationRequest{})
+}
+
+// GetRequest handles GET /api/v1/notifications/requests/:id
+func (h *NotificationsHandler) GetRequest(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	idStr := web.Param(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	if h.useDB() {
+		ctx := r.Context()
+		dbReq, err := h.queries.GetNotificationRequest(ctx, id)
+		if err != nil || dbReq.AccountID != accountID {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+		web.JSON(w, http.StatusOK, h.notificationRequestFromDB(ctx, dbReq))
+		return
+	}
+
+	now := time.Now()
+	discoverable := true
+	web.JSON(w, http.StatusOK, NotificationRequest{
+		ID:                 idStr,
+		CreatedAt:          now.Add(-time.Hour),
+		UpdatedAt:          now,
+		NotificationsCount: 1,
+		Account: Account{
+			ID:           "2",
+			Username:     "other",
+			Acct:         "other",
+			DisplayName:  "Another User",
+			Discoverable: &discoverable,
+			CreatedAt:    now.Add(-48 * time.Hour),
+			Emojis:       []CustomEmoji{},
+			Fields:       []Field{},
+		},
+	})
+}
+
+type notificationRequestBulkPayload struct {
+	IDs flexibleStringSlice `json:"id"`
+}
+
+func parseNotificationRequestIDs(r *http.Request) ([]int64, error) {
+	var req notificationRequestBulkPayload
+	if err := web.Bind(r, &req); err != nil {
+		if errors.Is(err, io.EOF) {
+			return []int64{}, nil
+		}
+		return nil, err
+	}
+	if len(req.IDs) == 0 {
+		return []int64{}, nil
+	}
+	ids := make([]int64, 0, len(req.IDs))
+	seen := make(map[int64]struct{}, len(req.IDs))
+	for _, raw := range req.IDs {
+		id, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err != nil || id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 // AcceptRequest handles POST /api/v1/notifications/requests/:id/accept
@@ -494,6 +599,83 @@ func (h *NotificationsHandler) DismissRequest(w http.ResponseWriter, r *http.Req
 	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
+// AcceptRequests handles POST /api/v1/notifications/requests/accept
+func (h *NotificationsHandler) AcceptRequests(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	ids, err := parseNotificationRequestIDs(r)
+	if err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if len(ids) > 0 && h.useDB() {
+		if err := h.queries.BulkAcceptNotificationRequests(r.Context(), db.BulkAcceptNotificationRequestsParams{
+			AccountID: accountID,
+			Ids:       ids,
+		}); err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+	}
+
+	web.JSON(w, http.StatusOK, map[string]any{})
+}
+
+// DismissRequests handles POST /api/v1/notifications/requests/dismiss
+func (h *NotificationsHandler) DismissRequests(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	ids, err := parseNotificationRequestIDs(r)
+	if err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if len(ids) > 0 && h.useDB() {
+		if err := h.queries.BulkDismissNotificationRequests(r.Context(), db.BulkDismissNotificationRequestsParams{
+			AccountID: accountID,
+			Ids:       ids,
+		}); err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+	}
+
+	web.JSON(w, http.StatusOK, map[string]any{})
+}
+
+// RequestsMerged handles GET /api/v1/notifications/requests/merged
+func (h *NotificationsHandler) RequestsMerged(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	merged := true
+	if h.redis != nil {
+		key := "notification_unfilter_jobs:" + strconv.FormatInt(accountID, 10)
+		value, err := h.redis.Get(r.Context(), key).Result()
+		if err != nil && err != redis.Nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to check merge status")
+			return
+		}
+		if err == nil {
+			count, _ := strconv.Atoi(strings.TrimSpace(value))
+			merged = count <= 0
+		}
+	}
+
+	web.JSON(w, http.StatusOK, map[string]bool{"merged": merged})
+}
+
 // RegisterRoutes registers the notifications routes
 func (h *NotificationsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/notifications", h.List)
@@ -501,8 +683,12 @@ func (h *NotificationsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/notifications/policy", h.GetPolicy)
 	mux.HandleFunc("PUT /api/v1/notifications/policy", h.UpdatePolicy)
 	mux.HandleFunc("GET /api/v1/notifications/requests", h.ListRequests)
+	mux.HandleFunc("GET /api/v1/notifications/requests/{id}", h.GetRequest)
 	mux.HandleFunc("POST /api/v1/notifications/requests/{id}/accept", h.AcceptRequest)
 	mux.HandleFunc("POST /api/v1/notifications/requests/{id}/dismiss", h.DismissRequest)
+	mux.HandleFunc("POST /api/v1/notifications/requests/accept", h.AcceptRequests)
+	mux.HandleFunc("POST /api/v1/notifications/requests/dismiss", h.DismissRequests)
+	mux.HandleFunc("GET /api/v1/notifications/requests/merged", h.RequestsMerged)
 	mux.HandleFunc("GET /api/v1/notifications/{id}", h.Get)
 	mux.HandleFunc("POST /api/v1/notifications/clear", h.Clear)
 	mux.HandleFunc("POST /api/v1/notifications/{id}/dismiss", h.Dismiss)

@@ -23,3 +23,21 @@ SELECT count(*) FROM featured_tags WHERE account_id = $1;
 DELETE FROM featured_tags
 WHERE account_id = $1 AND tag_id = $2;
 
+-- name: ListSuggestedFeaturedTags :many
+WITH recent_statuses AS (
+    SELECT id FROM statuses
+    WHERE account_id = $1 AND deleted_at IS NULL
+    ORDER BY id DESC
+    LIMIT 1000
+)
+SELECT t.* FROM tags t
+JOIN statuses_tags st ON st.tag_id = t.id
+JOIN recent_statuses rs ON rs.id = st.status_id
+WHERE NOT EXISTS (
+    SELECT 1 FROM featured_tags ft
+    WHERE ft.account_id = $1
+      AND (ft.tag_id = t.id OR lower(ft.name) = lower(t.name))
+)
+GROUP BY t.id, t.name, t.created_at, t.updated_at, t.usable, t.trendable, t.listable, t.reviewed_at, t.requested_review_at, t.last_status_at, t.max_score, t.max_score_at, t.display_name
+ORDER BY COUNT(*) DESC, t.id DESC
+LIMIT $2;

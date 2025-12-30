@@ -148,3 +148,62 @@ func (q *Queries) ListFeaturedTags(ctx context.Context, accountID int64) ([]Feat
 	}
 	return items, nil
 }
+
+const listSuggestedFeaturedTags = `-- name: ListSuggestedFeaturedTags :many
+WITH recent_statuses AS (
+    SELECT id FROM statuses
+    WHERE account_id = $1 AND deleted_at IS NULL
+    ORDER BY id DESC
+    LIMIT 1000
+)
+SELECT t.id, t.name, t.created_at, t.updated_at, t.usable, t.trendable, t.listable, t.reviewed_at, t.requested_review_at, t.last_status_at, t.max_score, t.max_score_at, t.display_name FROM tags t
+JOIN statuses_tags st ON st.tag_id = t.id
+JOIN recent_statuses rs ON rs.id = st.status_id
+WHERE NOT EXISTS (
+    SELECT 1 FROM featured_tags ft
+    WHERE ft.account_id = $1
+      AND (ft.tag_id = t.id OR lower(ft.name) = lower(t.name))
+)
+GROUP BY t.id, t.name, t.created_at, t.updated_at, t.usable, t.trendable, t.listable, t.reviewed_at, t.requested_review_at, t.last_status_at, t.max_score, t.max_score_at, t.display_name
+ORDER BY COUNT(*) DESC, t.id DESC
+LIMIT $2
+`
+
+type ListSuggestedFeaturedTagsParams struct {
+	AccountID int64 `db:"account_id" json:"account_id"`
+	Limit     int32 `db:"limit" json:"limit"`
+}
+
+func (q *Queries) ListSuggestedFeaturedTags(ctx context.Context, arg ListSuggestedFeaturedTagsParams) ([]Tag, error) {
+	rows, err := q.db.Query(ctx, listSuggestedFeaturedTags, arg.AccountID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Tag{}
+	for rows.Next() {
+		var i Tag
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Usable,
+			&i.Trendable,
+			&i.Listable,
+			&i.ReviewedAt,
+			&i.RequestedReviewAt,
+			&i.LastStatusAt,
+			&i.MaxScore,
+			&i.MaxScoreAt,
+			&i.DisplayName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

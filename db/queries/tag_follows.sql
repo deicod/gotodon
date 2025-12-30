@@ -26,6 +26,10 @@ SELECT EXISTS(
     SELECT 1 FROM tag_follows WHERE account_id = $1 AND tag_id = $2
 ) AS is_following;
 
+-- name: ListFollowedTagIDs :many
+SELECT tag_id FROM tag_follows
+WHERE account_id = $1 AND tag_id = ANY(sqlc.arg(tag_ids)::bigint[]);
+
 -- name: GetTagFollowersCount :one
 SELECT COUNT(*) FROM tag_follows WHERE tag_id = $1;
 

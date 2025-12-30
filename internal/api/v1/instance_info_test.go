@@ -1,12 +1,17 @@
 package v1
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/config"
+	"github.com/deicod/gotodon/internal/db"
 )
 
 func TestInstanceInfoHandler_Rules_MockMode(t *testing.T) {
@@ -119,7 +124,7 @@ func TestInstanceInfoHandler_PrivacyPolicy(t *testing.T) {
 	}
 }
 
-func TestInstanceInfoHandler_TermsOfService(t *testing.T) {
+func TestInstanceInfoHandler_TermsOfService_NotFound_MockMode(t *testing.T) {
 	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
 	h := NewInstanceInfoHandler(nil, cfg)
 
@@ -128,8 +133,38 @@ func TestInstanceInfoHandler_TermsOfService(t *testing.T) {
 
 	h.TermsOfServiceHandler(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestInstanceInfoHandler_TermsOfServiceByDate_InvalidDate(t *testing.T) {
+	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
+	h := NewInstanceInfoHandler(nil, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/instance/terms_of_service/bad-date", nil)
+	req.SetPathValue("date", "bad-date")
+	rec := httptest.NewRecorder()
+
+	h.TermsOfServiceByDate(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestInstanceInfoHandler_TermsOfServiceByDate_NotFound_MockMode(t *testing.T) {
+	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
+	h := NewInstanceInfoHandler(nil, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/instance/terms_of_service/2025-01-01", nil)
+	req.SetPathValue("date", "2025-01-01")
+	rec := httptest.NewRecorder()
+
+	h.TermsOfServiceByDate(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
 
@@ -186,6 +221,50 @@ func TestInstanceInfoHandler_DomainBlocks(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestInstanceInfoHandler_SerializeTermsOfService_EffectiveToday(t *testing.T) {
+	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
+	h := NewInstanceInfoHandler(nil, cfg)
+
+	now := time.Now().UTC()
+	tos := db.TermsOfService{
+		ID:            1,
+		Text:          "Terms",
+		EffectiveDate: pgtype.Date{Time: now, Valid: true},
+	}
+
+	resp := h.serializeTermsOfService(context.Background(), tos)
+	if !resp.Effective {
+		t.Fatalf("effective = false, want true")
+	}
+
+	expectedDate := now.Format("2006-01-02")
+	if resp.EffectiveDate != expectedDate {
+		t.Fatalf("effective_date = %q, want %q", resp.EffectiveDate, expectedDate)
+	}
+}
+
+func TestInstanceInfoHandler_SerializeTermsOfService_PublishedNoEffectiveDate(t *testing.T) {
+	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
+	h := NewInstanceInfoHandler(nil, cfg)
+
+	now := time.Now().UTC()
+	tos := db.TermsOfService{
+		ID:          2,
+		Text:        "Terms",
+		PublishedAt: pgtype.Timestamptz{Time: now, Valid: true},
+	}
+
+	resp := h.serializeTermsOfService(context.Background(), tos)
+	if !resp.Effective {
+		t.Fatalf("effective = false, want true")
+	}
+
+	expectedDate := now.Format(time.RFC3339)
+	if resp.EffectiveDate != expectedDate {
+		t.Fatalf("effective_date = %q, want %q", resp.EffectiveDate, expectedDate)
 	}
 }
 

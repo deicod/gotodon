@@ -2,11 +2,22 @@
 package v1
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"html"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/renderer"
+	"github.com/yuin/goldmark/util"
 
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
@@ -53,8 +64,45 @@ type PrivacyPolicy struct {
 
 // TermsOfService represents the instance terms of service
 type TermsOfService struct {
-	UpdatedAt *time.Time `json:"updated_at"`
-	Content   string     `json:"content"`
+	EffectiveDate string  `json:"effective_date"`
+	Effective     bool    `json:"effective"`
+	Content       string  `json:"content"`
+	SucceededBy   *string `json:"succeeded_by"`
+}
+
+var termsMarkdown = goldmark.New(
+	goldmark.WithExtensions(extension.GFM),
+	goldmark.WithRendererOptions(
+		renderer.WithNodeRenderers(util.Prioritized(&termsImageRenderer{}, 1000)),
+	),
+)
+
+type termsImageRenderer struct{}
+
+func (r *termsImageRenderer) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
+	reg.Register(ast.KindImage, r.renderImage)
+}
+
+func (r *termsImageRenderer) renderImage(_ util.BufWriter, _ []byte, _ ast.Node, _ bool) (ast.WalkStatus, error) {
+	return ast.WalkSkipChildren, nil
+}
+
+func renderTermsMarkdown(text string) string {
+	if text == "" {
+		return ""
+	}
+	var buf bytes.Buffer
+	if err := termsMarkdown.Convert([]byte(text), &buf); err != nil {
+		return "<p>" + html.EscapeString(text) + "</p>"
+	}
+	return buf.String()
+}
+
+func formatTermsContent(text, domain string) string {
+	if domain != "" {
+		text = strings.ReplaceAll(text, "%{domain}", domain)
+	}
+	return renderTermsMarkdown(text)
 }
 
 // Rules handles GET /api/v1/instance/rules
@@ -173,10 +221,99 @@ func (h *InstanceInfoHandler) PrivacyPolicyHandler(w http.ResponseWriter, r *htt
 
 // TermsOfService handles GET /api/v1/instance/terms_of_service
 func (h *InstanceInfoHandler) TermsOfServiceHandler(w http.ResponseWriter, r *http.Request) {
-	web.JSON(w, http.StatusOK, TermsOfService{
-		UpdatedAt: nil,
-		Content:   "",
-	})
+	h.termsOfService(w, r, "")
+}
+
+// TermsOfServiceByDate handles GET /api/v1/instance/terms_of_service/:date
+func (h *InstanceInfoHandler) TermsOfServiceByDate(w http.ResponseWriter, r *http.Request) {
+	date := web.Param(r, "date")
+	h.termsOfService(w, r, date)
+}
+
+func (h *InstanceInfoHandler) termsOfService(w http.ResponseWriter, r *http.Request, date string) {
+	if h.queries == nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	ctx := r.Context()
+	var tos db.TermsOfService
+	var err error
+
+	if date != "" {
+		parsed, parseErr := time.Parse("2006-01-02", date)
+		if parseErr != nil {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+		tos, err = h.queries.GetTermsOfServiceByEffectiveDate(ctx, pgtype.Date{Time: parsed, Valid: true})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				web.JSONError(w, http.StatusNotFound, "Record not found")
+				return
+			}
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+	} else {
+		tos, err = h.queries.GetCurrentTermsOfService(ctx)
+		if errors.Is(err, pgx.ErrNoRows) {
+			tos, err = h.queries.GetUpcomingTermsOfService(ctx)
+		}
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				web.JSONError(w, http.StatusNotFound, "Record not found")
+				return
+			}
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+	}
+
+	resp := h.serializeTermsOfService(ctx, tos)
+	web.JSON(w, http.StatusOK, resp)
+}
+
+func (h *InstanceInfoHandler) serializeTermsOfService(ctx context.Context, tos db.TermsOfService) TermsOfService {
+	domain := ""
+	if h.cfg != nil {
+		domain = h.cfg.Instance.LocalDomain
+	}
+
+	effectiveDate := ""
+	if tos.EffectiveDate.Valid {
+		effectiveDate = tos.EffectiveDate.Time.Format("2006-01-02")
+	} else if tos.PublishedAt.Valid {
+		effectiveDate = tos.PublishedAt.Time.Format(time.RFC3339)
+	}
+
+	effective := false
+	now := time.Now().UTC()
+	if tos.EffectiveDate.Valid {
+		today := now.Format("2006-01-02")
+		effective = tos.EffectiveDate.Time.Format("2006-01-02") <= today
+	} else if tos.PublishedAt.Valid {
+		effective = !tos.PublishedAt.Time.After(now)
+	}
+
+	var succeededBy *string
+	if tos.EffectiveDate.Valid && h.queries != nil {
+		next, err := h.queries.GetTermsOfServiceSucceededBy(ctx, db.GetTermsOfServiceSucceededByParams{
+			EffectiveDate: tos.EffectiveDate,
+			ID:            tos.ID,
+		})
+		if err == nil && next.EffectiveDate.Valid {
+			date := next.EffectiveDate.Time.Format("2006-01-02")
+			succeededBy = &date
+		}
+	}
+
+	return TermsOfService{
+		EffectiveDate: effectiveDate,
+		Effective:     effective,
+		Content:       formatTermsContent(tos.Text, domain),
+		SucceededBy:   succeededBy,
+	}
 }
 
 // TranslationLanguages handles GET /api/v1/instance/translation_languages
@@ -205,6 +342,7 @@ func (h *InstanceInfoHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/instance/extended_description", h.ExtendedDescriptionHandler)
 	mux.HandleFunc("GET /api/v1/instance/privacy_policy", h.PrivacyPolicyHandler)
 	mux.HandleFunc("GET /api/v1/instance/terms_of_service", h.TermsOfServiceHandler)
+	mux.HandleFunc("GET /api/v1/instance/terms_of_service/{date}", h.TermsOfServiceByDate)
 	mux.HandleFunc("GET /api/v1/instance/translation_languages", h.TranslationLanguages)
 	mux.HandleFunc("GET /api/v1/instance/languages", h.Languages)
 	mux.HandleFunc("GET /api/v1/instance/domain_blocks", h.DomainBlocksPublic)

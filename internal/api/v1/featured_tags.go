@@ -9,16 +9,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 type FeaturedTagsHandler struct {
 	queries *db.Queries
+	cfg     *config.Config
 }
 
-func NewFeaturedTagsHandler(queries *db.Queries) *FeaturedTagsHandler {
-	return &FeaturedTagsHandler{queries: queries}
+func NewFeaturedTagsHandler(queries *db.Queries, cfg *config.Config) *FeaturedTagsHandler {
+	return &FeaturedTagsHandler{queries: queries, cfg: cfg}
 }
 
 func featuredTagFromDB(t db.FeaturedTag) FeaturedTag {
@@ -36,6 +39,24 @@ func featuredTagFromDB(t db.FeaturedTag) FeaturedTag {
 
 func (h *FeaturedTagsHandler) dbTagToAPI(t db.FeaturedTag) FeaturedTag {
 	return featuredTagFromDB(t)
+}
+
+func (h *FeaturedTagsHandler) useDB() bool {
+	return h.queries != nil
+}
+
+func (h *FeaturedTagsHandler) tagResponse(tag db.Tag, following bool) TagResponse {
+	domain := "example.com"
+	if h.cfg != nil {
+		domain = h.cfg.Instance.LocalDomain
+	}
+	f := following
+	return TagResponse{
+		Name:      tag.Name,
+		URL:       "https://" + domain + "/tags/" + tag.Name,
+		History:   []TagDayCount{},
+		Following: &f,
+	}
 }
 
 type FeaturedTag struct {
@@ -64,6 +85,66 @@ func (h *FeaturedTagsHandler) List(w http.ResponseWriter, r *http.Request) {
 		resp[i] = h.dbTagToAPI(t) // Use the new helper function
 	}
 
+	web.JSON(w, http.StatusOK, resp)
+}
+
+// Suggestions handles GET /api/v1/featured_tags/suggestions
+func (h *FeaturedTagsHandler) Suggestions(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	scopes := middleware.GetScopes(r.Context())
+	if scopes != "" && !oauth.HasScope(scopes, "read:accounts") {
+		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
+		return
+	}
+
+	if !h.useDB() {
+		web.JSON(w, http.StatusOK, []TagResponse{})
+		return
+	}
+
+	const suggestionsLimit = int32(10)
+	ctx := r.Context()
+
+	tags, err := h.queries.ListSuggestedFeaturedTags(ctx, db.ListSuggestedFeaturedTagsParams{
+		AccountID: accountID,
+		Limit:     suggestionsLimit,
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to list tag suggestions")
+		return
+	}
+	if len(tags) == 0 {
+		web.JSON(w, http.StatusOK, []TagResponse{})
+		return
+	}
+
+	tagIDs := make([]int64, 0, len(tags))
+	for _, tag := range tags {
+		tagIDs = append(tagIDs, tag.ID)
+	}
+
+	followedIDs := map[int64]bool{}
+	followed, err := h.queries.ListFollowedTagIDs(ctx, db.ListFollowedTagIDsParams{
+		AccountID: accountID,
+		TagIds:    tagIDs,
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to list tag suggestions")
+		return
+	}
+	for _, id := range followed {
+		followedIDs[id] = true
+	}
+
+	resp := make([]TagResponse, len(tags))
+	for i, tag := range tags {
+		resp[i] = h.tagResponse(tag, followedIDs[tag.ID])
+	}
 	web.JSON(w, http.StatusOK, resp)
 }
 
@@ -154,6 +235,7 @@ func (h *FeaturedTagsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 func (h *FeaturedTagsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/featured_tags", h.List)
+	mux.HandleFunc("GET /api/v1/featured_tags/suggestions", h.Suggestions)
 	mux.HandleFunc("POST /api/v1/featured_tags", h.Create)
 	mux.HandleFunc("DELETE /api/v1/featured_tags/{id}", h.Delete)
 }

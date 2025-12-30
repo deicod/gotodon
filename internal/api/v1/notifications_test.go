@@ -32,7 +32,7 @@ func mockNotificationRequest(method, path string, body string, accountID int64) 
 }
 
 func TestNotificationsHandler_UnreadCount_MockMode(t *testing.T) {
-	h := NewNotificationsHandler(nil, nil)
+	h := NewNotificationsHandler(nil, nil, nil, nil)
 
 	tests := []struct {
 		name      string
@@ -75,7 +75,7 @@ func TestNotificationsHandler_UnreadCount_MockMode(t *testing.T) {
 }
 
 func TestNotificationsHandler_GetPolicy_MockMode(t *testing.T) {
-	h := NewNotificationsHandler(nil, nil)
+	h := NewNotificationsHandler(nil, nil, nil, nil)
 
 	req, rec := mockNotificationRequest(http.MethodGet, "/api/v1/notifications/policy", "", 12345)
 	h.GetPolicy(rec, req)
@@ -96,7 +96,7 @@ func TestNotificationsHandler_GetPolicy_MockMode(t *testing.T) {
 }
 
 func TestNotificationsHandler_UpdatePolicy_MockMode(t *testing.T) {
-	h := NewNotificationsHandler(nil, nil)
+	h := NewNotificationsHandler(nil, nil, nil, nil)
 
 	body := `{"for_not_following":"filter","for_new_accounts":"drop"}`
 	req, rec := mockNotificationRequest(http.MethodPut, "/api/v1/notifications/policy", body, 12345)
@@ -120,7 +120,7 @@ func TestNotificationsHandler_UpdatePolicy_MockMode(t *testing.T) {
 }
 
 func TestNotificationsHandler_ListRequests_MockMode(t *testing.T) {
-	h := NewNotificationsHandler(nil, nil)
+	h := NewNotificationsHandler(nil, nil, nil, nil)
 
 	tests := []struct {
 		name      string
@@ -153,7 +153,7 @@ func TestNotificationsHandler_ListRequests_MockMode(t *testing.T) {
 }
 
 func TestNotificationsHandler_AcceptRequest_MockMode(t *testing.T) {
-	h := NewNotificationsHandler(nil, nil)
+	h := NewNotificationsHandler(nil, nil, nil, nil)
 
 	req, rec := mockNotificationRequest(http.MethodPost, "/api/v1/notifications/requests/123/accept", "", 12345)
 	req.SetPathValue("id", "123")
@@ -166,7 +166,7 @@ func TestNotificationsHandler_AcceptRequest_MockMode(t *testing.T) {
 }
 
 func TestNotificationsHandler_DismissRequest_MockMode(t *testing.T) {
-	h := NewNotificationsHandler(nil, nil)
+	h := NewNotificationsHandler(nil, nil, nil, nil)
 
 	req, rec := mockNotificationRequest(http.MethodPost, "/api/v1/notifications/requests/123/dismiss", "", 12345)
 	req.SetPathValue("id", "123")
@@ -175,6 +175,161 @@ func TestNotificationsHandler_DismissRequest_MockMode(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestNotificationsHandler_AcceptRequests_MockMode(t *testing.T) {
+	h := NewNotificationsHandler(nil, nil, nil, nil)
+
+	body := `{"id":["123","456"]}`
+	req, rec := mockNotificationRequest(http.MethodPost, "/api/v1/notifications/requests/accept", body, 12345)
+
+	h.AcceptRequests(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestNotificationsHandler_AcceptRequests_Unauthorized(t *testing.T) {
+	h := NewNotificationsHandler(nil, nil, nil, nil)
+
+	body := `{"id":["123"]}`
+	req, rec := mockNotificationRequest(http.MethodPost, "/api/v1/notifications/requests/accept", body, 0)
+
+	h.AcceptRequests(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestNotificationsHandler_AcceptRequests_InvalidBody(t *testing.T) {
+	h := NewNotificationsHandler(nil, nil, nil, nil)
+
+	req, rec := mockNotificationRequest(http.MethodPost, "/api/v1/notifications/requests/accept", "{bad", 12345)
+
+	h.AcceptRequests(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestNotificationsHandler_DismissRequests_MockMode(t *testing.T) {
+	h := NewNotificationsHandler(nil, nil, nil, nil)
+
+	body := `{"id":["123","456"]}`
+	req, rec := mockNotificationRequest(http.MethodPost, "/api/v1/notifications/requests/dismiss", body, 12345)
+
+	h.DismissRequests(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestNotificationsHandler_DismissRequests_Unauthorized(t *testing.T) {
+	h := NewNotificationsHandler(nil, nil, nil, nil)
+
+	body := `{"id":["123"]}`
+	req, rec := mockNotificationRequest(http.MethodPost, "/api/v1/notifications/requests/dismiss", body, 0)
+
+	h.DismissRequests(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestNotificationsHandler_DismissRequests_InvalidBody(t *testing.T) {
+	h := NewNotificationsHandler(nil, nil, nil, nil)
+
+	req, rec := mockNotificationRequest(http.MethodPost, "/api/v1/notifications/requests/dismiss", "{bad", 12345)
+
+	h.DismissRequests(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestNotificationsHandler_RequestsMerged_MockMode(t *testing.T) {
+	h := NewNotificationsHandler(nil, nil, nil, nil)
+
+	req, rec := mockNotificationRequest(http.MethodGet, "/api/v1/notifications/requests/merged", "", 12345)
+
+	h.RequestsMerged(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var resp map[string]bool
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Failed to unmarshal response: %v", err)
+	}
+	if merged, ok := resp["merged"]; !ok || !merged {
+		t.Errorf("merged = %v, want true", resp["merged"])
+	}
+}
+
+func TestNotificationsHandler_RequestsMerged_Unauthorized(t *testing.T) {
+	h := NewNotificationsHandler(nil, nil, nil, nil)
+
+	req, rec := mockNotificationRequest(http.MethodGet, "/api/v1/notifications/requests/merged", "", 0)
+
+	h.RequestsMerged(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestNotificationsHandler_GetRequest_MockMode(t *testing.T) {
+	h := NewNotificationsHandler(nil, nil, nil, nil)
+
+	req, rec := mockNotificationRequest(http.MethodGet, "/api/v1/notifications/requests/123", "", 12345)
+	req.SetPathValue("id", "123")
+
+	h.GetRequest(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var request NotificationRequest
+	if err := json.Unmarshal(rec.Body.Bytes(), &request); err != nil {
+		t.Fatalf("Failed to unmarshal response: %v", err)
+	}
+	if request.ID != "123" {
+		t.Errorf("id = %q, want %q", request.ID, "123")
+	}
+}
+
+func TestNotificationsHandler_GetRequest_Unauthorized(t *testing.T) {
+	h := NewNotificationsHandler(nil, nil, nil, nil)
+
+	req, rec := mockNotificationRequest(http.MethodGet, "/api/v1/notifications/requests/123", "", 0)
+	req.SetPathValue("id", "123")
+
+	h.GetRequest(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestNotificationsHandler_GetRequest_InvalidID(t *testing.T) {
+	h := NewNotificationsHandler(nil, nil, nil, nil)
+
+	req, rec := mockNotificationRequest(http.MethodGet, "/api/v1/notifications/requests/bad", "", 12345)
+	req.SetPathValue("id", "bad")
+
+	h.GetRequest(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
 

@@ -1,9 +1,15 @@
 package admin
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
+	"sort"
 	"strconv"
+	"strings"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
@@ -14,13 +20,15 @@ import (
 
 // ReportsHandler handles admin report endpoints
 type ReportsHandler struct {
-	queries *db.Queries
+	queries    *db.Queries
+	memReports map[int64]*memReport
 }
 
 // NewReportsHandler creates a new admin reports handler
 func NewReportsHandler(queries *db.Queries) *ReportsHandler {
 	return &ReportsHandler{
-		queries: queries,
+		queries:    queries,
+		memReports: make(map[int64]*memReport),
 	}
 }
 
@@ -38,6 +46,8 @@ type AdminReport struct {
 	TargetAccount   *v1.Account `json:"target_account"`
 	AccountID       string      `json:"account_id"`
 	Account         *v1.Account `json:"account"`
+	AssignedAccount *v1.Account `json:"assigned_account"`
+	ActionTakenBy   *v1.Account `json:"action_taken_by_account"`
 	CreatedAt       string      `json:"created_at"`
 	UpdatedAt       string      `json:"updated_at"`
 }
@@ -51,6 +61,130 @@ func mapCategory(c int32) string {
 	default:
 		return "other"
 	}
+}
+
+func categoryFromString(value string) (int32, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "spam":
+		return 1, true
+	case "violation":
+		return 2, true
+	case "other":
+		return 0, true
+	default:
+		return 0, false
+	}
+}
+
+func idSliceToStrings(ids []int64) []string {
+	if len(ids) == 0 {
+		return []string{}
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, strconv.FormatInt(id, 10))
+	}
+	return out
+}
+
+func accountFromUsername(id int64, username, domain string) *v1.Account {
+	if id == 0 && username == "" {
+		return nil
+	}
+	acct := username
+	if domain != "" {
+		acct = username + "@" + domain
+	}
+	return &v1.Account{
+		ID:       strconv.FormatInt(id, 10),
+		Username: username,
+		Acct:     acct,
+	}
+}
+
+func accountFromID(id int64) *v1.Account {
+	if id <= 0 {
+		return nil
+	}
+	idStr := strconv.FormatInt(id, 10)
+	return &v1.Account{
+		ID:       idStr,
+		Username: idStr,
+		Acct:     idStr,
+	}
+}
+
+func accountFromDB(acc db.Account) *v1.Account {
+	domain := ""
+	if acc.Domain.Valid {
+		domain = acc.Domain.String
+	}
+	return accountFromUsername(acc.ID, acc.Username, domain)
+}
+
+type memReport struct {
+	ID              int64
+	StatusIDs       []int64
+	RuleIDs         []int64
+	Comment         string
+	Forwarded       bool
+	Category        int32
+	AccountID       int64
+	TargetAccountID int64
+	AssignedAccount *v1.Account
+	ActionTakenBy   *v1.Account
+	ActionTakenAt   *time.Time
+	Account         *v1.Account
+	TargetAccount   *v1.Account
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+func mapMemReport(report *memReport) AdminReport {
+	rep := AdminReport{
+		ID:              strconv.FormatInt(report.ID, 10),
+		ActionTaken:     report.ActionTakenAt != nil,
+		Category:        mapCategory(report.Category),
+		Comment:         report.Comment,
+		Forwarded:       report.Forwarded,
+		TargetAccountID: strconv.FormatInt(report.TargetAccountID, 10),
+		AccountID:       strconv.FormatInt(report.AccountID, 10),
+		CreatedAt:       report.CreatedAt.String(),
+		UpdatedAt:       report.UpdatedAt.String(),
+		StatusIDs:       idSliceToStrings(report.StatusIDs),
+		RuleIDs:         idSliceToStrings(report.RuleIDs),
+	}
+
+	if report.ActionTakenAt != nil {
+		t := report.ActionTakenAt.String()
+		rep.ActionTakenAt = &t
+	}
+
+	if report.Account != nil {
+		rep.Account = report.Account
+	} else {
+		rep.Account = accountFromID(report.AccountID)
+	}
+
+	if report.TargetAccount != nil {
+		rep.TargetAccount = report.TargetAccount
+	} else {
+		rep.TargetAccount = accountFromID(report.TargetAccountID)
+	}
+
+	if report.AssignedAccount != nil {
+		rep.AssignedAccount = report.AssignedAccount
+	}
+
+	if report.ActionTakenBy != nil {
+		rep.ActionTakenBy = report.ActionTakenBy
+	}
+
+	return rep
+}
+
+func (h *ReportsHandler) useDB() bool {
+	return h.queries != nil
 }
 
 // GetAll handles GET /api/v1/admin/reports
@@ -76,68 +210,145 @@ func (h *ReportsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
 	accountID, _ := strconv.ParseInt(web.QueryParam(r, "account_id"), 10, 64)
 	targetAccountID, _ := strconv.ParseInt(web.QueryParam(r, "target_account_id"), 10, 64)
 
-	rows, err := h.queries.AdminListReports(r.Context(), db.AdminListReportsParams{
-		Limit:           int32(limit),
-		Offset:          int32(offset),
-		Resolved:        resolved,
-		AccountID:       accountID,
-		TargetAccountID: targetAccountID,
-	})
-	if err != nil {
-		web.JSONError(w, http.StatusInternalServerError, "Database error")
+	if h.useDB() {
+		rows, err := h.queries.AdminListReports(r.Context(), db.AdminListReportsParams{
+			Limit:           int32(limit),
+			Offset:          int32(offset),
+			Resolved:        resolved,
+			AccountID:       accountID,
+			TargetAccountID: targetAccountID,
+		})
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+
+		type reportMeta struct {
+			index           int
+			assignedID      pgtype.Int8
+			actionTakenByID pgtype.Int8
+		}
+
+		reports := make([]AdminReport, len(rows))
+		metas := make([]reportMeta, 0, len(rows))
+		accountIDs := make([]int64, 0, len(rows)*2)
+		accountIDSeen := make(map[int64]bool)
+
+		for i, row := range rows {
+			rep := AdminReport{
+				ID:              strconv.FormatInt(row.ID, 10),
+				ActionTaken:     row.ActionTakenAt.Valid,
+				Category:        mapCategory(row.Category),
+				Comment:         row.Comment,
+				Forwarded:       row.Forwarded.Bool,
+				TargetAccountID: strconv.FormatInt(row.TargetAccountID, 10),
+				AccountID:       strconv.FormatInt(row.AccountID, 10),
+				CreatedAt:       row.CreatedAt.Time.String(),
+				UpdatedAt:       row.UpdatedAt.Time.String(),
+				StatusIDs:       idSliceToStrings(row.StatusIds),
+				RuleIDs:         idSliceToStrings(row.RuleIds),
+			}
+
+			if row.ActionTakenAt.Valid {
+				t := row.ActionTakenAt.Time.String()
+				rep.ActionTakenAt = &t
+			}
+
+			accountDomain := ""
+			if row.AccountDomain.Valid {
+				accountDomain = row.AccountDomain.String
+			}
+			rep.Account = accountFromUsername(row.AccountID, row.AccountUsername, accountDomain)
+
+			targetDomain := ""
+			if row.TargetAccountDomain.Valid {
+				targetDomain = row.TargetAccountDomain.String
+			}
+			rep.TargetAccount = accountFromUsername(row.TargetAccountID, row.TargetAccountUsername, targetDomain)
+
+			if row.AssignedAccountID.Valid && !accountIDSeen[row.AssignedAccountID.Int64] {
+				accountIDs = append(accountIDs, row.AssignedAccountID.Int64)
+				accountIDSeen[row.AssignedAccountID.Int64] = true
+			}
+			if row.ActionTakenByAccountID.Valid && !accountIDSeen[row.ActionTakenByAccountID.Int64] {
+				accountIDs = append(accountIDs, row.ActionTakenByAccountID.Int64)
+				accountIDSeen[row.ActionTakenByAccountID.Int64] = true
+			}
+
+			reports[i] = rep
+			metas = append(metas, reportMeta{
+				index:           i,
+				assignedID:      row.AssignedAccountID,
+				actionTakenByID: row.ActionTakenByAccountID,
+			})
+		}
+
+		if len(accountIDs) > 0 {
+			dbAccounts, err := h.queries.GetAccountsByIDs(r.Context(), accountIDs)
+			if err != nil {
+				web.JSONError(w, http.StatusInternalServerError, "Database error")
+				return
+			}
+
+			accountMap := make(map[int64]*v1.Account, len(dbAccounts))
+			for _, acc := range dbAccounts {
+				accountMap[acc.ID] = accountFromDB(acc)
+			}
+
+			for _, meta := range metas {
+				if meta.assignedID.Valid {
+					if acc, ok := accountMap[meta.assignedID.Int64]; ok {
+						reports[meta.index].AssignedAccount = acc
+					}
+				}
+				if meta.actionTakenByID.Valid {
+					if acc, ok := accountMap[meta.actionTakenByID.Int64]; ok {
+						reports[meta.index].ActionTakenBy = acc
+					}
+				}
+			}
+		}
+
+		web.JSON(w, http.StatusOK, reports)
 		return
 	}
 
-	reports := make([]AdminReport, 0, len(rows))
-	for _, row := range rows {
-		rep := AdminReport{
-			ID:              strconv.FormatInt(row.ID, 10),
-			ActionTaken:     row.ActionTakenAt.Valid,
-			Category:        mapCategory(row.Category),
-			Comment:         row.Comment,
-			Forwarded:       row.Forwarded.Bool,
-			TargetAccountID: strconv.FormatInt(row.TargetAccountID, 10),
-			AccountID:       strconv.FormatInt(row.AccountID, 10),
-			CreatedAt:       row.CreatedAt.Time.String(), // ISO format preferred
-			UpdatedAt:       row.UpdatedAt.Time.String(),
+	memReports := make([]*memReport, 0, len(h.memReports))
+	for _, report := range h.memReports {
+		if report == nil {
+			continue
 		}
+		if resolved && report.ActionTakenAt == nil {
+			continue
+		}
+		if !resolved && report.ActionTakenAt != nil {
+			continue
+		}
+		if accountID > 0 && report.AccountID != accountID {
+			continue
+		}
+		if targetAccountID > 0 && report.TargetAccountID != targetAccountID {
+			continue
+		}
+		memReports = append(memReports, report)
+	}
 
-		if row.ActionTakenAt.Valid {
-			t := row.ActionTakenAt.Time.String()
-			rep.ActionTakenAt = &t
-		}
+	sort.Slice(memReports, func(i, j int) bool {
+		return memReports[i].CreatedAt.After(memReports[j].CreatedAt)
+	})
 
-		for _, sid := range row.StatusIds {
-			rep.StatusIDs = append(rep.StatusIDs, strconv.FormatInt(sid, 10))
-		}
+	start := offset
+	if start > len(memReports) {
+		start = len(memReports)
+	}
+	end := start + limit
+	if end > len(memReports) {
+		end = len(memReports)
+	}
 
-		// Hydrate accounts (simplified, usually minimal user info)
-		// We have joined fields: AccountUsername, AccountDomain, TargetAccountUsername...
-		// Ideally we return full Account object structure but partial info.
-		// For now, construct minimal Account objects.
-
-		rep.Account = &v1.Account{
-			ID:       strconv.FormatInt(row.AccountID, 10),
-			Username: row.AccountUsername,
-			// Acct need domain handling
-		}
-		if row.AccountDomain.Valid {
-			rep.Account.Acct = row.AccountUsername + "@" + row.AccountDomain.String
-		} else {
-			rep.Account.Acct = row.AccountUsername
-		}
-
-		rep.TargetAccount = &v1.Account{
-			ID:       strconv.FormatInt(row.TargetAccountID, 10),
-			Username: row.TargetAccountUsername,
-		}
-		if row.TargetAccountDomain.Valid {
-			rep.TargetAccount.Acct = row.TargetAccountUsername + "@" + row.TargetAccountDomain.String
-		} else {
-			rep.TargetAccount.Acct = row.TargetAccountUsername
-		}
-
-		reports = append(reports, rep)
+	reports := make([]AdminReport, 0, end-start)
+	for _, report := range memReports[start:end] {
+		reports = append(reports, mapMemReport(report))
 	}
 
 	web.JSON(w, http.StatusOK, reports)
@@ -155,10 +366,39 @@ func (h *ReportsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.useDB() {
+		report := h.memReports[id]
+		if report == nil {
+			web.JSONError(w, http.StatusNotFound, "Not found")
+			return
+		}
+		web.JSON(w, http.StatusOK, mapMemReport(report))
+		return
+	}
+
 	row, err := h.queries.AdminGetReport(r.Context(), id)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Not found")
 		return
+	}
+
+	accountIDs := []int64{row.AccountID, row.TargetAccountID}
+	if row.AssignedAccountID.Valid {
+		accountIDs = append(accountIDs, row.AssignedAccountID.Int64)
+	}
+	if row.ActionTakenByAccountID.Valid {
+		accountIDs = append(accountIDs, row.ActionTakenByAccountID.Int64)
+	}
+
+	dbAccounts, err := h.queries.GetAccountsByIDs(r.Context(), accountIDs)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+
+	accountMap := make(map[int64]*v1.Account, len(dbAccounts))
+	for _, acc := range dbAccounts {
+		accountMap[acc.ID] = accountFromDB(acc)
 	}
 
 	rep := AdminReport{
@@ -171,13 +411,243 @@ func (h *ReportsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		AccountID:       strconv.FormatInt(row.AccountID, 10),
 		CreatedAt:       row.CreatedAt.Time.String(),
 		UpdatedAt:       row.UpdatedAt.Time.String(),
+		StatusIDs:       idSliceToStrings(row.StatusIds),
+		RuleIDs:         idSliceToStrings(row.RuleIds),
 	}
-	// Note: AdminGetReport does not join accounts, so we miss account details in detail view unless we fetch them or update query.
-	// For MVP, we proceed without full account details in Get, or we can fetch them separately if needed.
-	// The List query had JOINs. The Get query did not (in generated code inspection).
-	// Let's rely on basic ID info for now.
+
+	if row.ActionTakenAt.Valid {
+		t := row.ActionTakenAt.Time.String()
+		rep.ActionTakenAt = &t
+	}
+
+	rep.Account = accountMap[row.AccountID]
+	rep.TargetAccount = accountMap[row.TargetAccountID]
+
+	if row.AssignedAccountID.Valid {
+		rep.AssignedAccount = accountMap[row.AssignedAccountID.Int64]
+	}
+	if row.ActionTakenByAccountID.Valid {
+		rep.ActionTakenBy = accountMap[row.ActionTakenByAccountID.Int64]
+	}
 
 	web.JSON(w, http.StatusOK, rep)
+}
+
+// Update handles PUT /api/v1/admin/reports/:id
+func (h *ReportsHandler) Update(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
+	}
+
+	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Not found")
+		return
+	}
+
+	var payload map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request")
+		return
+	}
+
+	var category pgtype.Int4
+	if raw, ok := payload["category"]; ok {
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			web.JSONError(w, http.StatusUnprocessableEntity, "Invalid category")
+			return
+		}
+		mapped, ok := categoryFromString(value)
+		if !ok {
+			web.JSONError(w, http.StatusUnprocessableEntity, "Invalid category")
+			return
+		}
+		category = pgtype.Int4{Int32: mapped, Valid: true}
+	}
+
+	ruleIDsProvided := false
+	var ruleIDs []int64
+	if raw, ok := payload["rule_ids"]; ok {
+		ruleIDsProvided = true
+		trimmed := strings.TrimSpace(string(raw))
+		if trimmed == "" || trimmed == "null" {
+			web.JSONError(w, http.StatusUnprocessableEntity, "Invalid rule_ids")
+			return
+		}
+
+		var rawStrings []string
+		if err := json.Unmarshal(raw, &rawStrings); err == nil {
+			parsed := make([]int64, 0, len(rawStrings))
+			for _, value := range rawStrings {
+				value = strings.TrimSpace(value)
+				if value == "" {
+					web.JSONError(w, http.StatusUnprocessableEntity, "Invalid rule_ids")
+					return
+				}
+				idValue, err := strconv.ParseInt(value, 10, 64)
+				if err != nil || idValue <= 0 {
+					web.JSONError(w, http.StatusUnprocessableEntity, "Invalid rule_ids")
+					return
+				}
+				parsed = append(parsed, idValue)
+			}
+			ruleIDs = parsed
+		} else {
+			var rawInts []int64
+			if err := json.Unmarshal(raw, &rawInts); err != nil {
+				web.JSONError(w, http.StatusUnprocessableEntity, "Invalid rule_ids")
+				return
+			}
+			for _, idValue := range rawInts {
+				if idValue <= 0 {
+					web.JSONError(w, http.StatusUnprocessableEntity, "Invalid rule_ids")
+					return
+				}
+			}
+			ruleIDs = rawInts
+		}
+	}
+
+	if !h.useDB() {
+		report := h.memReports[id]
+		if report == nil {
+			web.JSONError(w, http.StatusNotFound, "Not found")
+			return
+		}
+		if category.Valid {
+			report.Category = category.Int32
+		}
+		if ruleIDsProvided {
+			report.RuleIDs = ruleIDs
+		}
+		report.UpdatedAt = time.Now().UTC()
+		web.JSON(w, http.StatusOK, mapMemReport(report))
+		return
+	}
+
+	_, err = h.queries.AdminUpdateReport(r.Context(), db.AdminUpdateReportParams{
+		ID:       id,
+		Category: category,
+		RuleIds:  ruleIDs,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			web.JSONError(w, http.StatusNotFound, "Not found")
+			return
+		}
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+
+	h.Get(w, r)
+}
+
+// AssignToSelf handles POST /api/v1/admin/reports/:id/assign_to_self
+func (h *ReportsHandler) AssignToSelf(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
+	}
+
+	adminID, _ := middleware.GetAccountID(r.Context())
+
+	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Not found")
+		return
+	}
+
+	if !h.useDB() {
+		report := h.memReports[id]
+		if report == nil {
+			web.JSONError(w, http.StatusNotFound, "Not found")
+			return
+		}
+		report.AssignedAccount = accountFromID(adminID)
+		report.UpdatedAt = time.Now().UTC()
+		web.JSON(w, http.StatusOK, mapMemReport(report))
+		return
+	}
+
+	err = h.queries.AdminAssignReport(r.Context(), db.AdminAssignReportParams{
+		ID:                id,
+		AssignedAccountID: pgtype.Int8{Int64: adminID, Valid: true},
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+
+	h.Get(w, r)
+}
+
+// Unassign handles POST /api/v1/admin/reports/:id/unassign
+func (h *ReportsHandler) Unassign(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
+	}
+
+	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Not found")
+		return
+	}
+
+	if !h.useDB() {
+		report := h.memReports[id]
+		if report == nil {
+			web.JSONError(w, http.StatusNotFound, "Not found")
+			return
+		}
+		report.AssignedAccount = nil
+		report.UpdatedAt = time.Now().UTC()
+		web.JSON(w, http.StatusOK, mapMemReport(report))
+		return
+	}
+
+	err = h.queries.AdminAssignReport(r.Context(), db.AdminAssignReportParams{
+		ID:                id,
+		AssignedAccountID: pgtype.Int8{Valid: false},
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+
+	h.Get(w, r)
+}
+
+// Reopen handles POST /api/v1/admin/reports/:id/reopen
+func (h *ReportsHandler) Reopen(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(w, r, h.queries); err != nil {
+		return
+	}
+
+	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Not found")
+		return
+	}
+
+	if !h.useDB() {
+		report := h.memReports[id]
+		if report == nil {
+			web.JSONError(w, http.StatusNotFound, "Not found")
+			return
+		}
+		report.ActionTakenAt = nil
+		report.ActionTakenBy = nil
+		report.UpdatedAt = time.Now().UTC()
+		web.JSON(w, http.StatusOK, mapMemReport(report))
+		return
+	}
+
+	if err := h.queries.AdminUnresolveReport(r.Context(), id); err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+
+	h.Get(w, r)
 }
 
 // Resolve handles POST /api/v1/admin/reports/:id/resolve
@@ -186,12 +656,25 @@ func (h *ReportsHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get current user ID from context as actor
 	adminID, _ := middleware.GetAccountID(r.Context())
 
 	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Not found")
+		return
+	}
+
+	if !h.useDB() {
+		report := h.memReports[id]
+		if report == nil {
+			web.JSONError(w, http.StatusNotFound, "Not found")
+			return
+		}
+		now := time.Now().UTC()
+		report.ActionTakenAt = &now
+		report.ActionTakenBy = accountFromID(adminID)
+		report.UpdatedAt = now
+		web.JSON(w, http.StatusOK, mapMemReport(report))
 		return
 	}
 
@@ -211,5 +694,9 @@ func (h *ReportsHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 func (h *ReportsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/admin/reports", h.GetAll)
 	mux.HandleFunc("GET /api/v1/admin/reports/{id}", h.Get)
+	mux.HandleFunc("PUT /api/v1/admin/reports/{id}", h.Update)
 	mux.HandleFunc("POST /api/v1/admin/reports/{id}/resolve", h.Resolve)
+	mux.HandleFunc("POST /api/v1/admin/reports/{id}/assign_to_self", h.AssignToSelf)
+	mux.HandleFunc("POST /api/v1/admin/reports/{id}/unassign", h.Unassign)
+	mux.HandleFunc("POST /api/v1/admin/reports/{id}/reopen", h.Reopen)
 }

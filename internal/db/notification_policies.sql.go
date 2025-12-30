@@ -46,11 +46,11 @@ ON CONFLICT (account_id, from_account_id) DO NOTHING
 
 type BulkAcceptNotificationRequestsParams struct {
 	AccountID int64   `db:"account_id" json:"account_id"`
-	Column2   []int64 `db:"column_2" json:"column_2"`
+	Ids       []int64 `db:"ids" json:"ids"`
 }
 
 func (q *Queries) BulkAcceptNotificationRequests(ctx context.Context, arg BulkAcceptNotificationRequestsParams) error {
-	_, err := q.db.Exec(ctx, bulkAcceptNotificationRequests, arg.AccountID, arg.Column2)
+	_, err := q.db.Exec(ctx, bulkAcceptNotificationRequests, arg.AccountID, arg.Ids)
 	return err
 }
 
@@ -61,11 +61,11 @@ WHERE account_id = $1 AND id = ANY($2::bigint[])
 
 type BulkDismissNotificationRequestsParams struct {
 	AccountID int64   `db:"account_id" json:"account_id"`
-	Column2   []int64 `db:"column_2" json:"column_2"`
+	Ids       []int64 `db:"ids" json:"ids"`
 }
 
 func (q *Queries) BulkDismissNotificationRequests(ctx context.Context, arg BulkDismissNotificationRequestsParams) error {
-	_, err := q.db.Exec(ctx, bulkDismissNotificationRequests, arg.AccountID, arg.Column2)
+	_, err := q.db.Exec(ctx, bulkDismissNotificationRequests, arg.AccountID, arg.Ids)
 	return err
 }
 
