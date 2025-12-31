@@ -57,6 +57,28 @@ func TestTrendsHandler_IndexAlias_MockMode(t *testing.T) {
 	}
 }
 
+func TestTrendsHandler_Statuses_MockMode(t *testing.T) {
+	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
+	h := NewTrendsHandler(nil, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/trends/statuses", nil)
+	rec := httptest.NewRecorder()
+
+	h.Statuses(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var statuses []Status
+	if err := json.Unmarshal(rec.Body.Bytes(), &statuses); err != nil {
+		t.Fatalf("Failed to unmarshal response: %v", err)
+	}
+	if len(statuses) != 0 {
+		t.Fatalf("expected 0 statuses, got %d", len(statuses))
+	}
+}
+
 func TestSerializePreviewCard_Metadata(t *testing.T) {
 	publishedAt := time.Date(2024, 7, 1, 12, 0, 0, 0, time.UTC)
 	card := db.PreviewCard{

@@ -75,7 +75,7 @@ Missing routes (from `mastodon/config/routes/api.rb`)
 
 Behavior gaps
 - [x] /api/v1/instance uses static data and mismatched version string.
-- Trends links now backed by preview cards; suggestions deletion and several account/status payloads are still minimal or mock.
+- Trends links now backed by preview cards; trending statuses payloads now use the full status serializer; suggestions deletion and several account/status payloads are still minimal or mock.
 - Scheduled status creation is missing (no `scheduled_at` in POST /api/v1/statuses).
 
 Plan

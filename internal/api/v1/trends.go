@@ -96,29 +96,48 @@ func (h *TrendsHandler) Statuses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	statuses, err := h.queries.GetTrendingStatuses(r.Context(), int32(limit))
+	ctx := r.Context()
+	rows, err := h.queries.GetTrendingStatuses(ctx, int32(limit))
 	if err != nil {
 		web.JSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	resp := []Status{}
-	for _, s := range statuses {
-		account := Account{
-			Username:    s.AccountUsername,
-			DisplayName: s.AccountDisplayName,
-		}
-		if s.AccountAvatar.Valid {
-			account.Avatar = s.AccountAvatar.String
-		}
+	if len(rows) == 0 {
+		web.JSON(w, http.StatusOK, []Status{})
+		return
+	}
 
-		resp = append(resp, Status{
-			ID:         strconv.FormatInt(s.ID, 10),
-			Content:    s.Text,
-			Account:    account,
-			Visibility: "public",
-			// Minimal fields
-		})
+	statusIDs := make([]int64, 0, len(rows))
+	seen := make(map[int64]struct{}, len(rows))
+	for _, row := range rows {
+		if _, ok := seen[row.ID]; ok {
+			continue
+		}
+		seen[row.ID] = struct{}{}
+		statusIDs = append(statusIDs, row.ID)
+	}
+
+	dbStatuses, err := h.queries.GetStatusesByIDs(ctx, statusIDs)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+
+	serialized := SerializeStatuses(ctx, h.queries, h.cfg, dbStatuses)
+	statusByID := make(map[int64]Status, len(serialized))
+	for i, dbStatus := range dbStatuses {
+		if i >= len(serialized) {
+			break
+		}
+		statusByID[dbStatus.ID] = serialized[i]
+	}
+
+	resp := make([]Status, 0, len(rows))
+	for _, row := range rows {
+		if status, ok := statusByID[row.ID]; ok {
+			resp = append(resp, status)
+		}
 	}
 
 	web.JSON(w, http.StatusOK, resp)
