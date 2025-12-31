@@ -56,9 +56,12 @@ func (h *FollowRequestsHandler) List(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		accounts := make([]Account, len(dbReqs))
-		for i, a := range dbReqs {
-			accounts[i] = SerializeAccount(h.cfg, a)
+		accountsMap := serializeAccounts(r.Context(), h.queries, h.cfg, dbReqs, true)
+		accounts := make([]Account, 0, len(dbReqs))
+		for _, a := range dbReqs {
+			if acc, ok := accountsMap[a.ID]; ok {
+				accounts = append(accounts, acc)
+			}
 		}
 		web.JSON(w, http.StatusOK, accounts)
 		return

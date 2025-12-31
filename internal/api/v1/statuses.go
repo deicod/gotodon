@@ -418,6 +418,17 @@ func (h *StatusesHandler) processMentions(ctx context.Context, q mentionStore, s
 		// A safer way is to map by AccountID if we include it in return.
 		// Our CreateNotifications returns * including AccountID.
 
+		serializedAccounts := map[int64]Account{}
+		if len(accountMap) > 0 {
+			accounts := make([]db.Account, 0, len(accountMap))
+			for _, acc := range accountMap {
+				accounts = append(accounts, acc)
+			}
+			if dataQueries, ok := q.(accountDataQueries); ok {
+				serializedAccounts = serializeAccounts(ctx, dataQueries, h.cfg, accounts, true)
+			}
+		}
+
 		for _, notif := range notifs {
 			acc := accountMap[notif.AccountID]
 			tasks = append(tasks, notificationTask{
@@ -425,7 +436,10 @@ func (h *StatusesHandler) processMentions(ctx context.Context, q mentionStore, s
 				Account:      acc,
 			})
 
-			apiAcc := SerializeAccount(h.cfg, acc)
+			apiAcc, ok := serializedAccounts[acc.ID]
+			if !ok {
+				apiAcc = SerializeAccount(h.cfg, acc)
+			}
 
 			// Populate return mentions (simple version)
 			mentions = append(mentions, Mention{

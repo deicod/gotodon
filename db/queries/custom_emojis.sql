@@ -3,6 +3,15 @@ SELECT * FROM custom_emojis
 WHERE disabled = false
 ORDER BY shortcode ASC;
 
+-- name: ListCustomEmojisByShortcodesAndDomain :many
+SELECT * FROM custom_emojis
+WHERE disabled = false
+  AND shortcode = ANY(@shortcodes::text[])
+  AND (
+    (domain IS NULL AND @domain = '')
+    OR domain = @domain
+  );
+
 -- name: GetCustomEmoji :one
 SELECT * FROM custom_emojis
 WHERE shortcode = $1 AND (domain IS NULL OR domain = $2)

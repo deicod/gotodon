@@ -58,29 +58,36 @@ func (h *AccountsHandler) useDB() bool {
 
 // Account represents a Mastodon account in API responses
 type Account struct {
-	ID             string        `json:"id"`
-	Username       string        `json:"username"`
-	Acct           string        `json:"acct"`
-	DisplayName    string        `json:"display_name"`
-	Locked         bool          `json:"locked"`
-	Bot            bool          `json:"bot"`
-	Discoverable   *bool         `json:"discoverable"`
-	Indexable      bool          `json:"indexable"`
-	Group          bool          `json:"group"`
-	CreatedAt      time.Time     `json:"created_at"`
-	Note           string        `json:"note"`
-	URL            string        `json:"url"`
-	URI            string        `json:"uri"`
-	Avatar         string        `json:"avatar"`
-	AvatarStatic   string        `json:"avatar_static"`
-	Header         string        `json:"header"`
-	HeaderStatic   string        `json:"header_static"`
-	FollowersCount int64         `json:"followers_count"`
-	FollowingCount int64         `json:"following_count"`
-	StatusesCount  int64         `json:"statuses_count"`
-	LastStatusAt   *string       `json:"last_status_at"`
-	Emojis         []CustomEmoji `json:"emojis"`
-	Fields         []Field       `json:"fields"`
+	ID              string                 `json:"id"`
+	Username        string                 `json:"username"`
+	Acct            string                 `json:"acct"`
+	DisplayName     string                 `json:"display_name"`
+	Locked          bool                   `json:"locked"`
+	Bot             bool                   `json:"bot"`
+	Discoverable    *bool                  `json:"discoverable"`
+	Indexable       bool                   `json:"indexable"`
+	Group           bool                   `json:"group"`
+	CreatedAt       time.Time              `json:"created_at"`
+	Note            string                 `json:"note"`
+	URL             string                 `json:"url"`
+	URI             string                 `json:"uri"`
+	Avatar          string                 `json:"avatar"`
+	AvatarStatic    string                 `json:"avatar_static"`
+	Header          string                 `json:"header"`
+	HeaderStatic    string                 `json:"header_static"`
+	FollowersCount  int64                  `json:"followers_count"`
+	FollowingCount  int64                  `json:"following_count"`
+	StatusesCount   int64                  `json:"statuses_count"`
+	LastStatusAt    *string                `json:"last_status_at"`
+	HideCollections bool                   `json:"hide_collections"`
+	Moved           *Account               `json:"moved,omitempty"`
+	Suspended       *bool                  `json:"suspended,omitempty"`
+	Limited         *bool                  `json:"limited,omitempty"`
+	NoIndex         *bool                  `json:"noindex,omitempty"`
+	Memorial        *bool                  `json:"memorial,omitempty"`
+	Roles           *[]AccountRoleSummary  `json:"roles,omitempty"`
+	Emojis          []CustomEmoji          `json:"emojis"`
+	Fields          []Field                `json:"fields"`
 }
 
 // Field represents a profile field
@@ -99,12 +106,17 @@ type CredentialAccount struct {
 
 // AccountSource contains the profile source data
 type AccountSource struct {
-	Privacy             string  `json:"privacy"`
-	Sensitive           bool    `json:"sensitive"`
-	Language            string  `json:"language"`
-	Note                string  `json:"note"`
-	Fields              []Field `json:"fields"`
-	FollowRequestsCount int     `json:"follow_requests_count"`
+	Privacy             string   `json:"privacy"`
+	Sensitive           bool     `json:"sensitive"`
+	Language            string   `json:"language"`
+	Note                string   `json:"note"`
+	Fields              []Field  `json:"fields"`
+	FollowRequestsCount int      `json:"follow_requests_count"`
+	HideCollections     bool     `json:"hide_collections"`
+	Discoverable        bool     `json:"discoverable"`
+	Indexable           bool     `json:"indexable"`
+	AttributionDomains  []string `json:"attribution_domains"`
+	QuotePolicy         string   `json:"quote_policy"`
 }
 
 // AccountRole represents a user role
@@ -116,25 +128,27 @@ type AccountRole struct {
 	Highlighted bool   `json:"highlighted"`
 }
 
+// AccountRoleSummary represents a public role entry for local accounts.
+type AccountRoleSummary struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Color string `json:"color"`
+}
+
 func (h *AccountsHandler) dbAccountToAPI(dbAcc db.Account) Account {
 	return SerializeAccount(h.cfg, dbAcc)
 }
 
 func (h *AccountsHandler) dbAccountWithStats(ctx context.Context, dbAcc db.Account) Account {
-	acc := h.dbAccountToAPI(dbAcc)
-	if h.useDB() {
-		stats, err := h.queries.GetAccountStats(ctx, dbAcc.ID)
-		if err == nil {
-			acc.FollowersCount = stats.FollowersCount
-			acc.FollowingCount = stats.FollowingCount
-			acc.StatusesCount = stats.StatusesCount
-			if stats.LastStatusAt.Valid {
-				lastStatus := stats.LastStatusAt.Time.Format("2006-01-02")
-				acc.LastStatusAt = &lastStatus
-			}
-		}
+	if !h.useDB() {
+		return h.dbAccountToAPI(dbAcc)
 	}
-	return acc
+
+	accounts := serializeAccounts(ctx, h.queries, h.cfg, []db.Account{dbAcc}, true)
+	if acc, ok := accounts[dbAcc.ID]; ok {
+		return acc
+	}
+	return h.dbAccountToAPI(dbAcc)
 }
 
 // VerifyCredentials handles GET /api/v1/accounts/verify_credentials
@@ -153,18 +167,7 @@ func (h *AccountsHandler) VerifyCredentials(w http.ResponseWriter, r *http.Reque
 			web.JSONError(w, http.StatusNotFound, "Record not found")
 			return
 		}
-		acc := h.dbAccountWithStats(ctx, dbAcc)
-		web.JSON(w, http.StatusOK, CredentialAccount{
-			Account: acc,
-			Source: AccountSource{
-				Privacy:             "public",
-				Sensitive:           false,
-				Language:            "en",
-				Note:                dbAcc.Note,
-				Fields:              []Field{},
-				FollowRequestsCount: 0,
-			},
-		})
+		web.JSON(w, http.StatusOK, buildCredentialAccount(ctx, h.queries, h.cfg, dbAcc))
 		return
 	}
 
@@ -203,6 +206,11 @@ func (h *AccountsHandler) VerifyCredentials(w http.ResponseWriter, r *http.Reque
 			Note:                "",
 			Fields:              []Field{},
 			FollowRequestsCount: 0,
+			HideCollections:     false,
+			Discoverable:        true,
+			Indexable:           true,
+			AttributionDomains:  []string{},
+			QuotePolicy:         "public",
 		},
 	})
 }
@@ -256,6 +264,16 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 		if req.Indexable != nil {
 			params.Indexable = pgtype.Bool{Bool: *req.Indexable, Valid: true}
 		}
+		if req.HideCollections != nil {
+			params.HideCollections = pgtype.Bool{Bool: *req.HideCollections, Valid: true}
+		}
+		if req.Bot != nil {
+			actorType := ""
+			if *req.Bot {
+				actorType = "Service"
+			}
+			params.ActorType = pgtype.Text{String: actorType, Valid: true}
+		}
 
 		dbAcc, err := h.queries.UpdateAccount(ctx, params)
 		if err != nil {
@@ -263,64 +281,34 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 			return
 		}
 
-		// Update user settings (source params) - mapped to preferences table
+		// Update user settings (source params)
 		if req.SourcePrivacy != nil || req.SourceSensitive != nil || req.SourceLanguage != nil {
-			// Fetch existing preferences to defaults if needed
-			currentPrefs, err := h.queries.GetPreferences(ctx, accountID)
+			settings := map[string]any{}
+			user, err := h.queries.GetUserByAccountID(ctx, accountID)
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				web.JSONError(w, http.StatusInternalServerError, "Failed to fetch preferences")
+				return
+			}
+			if err == nil {
+				settings = settingsFromText(user.Settings)
+			}
+
+			applySourceSettings(settings, req.SourcePrivacy, req.SourceSensitive, req.SourceLanguage)
+			encoded, err := settingsToText(settings)
 			if err != nil {
-				if !errors.Is(err, pgx.ErrNoRows) {
-					web.JSONError(w, http.StatusInternalServerError, "Failed to fetch preferences")
-					return
-				}
-				// Likely not found, use defaults
-				currentPrefs = db.Preference{
-					PostingDefaultVisibility: pgtype.Text{String: "public", Valid: true},
-					PostingDefaultSensitive:  pgtype.Bool{Bool: false, Valid: true},
-					PostingDefaultLanguage:   pgtype.Text{String: "en", Valid: true},
-					ReadingExpandMedia:       pgtype.Text{String: "default", Valid: true},
-					ReadingExpandSpoilers:    pgtype.Bool{Bool: false, Valid: true},
-				}
+				web.JSONError(w, http.StatusInternalServerError, "Failed to encode preferences")
+				return
 			}
-
-			upsertParams := db.UpsertPreferencesParams{
-				AccountID:                accountID,
-				PostingDefaultVisibility: currentPrefs.PostingDefaultVisibility,
-				PostingDefaultSensitive:  currentPrefs.PostingDefaultSensitive,
-				PostingDefaultLanguage:   currentPrefs.PostingDefaultLanguage,
-				ReadingExpandMedia:       currentPrefs.ReadingExpandMedia,
-				ReadingExpandSpoilers:    currentPrefs.ReadingExpandSpoilers,
-			}
-
-			if req.SourcePrivacy != nil {
-				upsertParams.PostingDefaultVisibility = pgtype.Text{String: *req.SourcePrivacy, Valid: true}
-			}
-			if req.SourceSensitive != nil {
-				upsertParams.PostingDefaultSensitive = pgtype.Bool{Bool: *req.SourceSensitive, Valid: true}
-			}
-			if req.SourceLanguage != nil {
-				upsertParams.PostingDefaultLanguage = pgtype.Text{String: *req.SourceLanguage, Valid: true}
-			}
-
-			_, err = h.queries.UpsertPreferences(ctx, upsertParams)
-			if err != nil {
+			if err := h.queries.UpdateUserSettings(ctx, db.UpdateUserSettingsParams{
+				AccountID: accountID,
+				Settings:  encoded,
+			}); err != nil {
 				web.JSONError(w, http.StatusInternalServerError, "Failed to update preferences")
 				return
 			}
-			// Ignore error for now, non-critical if preference update fails but main account updated
 		}
 
-		acc := h.dbAccountWithStats(ctx, dbAcc)
-		web.JSON(w, http.StatusOK, CredentialAccount{
-			Account: acc,
-			Source: AccountSource{
-				Privacy:             "public",
-				Sensitive:           false,
-				Language:            "en",
-				Note:                dbAcc.Note,
-				Fields:              []Field{},
-				FollowRequestsCount: 0,
-			},
-		})
+		web.JSON(w, http.StatusOK, buildCredentialAccount(ctx, h.queries, h.cfg, dbAcc))
 		return
 	}
 
@@ -412,10 +400,7 @@ func (h *AccountsHandler) Index(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accountsByID := make(map[int64]Account, len(dbAccounts))
-	for _, dbAcc := range dbAccounts {
-		accountsByID[dbAcc.ID] = h.dbAccountWithStats(ctx, dbAcc)
-	}
+	accountsByID := serializeAccounts(ctx, h.queries, h.cfg, dbAccounts, true)
 
 	resp := make([]Account, 0, len(dbAccounts))
 	for _, id := range ids {
@@ -601,9 +586,12 @@ func (h *AccountsHandler) Search(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		accounts := make([]Account, len(dbAccounts))
-		for i, dbAcc := range dbAccounts {
-			accounts[i] = h.dbAccountWithStats(ctx, dbAcc)
+		accountsMap := serializeAccounts(ctx, h.queries, h.cfg, dbAccounts, true)
+		accounts := make([]Account, 0, len(dbAccounts))
+		for _, dbAcc := range dbAccounts {
+			if acc, ok := accountsMap[dbAcc.ID]; ok {
+				accounts = append(accounts, acc)
+			}
 		}
 		web.JSON(w, http.StatusOK, accounts)
 		return
@@ -633,9 +621,12 @@ func (h *AccountsHandler) Followers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		accounts := make([]Account, len(followers))
-		for i, acc := range followers {
-			accounts[i] = h.dbAccountToAPI(acc)
+		accountsMap := serializeAccounts(r.Context(), h.queries, h.cfg, followers, true)
+		accounts := make([]Account, 0, len(followers))
+		for _, acc := range followers {
+			if apiAcc, ok := accountsMap[acc.ID]; ok {
+				accounts = append(accounts, apiAcc)
+			}
 		}
 		web.JSON(w, http.StatusOK, accounts)
 		return
@@ -665,9 +656,12 @@ func (h *AccountsHandler) Following(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		accounts := make([]Account, len(following))
-		for i, acc := range following {
-			accounts[i] = h.dbAccountToAPI(acc)
+		accountsMap := serializeAccounts(r.Context(), h.queries, h.cfg, following, true)
+		accounts := make([]Account, 0, len(following))
+		for _, acc := range following {
+			if apiAcc, ok := accountsMap[acc.ID]; ok {
+				accounts = append(accounts, apiAcc)
+			}
 		}
 		web.JSON(w, http.StatusOK, accounts)
 		return
@@ -773,6 +767,7 @@ func (h *AccountsHandler) Endorsements(w http.ResponseWriter, r *http.Request) {
 	for _, acc := range dbAccounts {
 		accountsByID[acc.ID] = acc
 	}
+	serialized := serializeAccounts(r.Context(), h.queries, h.cfg, dbAccounts, true)
 
 	resp := make([]Account, 0, len(filtered))
 	for _, pin := range filtered {
@@ -780,7 +775,9 @@ func (h *AccountsHandler) Endorsements(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			continue
 		}
-		resp = append(resp, SerializeAccount(h.cfg, acc))
+		if apiAcc, ok := serialized[acc.ID]; ok {
+			resp = append(resp, apiAcc)
+		}
 	}
 
 	web.JSON(w, http.StatusOK, resp)

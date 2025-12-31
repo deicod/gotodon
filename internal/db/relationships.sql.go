@@ -11,6 +11,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countFollowRequestsForAccount = `-- name: CountFollowRequestsForAccount :one
+SELECT COUNT(*) FROM follow_requests WHERE target_account_id = $1
+`
+
+func (q *Queries) CountFollowRequestsForAccount(ctx context.Context, targetAccountID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countFollowRequestsForAccount, targetAccountID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countFollowers = `-- name: CountFollowers :one
 SELECT COUNT(*) FROM follows WHERE target_account_id = $1
 `

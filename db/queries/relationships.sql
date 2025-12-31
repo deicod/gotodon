@@ -46,6 +46,9 @@ WHERE fr.target_account_id = $1 AND a.suspended_at IS NULL
 ORDER BY fr.id DESC
 LIMIT $2 OFFSET $3;
 
+-- name: CountFollowRequestsForAccount :one
+SELECT COUNT(*) FROM follow_requests WHERE target_account_id = $1;
+
 -- name: DeleteFollowRequest :exec
 DELETE FROM follow_requests WHERE account_id = $1 AND target_account_id = $2;
 

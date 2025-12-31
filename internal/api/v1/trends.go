@@ -256,10 +256,7 @@ func (h *TrendsHandler) previewCardAuthorAccounts(ctx context.Context, rows []db
 	if err != nil {
 		return authorAccounts
 	}
-	for _, acc := range dbAccounts {
-		authorAccounts[acc.ID] = SerializeAccount(h.cfg, acc)
-	}
-	return authorAccounts
+	return serializeAccounts(ctx, h.queries, h.cfg, dbAccounts, true)
 }
 
 // RegisterRoutes registers trends routes

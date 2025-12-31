@@ -42,20 +42,14 @@ func (h *NotificationsHandler) useDB() bool {
 }
 
 func (h *NotificationsHandler) accountWithStats(ctx context.Context, dbAcc db.Account) Account {
-	acc := SerializeAccount(h.cfg, dbAcc)
-	if h.useDB() {
-		stats, err := h.queries.GetAccountStats(ctx, dbAcc.ID)
-		if err == nil {
-			acc.FollowersCount = stats.FollowersCount
-			acc.FollowingCount = stats.FollowingCount
-			acc.StatusesCount = stats.StatusesCount
-			if stats.LastStatusAt.Valid {
-				lastStatus := stats.LastStatusAt.Time.Format("2006-01-02")
-				acc.LastStatusAt = &lastStatus
-			}
-		}
+	if !h.useDB() {
+		return SerializeAccount(h.cfg, dbAcc)
 	}
-	return acc
+	accounts := serializeAccounts(ctx, h.queries, h.cfg, []db.Account{dbAcc}, true)
+	if acc, ok := accounts[dbAcc.ID]; ok {
+		return acc
+	}
+	return SerializeAccount(h.cfg, dbAcc)
 }
 
 func (h *NotificationsHandler) notificationRequestFromDB(ctx context.Context, dbReq db.NotificationRequest) NotificationRequest {
@@ -115,19 +109,7 @@ func (h *NotificationsHandler) dbNotificationToAPI(ctx context.Context, dbNotif 
 	if h.useDB() && dbNotif.FromAccountID > 0 {
 		dbAcc, err := h.queries.GetAccountByID(ctx, dbNotif.FromAccountID)
 		if err == nil {
-			discoverable := dbAcc.Discoverable.Valid && dbAcc.Discoverable.Bool
-			notif.Account = Account{
-				ID:           strconv.FormatInt(dbAcc.ID, 10),
-				Username:     dbAcc.Username,
-				Acct:         dbAcc.Username,
-				DisplayName:  dbAcc.DisplayName,
-				Discoverable: &discoverable,
-				Emojis:       []CustomEmoji{},
-				Fields:       []Field{},
-			}
-			if dbAcc.CreatedAt.Valid {
-				notif.Account.CreatedAt = dbAcc.CreatedAt.Time
-			}
+			notif.Account = h.accountWithStats(ctx, dbAcc)
 		}
 	}
 

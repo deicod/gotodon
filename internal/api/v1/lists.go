@@ -6,15 +6,15 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"time"
-
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/snowflake"
@@ -43,6 +43,7 @@ var stringToRepliesPolicy = map[string]int32{
 type ListsHandler struct {
 	queries *db.Queries
 	idGen   *snowflake.Generator
+	cfg     *config.Config
 	// In-memory fallback for tests when queries is nil
 	memLists       map[int64]map[int64]*List
 	memListMembers map[int64][]int64
@@ -50,10 +51,11 @@ type ListsHandler struct {
 }
 
 // NewListsHandler creates a new lists handler with database
-func NewListsHandler(queries *db.Queries) *ListsHandler {
+func NewListsHandler(queries *db.Queries, cfg *config.Config) *ListsHandler {
 	return &ListsHandler{
 		queries:        queries,
 		idGen:          snowflake.NewGenerator(),
+		cfg:            cfg,
 		memLists:       make(map[int64]map[int64]*List),
 		memListMembers: make(map[int64][]int64),
 	}
@@ -441,23 +443,14 @@ func (h *ListsHandler) GetAccounts(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		serialized := serializeAccounts(r.Context(), h.queries, h.cfg, memberAccounts, true)
 		accounts := make([]Account, 0, len(memberAccounts))
-		discoverable := true
 		for _, dbAcc := range memberAccounts {
-			var createdAt time.Time
-			if dbAcc.CreatedAt.Valid {
-				createdAt = dbAcc.CreatedAt.Time
+			if apiAcc, ok := serialized[dbAcc.ID]; ok {
+				accounts = append(accounts, apiAcc)
+				continue
 			}
-			accounts = append(accounts, Account{
-				ID:           strconv.FormatInt(dbAcc.ID, 10),
-				Username:     dbAcc.Username,
-				Acct:         dbAcc.Username,
-				DisplayName:  dbAcc.DisplayName,
-				Discoverable: &discoverable,
-				CreatedAt:    createdAt,
-				Emojis:       []CustomEmoji{},
-				Fields:       []Field{},
-			})
+			accounts = append(accounts, SerializeAccount(h.cfg, dbAcc))
 		}
 		web.JSON(w, http.StatusOK, accounts)
 		return

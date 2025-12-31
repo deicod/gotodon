@@ -787,6 +787,40 @@ func (q *Queries) GetKnownDomains(ctx context.Context) ([]pgtype.Text, error) {
 	return items, nil
 }
 
+const listAccountStatsByAccountIDs = `-- name: ListAccountStatsByAccountIDs :many
+SELECT id, account_id, statuses_count, following_count, followers_count, created_at, updated_at, last_status_at FROM account_stats
+WHERE account_id = ANY($1::bigint[])
+`
+
+func (q *Queries) ListAccountStatsByAccountIDs(ctx context.Context, accountIds []int64) ([]AccountStat, error) {
+	rows, err := q.db.Query(ctx, listAccountStatsByAccountIDs, accountIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AccountStat{}
+	for rows.Next() {
+		var i AccountStat
+		if err := rows.Scan(
+			&i.ID,
+			&i.AccountID,
+			&i.StatusesCount,
+			&i.FollowingCount,
+			&i.FollowersCount,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.LastStatusAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listLocalAccounts = `-- name: ListLocalAccounts :many
 SELECT id, username, domain, private_key, public_key, created_at, updated_at, note, display_name, uri, url, avatar_file_name, avatar_content_type, avatar_file_size, avatar_updated_at, header_file_name, header_content_type, header_file_size, header_updated_at, avatar_remote_url, locked, header_remote_url, last_webfingered_at, inbox_url, outbox_url, shared_inbox_url, followers_url, following_url, protocol, memorial, moved_to_account_id, featured_collection_url, fields, actor_type, discoverable, also_known_as, silenced_at, suspended_at, hide_collections, avatar_storage_schema_version, header_storage_schema_version, suspension_origin, sensitized_at, trendable, reviewed_at, requested_review_at, indexable, attribution_domains, id_scheme FROM accounts 
 WHERE domain IS NULL AND suspended_at IS NULL
@@ -991,21 +1025,22 @@ UPDATE accounts SET
     locked = COALESCE($4, locked),
     discoverable = COALESCE($5, discoverable),
     indexable = COALESCE($6, indexable),
-    fields = COALESCE($7, fields),
-    url = COALESCE($8, url),
-    public_key = COALESCE($9, public_key),
-    actor_type = COALESCE($10, actor_type),
-    inbox_url = COALESCE($11, inbox_url),
-    outbox_url = COALESCE($12, outbox_url),
-    shared_inbox_url = COALESCE($13, shared_inbox_url),
-    followers_url = COALESCE($14, followers_url),
-    following_url = COALESCE($15, following_url),
-    featured_collection_url = COALESCE($16, featured_collection_url),
-    avatar_remote_url = COALESCE($17, avatar_remote_url),
-    header_remote_url = COALESCE($18, header_remote_url),
-    avatar_file_name = COALESCE($19, avatar_file_name),
-    header_file_name = COALESCE($20, header_file_name),
-    last_webfingered_at = COALESCE($21, last_webfingered_at),
+    hide_collections = COALESCE($7, hide_collections),
+    fields = COALESCE($8, fields),
+    url = COALESCE($9, url),
+    public_key = COALESCE($10, public_key),
+    actor_type = COALESCE($11, actor_type),
+    inbox_url = COALESCE($12, inbox_url),
+    outbox_url = COALESCE($13, outbox_url),
+    shared_inbox_url = COALESCE($14, shared_inbox_url),
+    followers_url = COALESCE($15, followers_url),
+    following_url = COALESCE($16, following_url),
+    featured_collection_url = COALESCE($17, featured_collection_url),
+    avatar_remote_url = COALESCE($18, avatar_remote_url),
+    header_remote_url = COALESCE($19, header_remote_url),
+    avatar_file_name = COALESCE($20, avatar_file_name),
+    header_file_name = COALESCE($21, header_file_name),
+    last_webfingered_at = COALESCE($22, last_webfingered_at),
     updated_at = now()
 WHERE id = $1
 RETURNING id, username, domain, private_key, public_key, created_at, updated_at, note, display_name, uri, url, avatar_file_name, avatar_content_type, avatar_file_size, avatar_updated_at, header_file_name, header_content_type, header_file_size, header_updated_at, avatar_remote_url, locked, header_remote_url, last_webfingered_at, inbox_url, outbox_url, shared_inbox_url, followers_url, following_url, protocol, memorial, moved_to_account_id, featured_collection_url, fields, actor_type, discoverable, also_known_as, silenced_at, suspended_at, hide_collections, avatar_storage_schema_version, header_storage_schema_version, suspension_origin, sensitized_at, trendable, reviewed_at, requested_review_at, indexable, attribution_domains, id_scheme
@@ -1018,6 +1053,7 @@ type UpdateAccountParams struct {
 	Locked                pgtype.Bool        `db:"locked" json:"locked"`
 	Discoverable          pgtype.Bool        `db:"discoverable" json:"discoverable"`
 	Indexable             pgtype.Bool        `db:"indexable" json:"indexable"`
+	HideCollections       pgtype.Bool        `db:"hide_collections" json:"hide_collections"`
 	Fields                []byte             `db:"fields" json:"fields"`
 	Url                   pgtype.Text        `db:"url" json:"url"`
 	PublicKey             pgtype.Text        `db:"public_key" json:"public_key"`
@@ -1043,6 +1079,7 @@ func (q *Queries) UpdateAccount(ctx context.Context, arg UpdateAccountParams) (A
 		arg.Locked,
 		arg.Discoverable,
 		arg.Indexable,
+		arg.HideCollections,
 		arg.Fields,
 		arg.Url,
 		arg.PublicKey,

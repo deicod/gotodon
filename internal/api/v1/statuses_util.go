@@ -51,10 +51,7 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 	dbStats, _ := q.GetStatusStatsByIDs(ctx, statusIDs)
 
 	// Map data for easy lookup
-	accountsMap := make(map[int64]Account)
-	for _, a := range dbAccounts {
-		accountsMap[a.ID] = SerializeAccount(cfg, a)
-	}
+	accountsMap := serializeAccounts(ctx, q, cfg, dbAccounts, true)
 
 	mediaMap := make(map[int64][]MediaAttach)
 	for _, m := range dbMedias {
@@ -120,10 +117,7 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 	// Fetch mentioned accounts
 	if len(mentionedAccountIDs) > 0 {
 		mentionedDbAccounts, _ := q.GetAccountsByIDs(ctx, mentionedAccountIDs)
-		mentionedAccountsMap := make(map[int64]Account)
-		for _, a := range mentionedDbAccounts {
-			mentionedAccountsMap[a.ID] = SerializeAccount(cfg, a)
-		}
+		mentionedAccountsMap := serializeAccounts(ctx, q, cfg, mentionedDbAccounts, true)
 
 		for _, m := range dbMentions {
 			acc, ok := mentionedAccountsMap[m.AccountID]
@@ -181,9 +175,7 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 				ids = append(ids, id)
 			}
 			if dbAccounts, err := q.GetAccountsByIDs(ctx, ids); err == nil {
-				for _, acc := range dbAccounts {
-					authorAccounts[acc.ID] = SerializeAccount(cfg, acc)
-				}
+				authorAccounts = serializeAccounts(ctx, q, cfg, dbAccounts, true)
 			}
 		}
 
@@ -255,9 +247,7 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 		quotedAccountsMap := make(map[int64]Account)
 		if len(quotedAccountIDs) > 0 {
 			quotedDbAccounts, _ := q.GetAccountsByIDs(ctx, quotedAccountIDs)
-			for _, a := range quotedDbAccounts {
-				quotedAccountsMap[a.ID] = SerializeAccount(cfg, a)
-			}
+			quotedAccountsMap = serializeAccounts(ctx, q, cfg, quotedDbAccounts, true)
 		}
 
 		// Serialize quoted statuses (without recursing into their quotes to avoid infinite loops)
@@ -398,7 +388,11 @@ func SerializeStatusSimple(ctx context.Context, q db.Querier, cfg *config.Config
 	} else {
 		account = Account{ID: strconv.FormatInt(dbStatus.AccountID, 10), Username: "unknown"}
 		if acc, err := q.GetAccountByID(ctx, dbStatus.AccountID); err == nil {
-			account = SerializeAccount(cfg, acc)
+			if serialized := serializeAccounts(ctx, q, cfg, []db.Account{acc}, true); serialized != nil {
+				if apiAcc, ok := serialized[acc.ID]; ok {
+					account = apiAcc
+				}
+			}
 		}
 	}
 

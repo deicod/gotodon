@@ -799,18 +799,6 @@ type PollVote struct {
 	Uri       pgtype.Text        `db:"uri" json:"uri"`
 }
 
-type Preference struct {
-	ID                       int64              `db:"id" json:"id"`
-	AccountID                int64              `db:"account_id" json:"account_id"`
-	PostingDefaultVisibility pgtype.Text        `db:"posting_default_visibility" json:"posting_default_visibility"`
-	PostingDefaultSensitive  pgtype.Bool        `db:"posting_default_sensitive" json:"posting_default_sensitive"`
-	PostingDefaultLanguage   pgtype.Text        `db:"posting_default_language" json:"posting_default_language"`
-	ReadingExpandMedia       pgtype.Text        `db:"reading_expand_media" json:"reading_expand_media"`
-	ReadingExpandSpoilers    pgtype.Bool        `db:"reading_expand_spoilers" json:"reading_expand_spoilers"`
-	CreatedAt                pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt                pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
-}
-
 type PreviewCard struct {
 	ID                        int64              `db:"id" json:"id"`
 	Url                       string             `db:"url" json:"url"`

@@ -201,7 +201,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	timelinesHandler := v1.NewTimelinesHandler(queries, cfg)
 	timelinesHandler.RegisterRoutes(mux)
 
-	listsHandler := v1.NewListsHandler(queries)
+	listsHandler := v1.NewListsHandler(queries, cfg)
 	listsHandler.RegisterRoutes(mux)
 
 	pollsHandler := v1.NewPollsHandler(queries)
@@ -248,13 +248,13 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	preferencesHandler := v1.NewPreferencesHandler(queries)
 	preferencesHandler.RegisterRoutes(mux)
 
-	suggestionsHandler := v1.NewSuggestionsHandler(queries)
+	suggestionsHandler := v1.NewSuggestionsHandler(queries, cfg)
 	suggestionsHandler.RegisterRoutes(mux)
 
 	trendsHandler := v1.NewTrendsHandler(queries, cfg)
 	trendsHandler.RegisterRoutes(mux)
 
-	directoryHandler := v1.NewDirectoryHandler(queries)
+	directoryHandler := v1.NewDirectoryHandler(queries, cfg)
 	directoryHandler.RegisterRoutes(mux)
 
 	bookmarksHandler := v1.NewBookmarksHandler(queries, cfg)
@@ -287,7 +287,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	v1PushHandler := v1.NewPushHandler(queries, cfg)
 	v1PushHandler.RegisterRoutes(mux)
 
-	v1EndorsementsHandler := v1.NewEndorsementsHandler(queries)
+	v1EndorsementsHandler := v1.NewEndorsementsHandler(queries, cfg)
 	v1EndorsementsHandler.RegisterRoutes(mux)
 
 	v1FeaturedTagsHandler := v1.NewFeaturedTagsHandler(queries, cfg)
@@ -295,6 +295,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	v1TagsHandler := v1.NewTagsHandler(queries, cfg)
 	v1TagsHandler.RegisterRoutes(mux)
+
+	v1InstanceHandler := v1.NewInstanceHandler(queries, cfg)
+	v1InstanceHandler.RegisterRoutes(mux)
 
 	v1InstanceInfoHandler := v1.NewInstanceInfoHandler(queries, cfg)
 	v1InstanceInfoHandler.RegisterRoutes(mux)
@@ -466,56 +469,6 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	// V1 Reports (User API)
 	v1ReportsHandler := v1.NewReportsHandler(queries)
 	mux.HandleFunc("POST /api/v1/reports", v1ReportsHandler.Create)
-
-	// Instance info (public endpoint)
-	mux.HandleFunc("GET /api/v1/instance", func(w http.ResponseWriter, r *http.Request) {
-		web.JSON(w, http.StatusOK, map[string]interface{}{
-			"uri":               cfg.Instance.LocalDomain,
-			"title":             "Gotodon",
-			"short_description": "A Mastodon-compatible server written in Go",
-			"description":       "A Mastodon-compatible ActivityPub server written in Go",
-			"email":             "",
-			"version":           "4.5.2 (compatible; Gotodon 0.1.0)",
-			"urls": map[string]string{
-				"streaming_api": fmt.Sprintf("wss://%s", cfg.Instance.LocalDomain),
-			},
-			"stats": map[string]int{
-				"user_count":   0,
-				"status_count": 0,
-				"domain_count": 0,
-			},
-			"registrations":     cfg.Instance.RegistrationsMode == "open",
-			"approval_required": cfg.Instance.RegistrationsMode == "approved",
-			"invites_enabled":   false,
-			"configuration": map[string]interface{}{
-				"statuses": map[string]int{
-					"max_characters":              500,
-					"max_media_attachments":       4,
-					"characters_reserved_per_url": 23,
-				},
-				"media_attachments": map[string]interface{}{
-					"supported_mime_types": []string{
-						"image/jpeg", "image/png", "image/gif", "image/webp",
-						"video/webm", "video/mp4", "video/quicktime",
-						"audio/mpeg", "audio/ogg", "audio/flac", "audio/wav",
-					},
-					"image_size_limit":       16777216,
-					"image_matrix_limit":     33177600,
-					"video_size_limit":       103809024,
-					"video_frame_rate_limit": 120,
-					"video_matrix_limit":     8294400,
-				},
-				"polls": map[string]int{
-					"max_options":               4,
-					"max_characters_per_option": 50,
-					"min_expiration":            300,
-					"max_expiration":            2629746,
-				},
-			},
-			"contact_account": nil,
-			"rules":           []interface{}{},
-		})
-	})
 
 	// Apps endpoint (for OAuth app registration)
 	v1AppsHandler := v1.NewAppsHandler(queries)

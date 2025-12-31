@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 )
@@ -13,11 +14,12 @@ import (
 // SuggestionsHandler handles suggestions endpoints
 type SuggestionsHandler struct {
 	queries *db.Queries
+	cfg     *config.Config
 }
 
 // NewSuggestionsHandler creates a new suggestions handler
-func NewSuggestionsHandler(queries *db.Queries) *SuggestionsHandler {
-	return &SuggestionsHandler{queries: queries}
+func NewSuggestionsHandler(queries *db.Queries, cfg *config.Config) *SuggestionsHandler {
+	return &SuggestionsHandler{queries: queries, cfg: cfg}
 }
 
 // Suggestion represents a follow suggestion
@@ -62,20 +64,14 @@ func (h *SuggestionsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := []Account{}
-	for _, a := range accounts {
-		discoverable := a.Discoverable.Valid && a.Discoverable.Bool
-		resp = append(resp, Account{
-			ID:           strconv.FormatInt(a.ID, 10),
-			Username:     a.Username,
-			Acct:         a.Username,
-			DisplayName:  a.DisplayName,
-			Note:         a.Note,
-			Locked:       a.Locked,
-			Discoverable: &discoverable,
-			Emojis:       []CustomEmoji{},
-			Fields:       []Field{},
-		})
+	serialized := serializeAccounts(r.Context(), h.queries, h.cfg, accounts, true)
+	resp := make([]Account, 0, len(accounts))
+	for _, account := range accounts {
+		if apiAcc, ok := serialized[account.ID]; ok {
+			resp = append(resp, apiAcc)
+			continue
+		}
+		resp = append(resp, SerializeAccount(h.cfg, account))
 	}
 
 	web.JSON(w, http.StatusOK, resp)

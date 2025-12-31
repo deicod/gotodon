@@ -29,13 +29,13 @@ Assumptions: No database provisioned yet, so new migrations can be authored but 
 Status: High (parity with remaining gaps).
 
 Gaps
-- Extra `preferences` table (Mastodon uses `users.settings` / `web_settings`).
-- Index name/shape mismatches listed in `SCHEMA_DIFF.md`.
+- [x] Extra `preferences` table (Mastodon uses `users.settings` / `web_settings`).
+- [x] Index name/shape mismatches listed in `SCHEMA_DIFF.md`.
 - Conversation unread tracking is stubbed (no persistent read state).
 
 Plan
-1) Add migration `040_migrate_preferences.sql` to move preferences into `users.settings` and `web_settings`, then drop `preferences`.
-2) Reconcile remaining index differences from `SCHEMA_DIFF.md` (name alignment + unique constraints).
+1) [x] Add migration `040_migrate_preferences.sql` to move preferences into `users.settings` and `web_settings`, then drop `preferences`.
+2) [x] Reconcile remaining index differences from `SCHEMA_DIFF.md` (name alignment + unique constraints).
 3) Add read/unread tracking for conversations (align with Mastodon logic; likely `conversation_mutes` or new table).
 4) Regenerate sqlc (`sqlc generate`) and update query usage after each schema change.
 5) Add schema parity tests (create tables + verify index names/uniqueness).
@@ -74,7 +74,7 @@ Missing routes (from `mastodon/config/routes/api.rb`)
 - [x] GET /api/v1/trends (alias for tags index)
 
 Behavior gaps
-- /api/v1/instance uses static data and mismatched version string.
+- [x] /api/v1/instance uses static data and mismatched version string.
 - Trends links now backed by preview cards; suggestions deletion and several account/status payloads are still minimal or mock.
 - Scheduled status creation is missing (no `scheduled_at` in POST /api/v1/statuses).
 

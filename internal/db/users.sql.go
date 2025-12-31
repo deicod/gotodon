@@ -293,6 +293,80 @@ func (q *Queries) GetUserRole(ctx context.Context, id int64) (UserRole, error) {
 	return i, err
 }
 
+const listUserRolesByAccountIDs = `-- name: ListUserRolesByAccountIDs :many
+SELECT u.account_id, r.id, r.name, r.color, r.permissions, r.highlighted
+FROM users u
+JOIN user_roles r ON r.id = u.role_id
+WHERE u.account_id = ANY($1::bigint[])
+`
+
+type ListUserRolesByAccountIDsRow struct {
+	AccountID   int64  `db:"account_id" json:"account_id"`
+	ID          int64  `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	Color       string `db:"color" json:"color"`
+	Permissions int64  `db:"permissions" json:"permissions"`
+	Highlighted bool   `db:"highlighted" json:"highlighted"`
+}
+
+func (q *Queries) ListUserRolesByAccountIDs(ctx context.Context, accountIds []int64) ([]ListUserRolesByAccountIDsRow, error) {
+	rows, err := q.db.Query(ctx, listUserRolesByAccountIDs, accountIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUserRolesByAccountIDsRow{}
+	for rows.Next() {
+		var i ListUserRolesByAccountIDsRow
+		if err := rows.Scan(
+			&i.AccountID,
+			&i.ID,
+			&i.Name,
+			&i.Color,
+			&i.Permissions,
+			&i.Highlighted,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUserSettingsByAccountIDs = `-- name: ListUserSettingsByAccountIDs :many
+SELECT account_id, settings
+FROM users
+WHERE account_id = ANY($1::bigint[])
+`
+
+type ListUserSettingsByAccountIDsRow struct {
+	AccountID int64       `db:"account_id" json:"account_id"`
+	Settings  pgtype.Text `db:"settings" json:"settings"`
+}
+
+func (q *Queries) ListUserSettingsByAccountIDs(ctx context.Context, accountIds []int64) ([]ListUserSettingsByAccountIDsRow, error) {
+	rows, err := q.db.Query(ctx, listUserSettingsByAccountIDs, accountIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUserSettingsByAccountIDsRow{}
+	for rows.Next() {
+		var i ListUserSettingsByAccountIDsRow
+		if err := rows.Scan(&i.AccountID, &i.Settings); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateUserSettings = `-- name: UpdateUserSettings :exec
 UPDATE users SET
     settings = COALESCE($2, settings),

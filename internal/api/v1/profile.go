@@ -2,8 +2,8 @@
 package v1
 
 import (
+	"context"
 	"net/http"
-	"strconv"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
@@ -51,7 +51,7 @@ func (h *ProfileHandler) DeleteAvatar(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		web.JSON(w, http.StatusOK, h.dbAccountToCredential(dbAcc))
+		web.JSON(w, http.StatusOK, h.dbAccountToCredential(ctx, dbAcc))
 		return
 	}
 
@@ -84,7 +84,7 @@ func (h *ProfileHandler) DeleteHeader(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		web.JSON(w, http.StatusOK, h.dbAccountToCredential(dbAcc))
+		web.JSON(w, http.StatusOK, h.dbAccountToCredential(ctx, dbAcc))
 		return
 	}
 
@@ -92,47 +92,11 @@ func (h *ProfileHandler) DeleteHeader(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, h.mockCredentialAccount())
 }
 
-func (h *ProfileHandler) dbAccountToCredential(dbAcc db.Account) CredentialAccount {
-	discoverable := dbAcc.Discoverable.Valid && dbAcc.Discoverable.Bool
-	domain := ""
-	if h.cfg != nil {
-		domain = h.cfg.Instance.LocalDomain
+func (h *ProfileHandler) dbAccountToCredential(ctx context.Context, dbAcc db.Account) CredentialAccount {
+	if h.queries == nil {
+		return h.mockCredentialAccount()
 	}
-
-	acc := Account{
-		ID:           strconv.FormatInt(dbAcc.ID, 10),
-		Username:     dbAcc.Username,
-		Acct:         dbAcc.Username,
-		DisplayName:  dbAcc.DisplayName,
-		Note:         dbAcc.Note,
-		Discoverable: &discoverable,
-		Indexable:    dbAcc.Indexable,
-		Locked:       dbAcc.Locked,
-		URL:          "https://" + domain + "/@" + dbAcc.Username,
-		URI:          dbAcc.Uri,
-		Emojis:       []CustomEmoji{},
-		Fields:       []Field{},
-	}
-	if dbAcc.CreatedAt.Valid {
-		acc.CreatedAt = dbAcc.CreatedAt.Time
-	}
-
-	// Set default avatar/header
-	acc.Avatar = "https://" + domain + "/avatars/original/missing.png"
-	acc.AvatarStatic = acc.Avatar
-	acc.Header = "https://" + domain + "/headers/original/missing.png"
-	acc.HeaderStatic = acc.Header
-
-	return CredentialAccount{
-		Account: acc,
-		Source: AccountSource{
-			Privacy:   "public",
-			Sensitive: false,
-			Language:  "en",
-			Note:      dbAcc.Note,
-			Fields:    []Field{},
-		},
-	}
+	return buildCredentialAccount(ctx, h.queries, h.cfg, dbAcc)
 }
 
 func (h *ProfileHandler) mockCredentialAccount() CredentialAccount {
@@ -152,10 +116,15 @@ func (h *ProfileHandler) mockCredentialAccount() CredentialAccount {
 			Fields:       []Field{},
 		},
 		Source: AccountSource{
-			Privacy:   "public",
-			Sensitive: false,
-			Language:  "en",
-			Fields:    []Field{},
+			Privacy:            "public",
+			Sensitive:          false,
+			Language:           "en",
+			Fields:             []Field{},
+			HideCollections:    false,
+			Discoverable:       true,
+			Indexable:          true,
+			AttributionDomains: []string{},
+			QuotePolicy:        "public",
 		},
 	}
 }

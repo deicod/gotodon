@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 )
@@ -13,11 +14,12 @@ import (
 // DirectoryHandler handles the profile directory endpoint
 type DirectoryHandler struct {
 	queries *db.Queries
+	cfg     *config.Config
 }
 
 // NewDirectoryHandler creates a new directory handler
-func NewDirectoryHandler(queries *db.Queries) *DirectoryHandler {
-	return &DirectoryHandler{queries: queries}
+func NewDirectoryHandler(queries *db.Queries, cfg *config.Config) *DirectoryHandler {
+	return &DirectoryHandler{queries: queries, cfg: cfg}
 }
 
 func (h *DirectoryHandler) useDB() bool {
@@ -52,29 +54,11 @@ func (h *DirectoryHandler) Get(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		result := make([]Account, len(accounts))
-		for i, acc := range accounts {
-			discoverable := acc.Discoverable.Valid && acc.Discoverable.Bool
-			result[i] = Account{
-				ID:           strconv.FormatInt(acc.ID, 10),
-				Username:     acc.Username,
-				Acct:         acc.Username,
-				DisplayName:  acc.DisplayName,
-				Note:         acc.Note,
-				Locked:       acc.Locked,
-				Bot:          false,
-				Discoverable: &discoverable,
-				Emojis:       []CustomEmoji{},
-				Fields:       []Field{},
-			}
-			if acc.CreatedAt.Valid {
-				result[i].CreatedAt = acc.CreatedAt.Time
-			}
-			if acc.AvatarRemoteUrl.Valid {
-				result[i].Avatar = acc.AvatarRemoteUrl.String
-			}
-			if acc.HeaderRemoteUrl != "" {
-				result[i].Header = acc.HeaderRemoteUrl
+		serialized := serializeAccounts(r.Context(), h.queries, h.cfg, accounts, true)
+		result := make([]Account, 0, len(accounts))
+		for _, acc := range accounts {
+			if apiAcc, ok := serialized[acc.ID]; ok {
+				result = append(result, apiAcc)
 			}
 		}
 		web.JSON(w, http.StatusOK, result)

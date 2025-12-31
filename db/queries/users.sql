@@ -17,11 +17,22 @@ SELECT * FROM users WHERE reset_password_token = $1 AND reset_password_token IS 
 -- name: GetUserByAccountID :one
 SELECT * FROM users WHERE account_id = $1;
 
+-- name: ListUserSettingsByAccountIDs :many
+SELECT account_id, settings
+FROM users
+WHERE account_id = ANY(@account_ids::bigint[]);
+
 -- name: UpdateUserSettings :exec
 UPDATE users SET
     settings = COALESCE($2, settings),
     updated_at = now()
 WHERE account_id = $1;
+
+-- name: ListUserRolesByAccountIDs :many
+SELECT u.account_id, r.id, r.name, r.color, r.permissions, r.highlighted
+FROM users u
+JOIN user_roles r ON r.id = u.role_id
+WHERE u.account_id = ANY(@account_ids::bigint[]);
 
 -- name: GetUserRole :one
 SELECT r.* FROM user_roles r

@@ -25,7 +25,7 @@ func mockListRequest(method, path string, body string) (*http.Request, *httptest
 }
 
 func TestListsHandler_Create(t *testing.T) {
-	h := NewListsHandler(nil)
+	h := NewListsHandler(nil, nil)
 
 	body := `{"title":"My List","replies_policy":"followed"}`
 	req, rec := mockListRequest(http.MethodPost, "/api/v1/lists", body)
@@ -51,7 +51,7 @@ func TestListsHandler_Create(t *testing.T) {
 }
 
 func TestListsHandler_GetAll(t *testing.T) {
-	h := NewListsHandler(nil)
+	h := NewListsHandler(nil, nil)
 
 	// Create lists
 	req1, rec1 := mockListRequest(http.MethodPost, "/api/v1/lists", `{"title":"List 1"}`)
@@ -72,7 +72,7 @@ func TestListsHandler_GetAll(t *testing.T) {
 }
 
 func TestListsHandler_Delete(t *testing.T) {
-	h := NewListsHandler(nil)
+	h := NewListsHandler(nil, nil)
 
 	// Create
 	req1, rec1 := mockListRequest(http.MethodPost, "/api/v1/lists", `{"title":"ToDelete"}`)
@@ -93,7 +93,7 @@ func TestListsHandler_Delete(t *testing.T) {
 }
 
 func TestListsHandler_Validation(t *testing.T) {
-	h := NewListsHandler(nil)
+	h := NewListsHandler(nil, nil)
 
 	tests := []struct {
 		name    string
@@ -124,7 +124,7 @@ func TestListsHandler_Validation(t *testing.T) {
 }
 
 func TestListsHandler_GetListsForAccount_MockMode(t *testing.T) {
-	h := NewListsHandler(nil)
+	h := NewListsHandler(nil, nil)
 
 	req, rec := mockListRequest(http.MethodPost, "/api/v1/lists", `{"title":"Primary"}`)
 	h.Create(rec, req)

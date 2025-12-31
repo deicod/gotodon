@@ -2,8 +2,13 @@
 package v1
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
+	"strconv"
+	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
@@ -30,6 +35,18 @@ type Preferences struct {
 	ReadingExpandSpoilers    bool   `json:"reading:expand:spoilers"`
 }
 
+var validPreferenceVisibility = map[string]struct{}{
+	"public":   {},
+	"unlisted": {},
+	"private":  {},
+}
+
+var validPreferenceExpandMedia = map[string]struct{}{
+	"default":  {},
+	"show_all": {},
+	"hide_all": {},
+}
+
 // Get handles GET /api/v1/preferences
 func (h *PreferencesHandler) Get(w http.ResponseWriter, r *http.Request) {
 	accountID, ok := middleware.GetAccountID(r.Context())
@@ -39,34 +56,22 @@ func (h *PreferencesHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.queries == nil {
-		web.JSON(w, http.StatusOK, Preferences{
-			PostingDefaultVisibility: "public",
-			PostingDefaultSensitive:  false,
-			ReadingExpandMedia:       "default",
-			ReadingExpandSpoilers:    false,
-		})
+		web.JSON(w, http.StatusOK, defaultPreferences(""))
 		return
 	}
 
-	prefs, err := h.queries.GetPreferences(r.Context(), accountID)
+	user, err := h.queries.GetUserByAccountID(r.Context(), accountID)
 	if err != nil {
-		// Return defaults if not found or error
-		web.JSON(w, http.StatusOK, Preferences{
-			PostingDefaultVisibility: "public",
-			PostingDefaultSensitive:  false,
-			ReadingExpandMedia:       "default",
-			ReadingExpandSpoilers:    false,
-		})
+		web.JSON(w, http.StatusOK, defaultPreferences(""))
 		return
 	}
 
-	web.JSON(w, http.StatusOK, Preferences{
-		PostingDefaultVisibility: prefs.PostingDefaultVisibility.String,
-		PostingDefaultSensitive:  prefs.PostingDefaultSensitive.Bool,
-		PostingDefaultLanguage:   prefs.PostingDefaultLanguage.String,
-		ReadingExpandMedia:       prefs.ReadingExpandMedia.String,
-		ReadingExpandSpoilers:    prefs.ReadingExpandSpoilers.Bool,
-	})
+	locale := ""
+	if user.Locale.Valid {
+		locale = strings.TrimSpace(user.Locale.String)
+	}
+	settings := settingsFromText(user.Settings)
+	web.JSON(w, http.StatusOK, preferencesFromSettings(settings, locale))
 }
 
 // Update updates preferences (non-standard convenience endpoint)
@@ -84,31 +89,41 @@ func (h *PreferencesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate visibility
-	validVisibilities := map[string]bool{"public": true, "unlisted": true, "private": true}
-	if req.PostingDefaultVisibility != "" && !validVisibilities[req.PostingDefaultVisibility] {
+	if req.PostingDefaultVisibility != "" && !isValidPreferenceVisibility(req.PostingDefaultVisibility) {
 		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Visibility is invalid")
 		return
 	}
 
 	// Validate expand media
-	validExpand := map[string]bool{"default": true, "show_all": true, "hide_all": true}
-	if req.ReadingExpandMedia != "" && !validExpand[req.ReadingExpandMedia] {
+	if req.ReadingExpandMedia != "" && !isValidPreferenceExpandMedia(req.ReadingExpandMedia) {
 		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Expand media value is invalid")
 		return
 	}
 
-	// Upsert to DB
+	// Update user settings
 	if h.queries != nil {
-		_, err := h.queries.UpsertPreferences(r.Context(), db.UpsertPreferencesParams{
-			AccountID:                accountID,
-			PostingDefaultVisibility: pgtype.Text{String: req.PostingDefaultVisibility, Valid: req.PostingDefaultVisibility != ""},
-			PostingDefaultSensitive:  pgtype.Bool{Bool: req.PostingDefaultSensitive, Valid: true},
-			PostingDefaultLanguage:   pgtype.Text{String: req.PostingDefaultLanguage, Valid: req.PostingDefaultLanguage != ""},
-			ReadingExpandMedia:       pgtype.Text{String: req.ReadingExpandMedia, Valid: req.ReadingExpandMedia != ""},
-			ReadingExpandSpoilers:    pgtype.Bool{Bool: req.ReadingExpandSpoilers, Valid: true},
-		})
+		settings := map[string]any{}
+		user, err := h.queries.GetUserByAccountID(r.Context(), accountID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to fetch user settings")
+			return
+		}
+		if err == nil {
+			settings = settingsFromText(user.Settings)
+		}
+
+		applyPreferenceUpdate(settings, req)
+		encoded, err := settingsToText(settings)
 		if err != nil {
-			web.JSONError(w, http.StatusInternalServerError, err.Error())
+			web.JSONError(w, http.StatusInternalServerError, "Failed to encode settings")
+			return
+		}
+
+		if err := h.queries.UpdateUserSettings(r.Context(), db.UpdateUserSettingsParams{
+			AccountID: accountID,
+			Settings:  encoded,
+		}); err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to update preferences")
 			return
 		}
 	}
@@ -140,4 +155,158 @@ func (h *PreferencesHandler) RegisterRoutes(mux *http.ServeMux) {
 	// Let's register "POST /api/v1/preferences" just in case.
 	// But if the original file didn't register it, it was dead code.
 	// I'll stick to what was there: ONLY GET.
+}
+
+func defaultPreferences(locale string) Preferences {
+	prefs := Preferences{
+		PostingDefaultVisibility: "public",
+		PostingDefaultSensitive:  false,
+		ReadingExpandMedia:       "default",
+		ReadingExpandSpoilers:    false,
+	}
+	if strings.TrimSpace(locale) != "" {
+		prefs.PostingDefaultLanguage = strings.TrimSpace(locale)
+	}
+	return prefs
+}
+
+func preferencesFromSettings(settings map[string]any, locale string) Preferences {
+	prefs := defaultPreferences(locale)
+
+	if value := settingsString(settings, "default_privacy"); isValidPreferenceVisibility(value) {
+		prefs.PostingDefaultVisibility = value
+	}
+	if value, ok := settingsBool(settings, "default_sensitive"); ok {
+		prefs.PostingDefaultSensitive = value
+	}
+	if value := settingsString(settings, "default_language"); value != "" {
+		prefs.PostingDefaultLanguage = value
+	}
+	if value := settingsString(settings, "web.display_media"); isValidPreferenceExpandMedia(value) {
+		prefs.ReadingExpandMedia = value
+	}
+	if value, ok := settingsBool(settings, "web.expand_content_warnings"); ok {
+		prefs.ReadingExpandSpoilers = value
+	}
+
+	return prefs
+}
+
+func applyPreferenceUpdate(settings map[string]any, req Preferences) {
+	if settings == nil {
+		return
+	}
+
+	if strings.TrimSpace(req.PostingDefaultVisibility) == "" {
+		delete(settings, "default_privacy")
+	} else {
+		settings["default_privacy"] = strings.TrimSpace(req.PostingDefaultVisibility)
+	}
+	settings["default_sensitive"] = req.PostingDefaultSensitive
+
+	if strings.TrimSpace(req.PostingDefaultLanguage) == "" {
+		delete(settings, "default_language")
+	} else {
+		settings["default_language"] = strings.TrimSpace(req.PostingDefaultLanguage)
+	}
+
+	if strings.TrimSpace(req.ReadingExpandMedia) == "" {
+		delete(settings, "web.display_media")
+	} else {
+		settings["web.display_media"] = strings.TrimSpace(req.ReadingExpandMedia)
+	}
+	settings["web.expand_content_warnings"] = req.ReadingExpandSpoilers
+}
+
+func applySourceSettings(settings map[string]any, privacy *string, sensitive *bool, language *string) {
+	if settings == nil {
+		return
+	}
+
+	if privacy != nil {
+		trimmed := strings.TrimSpace(*privacy)
+		if trimmed == "" {
+			delete(settings, "default_privacy")
+		} else {
+			settings["default_privacy"] = trimmed
+		}
+	}
+	if sensitive != nil {
+		settings["default_sensitive"] = *sensitive
+	}
+	if language != nil {
+		trimmed := strings.TrimSpace(*language)
+		if trimmed == "" {
+			delete(settings, "default_language")
+		} else {
+			settings["default_language"] = trimmed
+		}
+	}
+}
+
+func settingsFromText(value pgtype.Text) map[string]any {
+	if !value.Valid || strings.TrimSpace(value.String) == "" {
+		return map[string]any{}
+	}
+	settings := map[string]any{}
+	if err := json.Unmarshal([]byte(value.String), &settings); err != nil {
+		return map[string]any{}
+	}
+	return settings
+}
+
+func settingsToText(settings map[string]any) (pgtype.Text, error) {
+	if settings == nil {
+		settings = map[string]any{}
+	}
+	data, err := json.Marshal(settings)
+	if err != nil {
+		return pgtype.Text{}, err
+	}
+	return pgtype.Text{String: string(data), Valid: true}, nil
+}
+
+func settingsString(settings map[string]any, key string) string {
+	if settings == nil {
+		return ""
+	}
+	value, ok := settings[key]
+	if !ok || value == nil {
+		return ""
+	}
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	default:
+		return ""
+	}
+}
+
+func settingsBool(settings map[string]any, key string) (bool, bool) {
+	if settings == nil {
+		return false, false
+	}
+	value, ok := settings[key]
+	if !ok || value == nil {
+		return false, false
+	}
+	switch v := value.(type) {
+	case bool:
+		return v, true
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(v))
+		return parsed, err == nil
+	default:
+		return false, false
+	}
+}
+
+func isValidPreferenceVisibility(value string) bool {
+	_, ok := validPreferenceVisibility[value]
+	return ok
+}
+
+func isValidPreferenceExpandMedia(value string) bool {
+	_, ok := validPreferenceExpandMedia[value]
+	return ok
 }

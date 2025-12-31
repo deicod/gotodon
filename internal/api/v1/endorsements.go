@@ -7,19 +7,22 @@ import (
 	"time"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 )
 
 type EndorsementsHandler struct {
 	queries *db.Queries
+	cfg     *config.Config
 	mu      sync.RWMutex
 	memPins map[int64][]int64
 }
 
-func NewEndorsementsHandler(queries *db.Queries) *EndorsementsHandler {
+func NewEndorsementsHandler(queries *db.Queries, cfg *config.Config) *EndorsementsHandler {
 	return &EndorsementsHandler{
 		queries: queries,
+		cfg:     cfg,
 		memPins: make(map[int64][]int64),
 	}
 }
@@ -55,40 +58,33 @@ func (h *EndorsementsHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := make([]Account, len(pins))
-	for i, p := range pins {
-		acc := Account{
-			ID:           strconv.FormatInt(p.TargetAccountID, 10),
-			Username:     p.Username,
-			Acct:         p.Username,
-			DisplayName:  p.DisplayName,
-			Note:         p.Note,
-			URL:          p.Url.String,
-			URI:          p.Uri,
-			Avatar:       p.AvatarRemoteUrl.String,
-			AvatarStatic: p.AvatarRemoteUrl.String,
-			Header:       p.HeaderRemoteUrl,
-			HeaderStatic: p.HeaderRemoteUrl,
-			Locked:       false,
-			Emojis:       []CustomEmoji{},
-			Fields:       []Field{},
-			Bot:          false,
-			Group:        false,
-			Discoverable: boolPtr(true),
+	targetIDs := make([]int64, 0, len(pins))
+	seen := make(map[int64]struct{}, len(pins))
+	for _, pin := range pins {
+		if _, ok := seen[pin.TargetAccountID]; ok {
+			continue
 		}
-		if p.Domain.Valid && p.Domain.String != "" {
-			acc.Acct = p.Username + "@" + p.Domain.String
-		}
-		if p.AvatarFileName.Valid {
-			acc.Avatar = "/files/" + p.AvatarFileName.String
-			acc.AvatarStatic = "/files/" + p.AvatarFileName.String
-		}
-		if p.HeaderFileName.Valid {
-			acc.Header = "/files/" + p.HeaderFileName.String
-			acc.HeaderStatic = "/files/" + p.HeaderFileName.String
-		}
+		seen[pin.TargetAccountID] = struct{}{}
+		targetIDs = append(targetIDs, pin.TargetAccountID)
+	}
 
-		resp[i] = acc
+	serialized := map[int64]Account{}
+	if len(targetIDs) > 0 {
+		accounts, err := h.queries.GetAccountsByIDs(r.Context(), targetIDs)
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to list endorsements")
+			return
+		}
+		serialized = serializeAccounts(r.Context(), h.queries, h.cfg, accounts, true)
+	}
+
+	resp := make([]Account, 0, len(pins))
+	for _, pin := range pins {
+		if apiAcc, ok := serialized[pin.TargetAccountID]; ok {
+			resp = append(resp, apiAcc)
+			continue
+		}
+		resp = append(resp, accountFromPinRow(pin))
 	}
 
 	web.JSON(w, http.StatusOK, resp)
@@ -248,4 +244,38 @@ func mockAccountFromID(id int64) Account {
 		Emojis:         []CustomEmoji{},
 		Fields:         []Field{},
 	}
+}
+
+func accountFromPinRow(pin db.ListAccountPinsRow) Account {
+	acc := Account{
+		ID:           strconv.FormatInt(pin.TargetAccountID, 10),
+		Username:     pin.Username,
+		Acct:         pin.Username,
+		DisplayName:  pin.DisplayName,
+		Note:         pin.Note,
+		URL:          pin.Url.String,
+		URI:          pin.Uri,
+		Avatar:       pin.AvatarRemoteUrl.String,
+		AvatarStatic: pin.AvatarRemoteUrl.String,
+		Header:       pin.HeaderRemoteUrl,
+		HeaderStatic: pin.HeaderRemoteUrl,
+		Locked:       false,
+		Emojis:       []CustomEmoji{},
+		Fields:       []Field{},
+		Bot:          false,
+		Group:        false,
+		Discoverable: boolPtr(true),
+	}
+	if pin.Domain.Valid && pin.Domain.String != "" {
+		acc.Acct = pin.Username + "@" + pin.Domain.String
+	}
+	if pin.AvatarFileName.Valid {
+		acc.Avatar = "/files/" + pin.AvatarFileName.String
+		acc.AvatarStatic = "/files/" + pin.AvatarFileName.String
+	}
+	if pin.HeaderFileName.Valid {
+		acc.Header = "/files/" + pin.HeaderFileName.String
+		acc.HeaderStatic = "/files/" + pin.HeaderFileName.String
+	}
+	return acc
 }

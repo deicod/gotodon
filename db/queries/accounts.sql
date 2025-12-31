@@ -38,6 +38,7 @@ UPDATE accounts SET
     locked = COALESCE(sqlc.narg('locked'), locked),
     discoverable = COALESCE(sqlc.narg('discoverable'), discoverable),
     indexable = COALESCE(sqlc.narg('indexable'), indexable),
+    hide_collections = COALESCE(sqlc.narg('hide_collections'), hide_collections),
     fields = COALESCE(sqlc.narg('fields'), fields),
     url = COALESCE(sqlc.narg('url'), url),
     public_key = COALESCE(sqlc.narg('public_key'), public_key),
@@ -67,6 +68,10 @@ WHERE id = $1;
 
 -- name: GetAccountStats :one
 SELECT * FROM account_stats WHERE account_id = $1;
+
+-- name: ListAccountStatsByAccountIDs :many
+SELECT * FROM account_stats
+WHERE account_id = ANY(@account_ids::bigint[]);
 
 -- name: CreateAccountStats :one
 INSERT INTO account_stats (account_id) VALUES ($1) RETURNING *;

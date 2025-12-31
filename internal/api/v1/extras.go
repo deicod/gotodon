@@ -174,9 +174,12 @@ func (h *MutesHandler) List(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		accounts := make([]Account, len(dbAccounts))
-		for i, a := range dbAccounts {
-			accounts[i] = SerializeAccount(h.cfg, a)
+		accountsMap := serializeAccounts(r.Context(), h.queries, h.cfg, dbAccounts, true)
+		accounts := make([]Account, 0, len(dbAccounts))
+		for _, a := range dbAccounts {
+			if acc, ok := accountsMap[a.ID]; ok {
+				accounts = append(accounts, acc)
+			}
 		}
 		web.JSON(w, http.StatusOK, accounts)
 		return
@@ -223,9 +226,12 @@ func (h *BlocksHandler) List(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		accounts := make([]Account, len(dbAccounts))
-		for i, a := range dbAccounts {
-			accounts[i] = SerializeAccount(h.cfg, a)
+		accountsMap := serializeAccounts(r.Context(), h.queries, h.cfg, dbAccounts, true)
+		accounts := make([]Account, 0, len(dbAccounts))
+		for _, a := range dbAccounts {
+			if acc, ok := accountsMap[a.ID]; ok {
+				accounts = append(accounts, acc)
+			}
 		}
 		web.JSON(w, http.StatusOK, accounts)
 		return
@@ -408,9 +414,7 @@ func (h *ConversationsHandler) List(w http.ResponseWriter, r *http.Request) {
 			web.JSONError(w, http.StatusInternalServerError, "Failed to fetch conversation accounts")
 			return
 		}
-		for _, acc := range accounts {
-			accountMap[acc.ID] = SerializeAccount(h.cfg, acc)
-		}
+		accountMap = serializeAccounts(ctx, h.queries, h.cfg, accounts, true)
 	}
 
 	conversations := make([]Conversation, 0, len(dbConversations))
@@ -690,10 +694,7 @@ func (h *ConversationsHandler) buildConversation(ctx context.Context, accountID 
 		if err != nil {
 			return Conversation{}, err
 		}
-		accountMap := make(map[int64]Account, len(dbAccounts))
-		for _, acc := range dbAccounts {
-			accountMap[acc.ID] = SerializeAccount(h.cfg, acc)
-		}
+		accountMap := serializeAccounts(ctx, h.queries, h.cfg, dbAccounts, true)
 		for _, pid := range accountIDs {
 			if acc, ok := accountMap[pid]; ok {
 				accounts = append(accounts, acc)

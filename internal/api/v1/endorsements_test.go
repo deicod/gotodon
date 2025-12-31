@@ -11,7 +11,7 @@ import (
 )
 
 func TestEndorsementsHandler_EndorseAliases_MockMode(t *testing.T) {
-	h := NewEndorsementsHandler(nil)
+	h := NewEndorsementsHandler(nil, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
@@ -64,7 +64,7 @@ func TestEndorsementsHandler_EndorseAliases_MockMode(t *testing.T) {
 }
 
 func TestEndorsementsHandler_EndorseAlias_RequiresAuth(t *testing.T) {
-	h := NewEndorsementsHandler(nil)
+	h := NewEndorsementsHandler(nil, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
