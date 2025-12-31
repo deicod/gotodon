@@ -178,3 +178,40 @@ func (q *Queries) AdminUpdateDomainBlock(ctx context.Context, arg AdminUpdateDom
 	)
 	return i, err
 }
+
+const listPublicDomainBlocks = `-- name: ListPublicDomainBlocks :many
+SELECT id, domain, created_at, updated_at, severity, reject_media, reject_reports, private_comment, public_comment, obfuscate FROM domain_blocks
+WHERE severity IN (0, 1)
+ORDER BY severity ASC, domain ASC
+`
+
+func (q *Queries) ListPublicDomainBlocks(ctx context.Context) ([]DomainBlock, error) {
+	rows, err := q.db.Query(ctx, listPublicDomainBlocks)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DomainBlock{}
+	for rows.Next() {
+		var i DomainBlock
+		if err := rows.Scan(
+			&i.ID,
+			&i.Domain,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Severity,
+			&i.RejectMedia,
+			&i.RejectReports,
+			&i.PrivateComment,
+			&i.PublicComment,
+			&i.Obfuscate,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

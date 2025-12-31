@@ -11,6 +11,43 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countUserLoginsInRange = `-- name: CountUserLoginsInRange :one
+SELECT COUNT(*)
+FROM users
+WHERE COALESCE(current_sign_in_at, last_sign_in_at) >= $1
+  AND COALESCE(current_sign_in_at, last_sign_in_at) < $2
+`
+
+type CountUserLoginsInRangeParams struct {
+	CurrentSignInAt   pgtype.Timestamptz `db:"current_sign_in_at" json:"current_sign_in_at"`
+	CurrentSignInAt_2 pgtype.Timestamptz `db:"current_sign_in_at_2" json:"current_sign_in_at_2"`
+}
+
+func (q *Queries) CountUserLoginsInRange(ctx context.Context, arg CountUserLoginsInRangeParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countUserLoginsInRange, arg.CurrentSignInAt, arg.CurrentSignInAt_2)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countUserRegistrationsInRange = `-- name: CountUserRegistrationsInRange :one
+SELECT COUNT(*)
+FROM users
+WHERE created_at >= $1 AND created_at < $2
+`
+
+type CountUserRegistrationsInRangeParams struct {
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	CreatedAt_2 pgtype.Timestamptz `db:"created_at_2" json:"created_at_2"`
+}
+
+func (q *Queries) CountUserRegistrationsInRange(ctx context.Context, arg CountUserRegistrationsInRangeParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countUserRegistrationsInRange, arg.CreatedAt, arg.CreatedAt_2)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (
     email, encrypted_password, account_id, confirmed_at, invite_id, role_id

@@ -3,6 +3,11 @@ SELECT * FROM custom_emojis
 WHERE disabled = false
 ORDER BY shortcode ASC;
 
+-- name: ListCustomEmojisByIDs :many
+SELECT * FROM custom_emojis
+WHERE disabled = false
+  AND id = ANY(@ids::bigint[]);
+
 -- name: ListCustomEmojisByShortcodesAndDomain :many
 SELECT * FROM custom_emojis
 WHERE disabled = false

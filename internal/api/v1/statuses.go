@@ -138,7 +138,7 @@ type Status struct {
 	Reblogged          bool           `json:"reblogged"`
 	Muted              bool           `json:"muted"`
 	Bookmarked         bool           `json:"bookmarked"`
-	Pinned             bool           `json:"pinned,omitempty"`
+	Pinned             *bool          `json:"pinned,omitempty"`
 	Filtered           []FilterResult `json:"filtered,omitempty"`
 }
 
@@ -424,7 +424,7 @@ func (h *StatusesHandler) processMentions(ctx context.Context, q mentionStore, s
 			for _, acc := range accountMap {
 				accounts = append(accounts, acc)
 			}
-			if dataQueries, ok := q.(accountDataQueries); ok {
+			if dataQueries, ok := q.(AccountDataQuerier); ok {
 				serializedAccounts = serializeAccounts(ctx, dataQueries, h.cfg, accounts, true)
 			}
 		}
@@ -2424,7 +2424,8 @@ func (h *StatusesHandler) Pin(w http.ResponseWriter, r *http.Request) {
 		}
 
 		s := SerializeStatus(r.Context(), h.queries, h.cfg, status)
-		s.Pinned = true
+		pinnedValue := true
+		s.Pinned = &pinnedValue
 		web.JSON(w, http.StatusOK, s)
 		return
 	}
@@ -2470,7 +2471,8 @@ func (h *StatusesHandler) Unpin(w http.ResponseWriter, r *http.Request) {
 		}
 
 		s := SerializeStatus(r.Context(), h.queries, h.cfg, status)
-		s.Pinned = false
+		pinnedValue := false
+		s.Pinned = &pinnedValue
 		web.JSON(w, http.StatusOK, s)
 		return
 	}

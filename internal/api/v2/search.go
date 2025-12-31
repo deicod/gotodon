@@ -105,8 +105,13 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 			Offset: int32(offset),
 		})
 		if err == nil {
-			for _, a := range accounts {
-				result.Accounts = append(result.Accounts, v1.SerializeAccount(h.cfg, a))
+			serialized := v1.SerializeAccounts(ctx, h.queries, h.cfg, accounts, true)
+			for _, account := range accounts {
+				if apiAcc, ok := serialized[account.ID]; ok {
+					result.Accounts = append(result.Accounts, apiAcc)
+					continue
+				}
+				result.Accounts = append(result.Accounts, v1.SerializeAccount(h.cfg, account))
 			}
 		}
 	}
@@ -122,6 +127,13 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 			tagIDs := make([]int64, 0, len(hashtags))
 			for _, tag := range hashtags {
 				tagIDs = append(tagIDs, tag.ID)
+			}
+
+			historyByID := map[int64][]HashtagUsage{}
+			if len(tagIDs) > 0 {
+				if rows, err := h.queries.ListTagHistories(ctx, tagIDs); err == nil {
+					historyByID = buildHashtagHistories(rows)
+				}
 			}
 
 			followed := map[int64]bool{}
@@ -148,11 +160,15 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 			}
 
 			for _, tag := range hashtags {
+				history := historyByID[tag.ID]
+				if history == nil {
+					history = []HashtagUsage{}
+				}
 				entry := Tag{
 					ID:      strconv.FormatInt(tag.ID, 10),
 					Name:    tagDisplayName(tag),
 					URL:     tagURL(tag.Name, h.cfg),
-					History: []HashtagUsage{},
+					History: history,
 				}
 				if accountID != 0 {
 					isFollowing := followed[tag.ID]
@@ -207,6 +223,21 @@ func tagURL(name string, cfg *config.Config) string {
 		return "/tags/" + name
 	}
 	return "https://" + domain + "/tags/" + name
+}
+
+func buildHashtagHistories(rows []db.ListTagHistoriesRow) map[int64][]HashtagUsage {
+	histories := make(map[int64][]HashtagUsage)
+	for _, row := range rows {
+		if !row.Day.Valid {
+			continue
+		}
+		histories[row.TagID] = append(histories[row.TagID], HashtagUsage{
+			Day:      strconv.FormatInt(row.Day.Time.Unix(), 10),
+			Uses:     strconv.FormatInt(row.Uses, 10),
+			Accounts: strconv.FormatInt(row.Accounts, 10),
+		})
+	}
+	return histories
 }
 
 func statusFromSearchRow(row db.SearchStatusesRow) db.Status {

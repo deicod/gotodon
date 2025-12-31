@@ -7,8 +7,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/db"
 )
 
 func mockNotificationRequest(method, path string, body string, accountID int64) (*http.Request, *httptest.ResponseRecorder) {
@@ -360,5 +364,78 @@ func TestPolicyConversions(t *testing.T) {
 	}
 	if got := policyStringToInt("unknown"); got != 0 {
 		t.Errorf("policyStringToInt('unknown') = %d, want 0 (default)", got)
+	}
+}
+
+func TestNotificationFromMaps_StatusAttached(t *testing.T) {
+	createdAt := time.Date(2024, 3, 1, 12, 0, 0, 0, time.UTC)
+	dbNotif := db.Notification{
+		ID:            1,
+		ActivityID:    99,
+		ActivityType:  "Status",
+		FromAccountID: 42,
+		Type:          pgtype.Text{String: "favourite", Valid: true},
+		CreatedAt:     pgtype.Timestamptz{Time: createdAt, Valid: true},
+	}
+
+	accounts := map[int64]Account{
+		42: {ID: "42", Username: "alice"},
+	}
+	statuses := map[int64]Status{
+		99: {ID: "99", Content: "hello"},
+	}
+
+	notif := notificationFromMaps(dbNotif, accounts, statuses)
+	if notif.Type != "favourite" {
+		t.Fatalf("type = %q, want %q", notif.Type, "favourite")
+	}
+	if notif.Account.ID != "42" {
+		t.Fatalf("account id = %q, want %q", notif.Account.ID, "42")
+	}
+	if notif.Status == nil || notif.Status.ID != "99" {
+		t.Fatalf("status = %#v, want id 99", notif.Status)
+	}
+	if !notif.CreatedAt.Equal(createdAt) {
+		t.Fatalf("created_at = %v, want %v", notif.CreatedAt, createdAt)
+	}
+}
+
+func TestNotificationFromMaps_NonStatusActivity(t *testing.T) {
+	dbNotif := db.Notification{
+		ID:            2,
+		ActivityID:    100,
+		ActivityType:  "Follow",
+		FromAccountID: 7,
+		Type:          pgtype.Text{String: "follow", Valid: true},
+		CreatedAt:     pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	}
+
+	accounts := map[int64]Account{
+		7: {ID: "7", Username: "bob"},
+	}
+	statuses := map[int64]Status{
+		100: {ID: "100", Content: "ignore"},
+	}
+
+	notif := notificationFromMaps(dbNotif, accounts, statuses)
+	if notif.Status != nil {
+		t.Fatalf("status = %#v, want nil", notif.Status)
+	}
+}
+
+func TestNotificationFromMaps_FallbackAccount(t *testing.T) {
+	dbNotif := db.Notification{
+		ID:            3,
+		FromAccountID: 77,
+		Type:          pgtype.Text{String: "mention", Valid: true},
+		CreatedAt:     pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	}
+
+	notif := notificationFromMaps(dbNotif, map[int64]Account{}, map[int64]Status{})
+	if notif.Account.ID != "77" {
+		t.Fatalf("account id = %q, want %q", notif.Account.ID, "77")
+	}
+	if notif.Account.Username != "unknown" {
+		t.Fatalf("account username = %q, want %q", notif.Account.Username, "unknown")
 	}
 }

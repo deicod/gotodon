@@ -34,6 +34,17 @@ FROM users u
 JOIN user_roles r ON r.id = u.role_id
 WHERE u.account_id = ANY(@account_ids::bigint[]);
 
+-- name: CountUserRegistrationsInRange :one
+SELECT COUNT(*)
+FROM users
+WHERE created_at >= $1 AND created_at < $2;
+
+-- name: CountUserLoginsInRange :one
+SELECT COUNT(*)
+FROM users
+WHERE COALESCE(current_sign_in_at, last_sign_in_at) >= $1
+  AND COALESCE(current_sign_in_at, last_sign_in_at) < $2;
+
 -- name: GetUserRole :one
 SELECT r.* FROM user_roles r
 JOIN users u ON u.role_id = r.id

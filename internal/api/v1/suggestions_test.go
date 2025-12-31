@@ -62,3 +62,15 @@ func TestSuggestionsHandler_Delete_NoDatabase(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
 }
+
+func TestSuggestionsHandler_Delete_InvalidID(t *testing.T) {
+	h := NewSuggestionsHandler(nil, nil)
+	req, rec := mockAccountRequest(http.MethodDelete, "/api/v1/suggestions/bad", "")
+	req.SetPathValue("account_id", "bad")
+
+	h.Delete(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}

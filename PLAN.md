@@ -75,7 +75,7 @@ Missing routes (from `mastodon/config/routes/api.rb`)
 
 Behavior gaps
 - [x] /api/v1/instance uses static data and mismatched version string.
-- Trends links now backed by preview cards; trending statuses payloads now use the full status serializer; suggestions deletion and several account/status payloads are still minimal or mock.
+- Trends links now backed by preview cards; trending statuses payloads now use the full status serializer; status emojis now include custom emojis from content/spoiler text; status relationship flags (favourited/reblogged/bookmarked/pinned) and edited_at now use DB state; instance activity now uses DB counts for statuses/logins/registrations; instance domain blocks now use settings and stored blocks; notifications now attach full status payloads; suggestions deletion now persists mutes; tag history now uses DB-backed counts; announcements now include statuses, mentions, tags, emojis, and reaction emoji URLs; instance privacy policy + extended description now use settings/default templates; several account/status payloads are still minimal or mock.
 - Scheduled status creation is missing (no `scheduled_at` in POST /api/v1/statuses).
 
 Plan
@@ -103,8 +103,8 @@ Missing routes (from `mastodon/config/routes/api.rb`)
 
 Behavior gaps
 - [x] /api/v2/instance returns static placeholder data.
-- [x] /api/v2/suggestions returns mock data.
-- [x] /api/v2/search responses are minimal vs Mastodon payloads.
+- [x] /api/v2/suggestions now uses DB-backed suggestions with full account serialization.
+- [x] /api/v2/search accounts now use full serialization; hashtag history now uses DB-backed counts.
 
 Plan
 1) Implement full v2 filters keyword/status endpoints and align to custom_filters schema.

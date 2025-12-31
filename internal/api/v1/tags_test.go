@@ -5,10 +5,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
+	"github.com/deicod/gotodon/internal/db"
 )
 
 func mockTagsRequest(method, path string, accountID int64) (*http.Request, *httptest.ResponseRecorder) {
@@ -265,5 +270,39 @@ func TestTagsHandler_Unfeature_MockMode(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+type stubTagHistoryQuerier struct {
+	rows []db.ListTagHistoriesRow
+	err  error
+}
+
+func (s stubTagHistoryQuerier) ListTagHistories(_ context.Context, _ []int64) ([]db.ListTagHistoriesRow, error) {
+	return s.rows, s.err
+}
+
+func TestTagHistoryForIDs(t *testing.T) {
+	day1 := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	day2 := time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)
+	rows := []db.ListTagHistoriesRow{
+		{TagID: 1, Day: pgtype.Date{Time: day1, Valid: true}, Uses: 2, Accounts: 1},
+		{TagID: 1, Day: pgtype.Date{Time: day2, Valid: true}, Uses: 0, Accounts: 0},
+		{TagID: 2, Day: pgtype.Date{Time: day1, Valid: true}, Uses: 5, Accounts: 3},
+		{TagID: 3, Day: pgtype.Date{Valid: false}, Uses: 1, Accounts: 1},
+	}
+
+	history := tagHistoryForIDs(context.Background(), stubTagHistoryQuerier{rows: rows}, []int64{1, 2, 3})
+	if len(history[1]) != 2 {
+		t.Fatalf("tag 1 history len = %d, want 2", len(history[1]))
+	}
+	if history[1][0].Day != strconv.FormatInt(day1.Unix(), 10) {
+		t.Fatalf("tag 1 day[0] = %q, want %q", history[1][0].Day, strconv.FormatInt(day1.Unix(), 10))
+	}
+	if history[2][0].Uses != "5" {
+		t.Fatalf("tag 2 uses = %q, want %q", history[2][0].Uses, "5")
+	}
+	if len(history[3]) != 0 {
+		t.Fatalf("tag 3 history len = %d, want 0", len(history[3]))
 	}
 }

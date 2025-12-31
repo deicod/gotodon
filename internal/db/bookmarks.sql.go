@@ -79,6 +79,37 @@ func (q *Queries) IsBookmarked(ctx context.Context, arg IsBookmarkedParams) (boo
 	return exists, err
 }
 
+const listBookmarkedStatusIDs = `-- name: ListBookmarkedStatusIDs :many
+SELECT status_id FROM bookmarks
+WHERE account_id = $1
+  AND status_id = ANY($2::bigint[])
+`
+
+type ListBookmarkedStatusIDsParams struct {
+	AccountID int64   `db:"account_id" json:"account_id"`
+	StatusIds []int64 `db:"status_ids" json:"status_ids"`
+}
+
+func (q *Queries) ListBookmarkedStatusIDs(ctx context.Context, arg ListBookmarkedStatusIDsParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listBookmarkedStatusIDs, arg.AccountID, arg.StatusIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int64{}
+	for rows.Next() {
+		var status_id int64
+		if err := rows.Scan(&status_id); err != nil {
+			return nil, err
+		}
+		items = append(items, status_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listBookmarks = `-- name: ListBookmarks :many
 SELECT b.id, b.created_at, b.updated_at, b.account_id, b.status_id, s.id as status_id
 FROM bookmarks b

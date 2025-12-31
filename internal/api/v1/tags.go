@@ -2,6 +2,7 @@
 package v1
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -42,12 +43,15 @@ type TagDayCount struct {
 }
 
 // dbTagToAPI converts a database Tag to API TagResponse
-func (h *TagsHandler) dbTagToAPI(tag db.Tag, following bool) TagResponse {
+func (h *TagsHandler) dbTagToAPI(tag db.Tag, following bool, history []TagDayCount) TagResponse {
 	url := "https://" + h.cfg.Instance.LocalDomain + "/tags/" + tag.Name
+	if history == nil {
+		history = []TagDayCount{}
+	}
 	return TagResponse{
 		Name:      tag.Name,
 		URL:       url,
-		History:   []TagDayCount{}, // Empty for now - would require usage tracking
+		History:   history,
 		Following: &following,
 	}
 }
@@ -91,7 +95,8 @@ func (h *TagsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	web.JSON(w, http.StatusOK, h.dbTagToAPI(tag, following))
+	history := tagHistoryForIDs(ctx, h.queries, []int64{tag.ID})[tag.ID]
+	web.JSON(w, http.StatusOK, h.dbTagToAPI(tag, following, history))
 }
 
 // Follow handles POST /api/v1/tags/:id/follow
@@ -153,7 +158,8 @@ func (h *TagsHandler) Follow(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	web.JSON(w, http.StatusOK, h.dbTagToAPI(tag, true))
+	history := tagHistoryForIDs(ctx, h.queries, []int64{tag.ID})[tag.ID]
+	web.JSON(w, http.StatusOK, h.dbTagToAPI(tag, true, history))
 }
 
 // Unfollow handles POST /api/v1/tags/:id/unfollow
@@ -203,7 +209,8 @@ func (h *TagsHandler) Unfollow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	web.JSON(w, http.StatusOK, h.dbTagToAPI(tag, false))
+	history := tagHistoryForIDs(ctx, h.queries, []int64{tag.ID})[tag.ID]
+	web.JSON(w, http.StatusOK, h.dbTagToAPI(tag, false, history))
 }
 
 // ListFollowed handles GET /api/v1/followed_tags
@@ -246,9 +253,15 @@ func (h *TagsHandler) ListFollowed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	tagIDs := make([]int64, 0, len(tags))
+	for _, tag := range tags {
+		tagIDs = append(tagIDs, tag.ID)
+	}
+	histories := tagHistoryForIDs(ctx, h.queries, tagIDs)
+
 	result := make([]TagResponse, len(tags))
 	for i, tag := range tags {
-		result[i] = h.dbTagToAPI(tag, true)
+		result[i] = h.dbTagToAPI(tag, true, histories[tag.ID])
 	}
 
 	web.JSON(w, http.StatusOK, result)
@@ -322,7 +335,8 @@ func (h *TagsHandler) Feature(w http.ResponseWriter, r *http.Request) {
 		following = true
 	}
 
-	web.JSON(w, http.StatusOK, h.dbTagToAPI(tag, following))
+	history := tagHistoryForIDs(ctx, h.queries, []int64{tag.ID})[tag.ID]
+	web.JSON(w, http.StatusOK, h.dbTagToAPI(tag, following, history))
 }
 
 // Unfeature handles POST /api/v1/tags/:id/unfeature
@@ -378,7 +392,8 @@ func (h *TagsHandler) Unfeature(w http.ResponseWriter, r *http.Request) {
 		following = true
 	}
 
-	web.JSON(w, http.StatusOK, h.dbTagToAPI(tag, following))
+	history := tagHistoryForIDs(ctx, h.queries, []int64{tag.ID})[tag.ID]
+	web.JSON(w, http.StatusOK, h.dbTagToAPI(tag, following, history))
 }
 
 // RegisterRoutes registers the tags routes
@@ -389,4 +404,33 @@ func (h *TagsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/tags/{id}/feature", h.Feature)
 	mux.HandleFunc("POST /api/v1/tags/{id}/unfeature", h.Unfeature)
 	mux.HandleFunc("GET /api/v1/followed_tags", h.ListFollowed)
+}
+
+type tagHistoryQuerier interface {
+	ListTagHistories(ctx context.Context, tagIds []int64) ([]db.ListTagHistoriesRow, error)
+}
+
+func tagHistoryForIDs(ctx context.Context, q tagHistoryQuerier, tagIDs []int64) map[int64][]TagDayCount {
+	history := make(map[int64][]TagDayCount, len(tagIDs))
+	if q == nil || len(tagIDs) == 0 {
+		return history
+	}
+
+	rows, err := q.ListTagHistories(ctx, tagIDs)
+	if err != nil {
+		return history
+	}
+
+	for _, row := range rows {
+		if !row.Day.Valid {
+			continue
+		}
+		history[row.TagID] = append(history[row.TagID], TagDayCount{
+			Day:      strconv.FormatInt(row.Day.Time.Unix(), 10),
+			Uses:     strconv.FormatInt(row.Uses, 10),
+			Accounts: strconv.FormatInt(row.Accounts, 10),
+		})
+	}
+
+	return history
 }

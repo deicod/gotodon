@@ -89,6 +89,70 @@ type Notification struct {
 }
 
 func (h *NotificationsHandler) dbNotificationToAPI(ctx context.Context, dbNotif db.Notification) Notification {
+	notifications := h.notificationsToAPI(ctx, []db.Notification{dbNotif})
+	if len(notifications) > 0 {
+		return notifications[0]
+	}
+	return Notification{}
+}
+
+func (h *NotificationsHandler) notificationsToAPI(ctx context.Context, dbNotifs []db.Notification) []Notification {
+	if len(dbNotifs) == 0 {
+		return []Notification{}
+	}
+
+	accountIDs := make([]int64, 0, len(dbNotifs))
+	statusIDs := make([]int64, 0, len(dbNotifs))
+	seenAccounts := make(map[int64]struct{}, len(dbNotifs))
+	seenStatuses := make(map[int64]struct{}, len(dbNotifs))
+
+	for _, notif := range dbNotifs {
+		if notif.FromAccountID > 0 {
+			if _, ok := seenAccounts[notif.FromAccountID]; !ok {
+				seenAccounts[notif.FromAccountID] = struct{}{}
+				accountIDs = append(accountIDs, notif.FromAccountID)
+			}
+		}
+		if notif.ActivityType == "Status" && notif.ActivityID > 0 {
+			if _, ok := seenStatuses[notif.ActivityID]; !ok {
+				seenStatuses[notif.ActivityID] = struct{}{}
+				statusIDs = append(statusIDs, notif.ActivityID)
+			}
+		}
+	}
+
+	accountsByID := map[int64]Account{}
+	if h.useDB() && len(accountIDs) > 0 {
+		if dbAccounts, err := h.queries.GetAccountsByIDs(ctx, accountIDs); err == nil {
+			accountsByID = serializeAccounts(ctx, h.queries, h.cfg, dbAccounts, true)
+		}
+	}
+
+	statusesByID := map[int64]Status{}
+	if h.useDB() && len(statusIDs) > 0 {
+		cfg := h.cfg
+		if cfg == nil {
+			cfg = &config.Config{}
+		}
+		if dbStatuses, err := h.queries.GetStatusesByIDs(ctx, statusIDs); err == nil {
+			serialized := SerializeStatuses(ctx, h.queries, cfg, dbStatuses)
+			for i, dbStatus := range dbStatuses {
+				if i >= len(serialized) {
+					break
+				}
+				statusesByID[dbStatus.ID] = serialized[i]
+			}
+		}
+	}
+
+	notifications := make([]Notification, 0, len(dbNotifs))
+	for _, notif := range dbNotifs {
+		notifications = append(notifications, notificationFromMaps(notif, accountsByID, statusesByID))
+	}
+	return notifications
+}
+
+func notificationFromMaps(dbNotif db.Notification, accountsByID map[int64]Account, statusesByID map[int64]Status) Notification {
 	createdAt := time.Now()
 	if dbNotif.CreatedAt.Valid {
 		createdAt = dbNotif.CreatedAt.Time
@@ -99,21 +163,33 @@ func (h *NotificationsHandler) dbNotificationToAPI(ctx context.Context, dbNotif 
 		notifType = dbNotif.Type.String
 	}
 
-	notif := Notification{
-		ID:        strconv.FormatInt(dbNotif.ID, 10),
-		Type:      notifType,
-		CreatedAt: createdAt,
-	}
-
-	// Load account
-	if h.useDB() && dbNotif.FromAccountID > 0 {
-		dbAcc, err := h.queries.GetAccountByID(ctx, dbNotif.FromAccountID)
-		if err == nil {
-			notif.Account = h.accountWithStats(ctx, dbAcc)
+	account := Account{}
+	if dbNotif.FromAccountID > 0 {
+		if acc, ok := accountsByID[dbNotif.FromAccountID]; ok {
+			account = acc
+		} else {
+			account = Account{
+				ID:       strconv.FormatInt(dbNotif.FromAccountID, 10),
+				Username: "unknown",
+			}
 		}
 	}
 
-	return notif
+	var status *Status
+	if dbNotif.ActivityType == "Status" && dbNotif.ActivityID > 0 {
+		if s, ok := statusesByID[dbNotif.ActivityID]; ok {
+			statusCopy := s
+			status = &statusCopy
+		}
+	}
+
+	return Notification{
+		ID:        strconv.FormatInt(dbNotif.ID, 10),
+		Type:      notifType,
+		CreatedAt: createdAt,
+		Account:   account,
+		Status:    status,
+	}
 }
 
 // List handles GET /api/v1/notifications
@@ -143,10 +219,7 @@ func (h *NotificationsHandler) List(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		notifications := make([]Notification, len(dbNotifs))
-		for i, n := range dbNotifs {
-			notifications[i] = h.dbNotificationToAPI(ctx, n)
-		}
+		notifications := h.notificationsToAPI(ctx, dbNotifs)
 		web.JSON(w, http.StatusOK, notifications)
 		return
 	}

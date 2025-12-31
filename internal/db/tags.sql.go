@@ -7,6 +7,8 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const addStatusTags = `-- name: AddStatusTags :exec
@@ -113,6 +115,67 @@ func (q *Queries) GetTagsByNames(ctx context.Context, dollar_1 []string) ([]Tag,
 			&i.MaxScore,
 			&i.MaxScoreAt,
 			&i.DisplayName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTagHistories = `-- name: ListTagHistories :many
+WITH days AS (
+    SELECT generate_series(
+        date_trunc('day', now()) - interval '6 days',
+        date_trunc('day', now()),
+        interval '1 day'
+    )::date AS day
+),
+tag_days AS (
+    SELECT t.tag_id::bigint AS tag_id, d.day
+    FROM unnest($1::bigint[]) AS t(tag_id)
+    CROSS JOIN days d
+)
+SELECT
+    td.tag_id,
+    td.day,
+    COALESCE(COUNT(st.status_id), 0)::bigint AS uses,
+    COALESCE(COUNT(DISTINCT s.account_id), 0)::bigint AS accounts
+FROM tag_days td
+LEFT JOIN statuses_tags st ON st.tag_id = td.tag_id
+LEFT JOIN statuses s ON s.id = st.status_id
+    AND s.created_at >= td.day
+    AND s.created_at < td.day + interval '1 day'
+    AND s.deleted_at IS NULL
+    AND s.visibility IN (0, 1)
+GROUP BY td.tag_id, td.day
+ORDER BY td.tag_id, td.day
+`
+
+type ListTagHistoriesRow struct {
+	TagID    int64       `db:"tag_id" json:"tag_id"`
+	Day      pgtype.Date `db:"day" json:"day"`
+	Uses     int64       `db:"uses" json:"uses"`
+	Accounts int64       `db:"accounts" json:"accounts"`
+}
+
+func (q *Queries) ListTagHistories(ctx context.Context, tagIds []int64) ([]ListTagHistoriesRow, error) {
+	rows, err := q.db.Query(ctx, listTagHistories, tagIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTagHistoriesRow{}
+	for rows.Next() {
+		var i ListTagHistoriesRow
+		if err := rows.Scan(
+			&i.TagID,
+			&i.Day,
+			&i.Uses,
+			&i.Accounts,
 		); err != nil {
 			return nil, err
 		}

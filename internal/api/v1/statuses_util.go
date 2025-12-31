@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
@@ -16,6 +18,236 @@ const (
 	MediaTypeVideo   = 2
 	MediaTypeUnknown = 0 // Just in case
 )
+
+type statusEmojiQuerier interface {
+	ListCustomEmojisByShortcodesAndDomain(ctx context.Context, arg db.ListCustomEmojisByShortcodesAndDomainParams) ([]db.CustomEmoji, error)
+}
+
+type statusRelationshipQuerier interface {
+	ListFavouritedStatusIDs(ctx context.Context, arg db.ListFavouritedStatusIDsParams) ([]int64, error)
+	ListBookmarkedStatusIDs(ctx context.Context, arg db.ListBookmarkedStatusIDsParams) ([]int64, error)
+	ListRebloggedStatusIDs(ctx context.Context, arg db.ListRebloggedStatusIDsParams) ([]pgtype.Int8, error)
+	ListPinnedStatusIDs(ctx context.Context, arg db.ListPinnedStatusIDsParams) ([]int64, error)
+}
+
+type statusRelationships struct {
+	favourited map[int64]bool
+	reblogged  map[int64]bool
+	bookmarked map[int64]bool
+	pinned     map[int64]bool
+}
+
+func isPinnableStatus(accountID int64, status db.Status) bool {
+	if accountID == 0 || status.AccountID != accountID || status.ReblogOfID.Valid {
+		return false
+	}
+	switch status.Visibility {
+	case 0, 1, 2:
+		return true
+	default:
+		return false
+	}
+}
+
+func buildStatusRelationships(ctx context.Context, q statusRelationshipQuerier, accountID int64, statuses []db.Status) statusRelationships {
+	relationships := statusRelationships{
+		favourited: make(map[int64]bool),
+		reblogged:  make(map[int64]bool),
+		bookmarked: make(map[int64]bool),
+		pinned:     make(map[int64]bool),
+	}
+	if q == nil || accountID == 0 || len(statuses) == 0 {
+		return relationships
+	}
+
+	statusIDs := make([]int64, 0, len(statuses))
+	statusIDSeen := make(map[int64]struct{})
+	pinnableIDs := make([]int64, 0, len(statuses))
+	pinnableSeen := make(map[int64]struct{})
+
+	for _, status := range statuses {
+		if _, ok := statusIDSeen[status.ID]; !ok {
+			statusIDs = append(statusIDs, status.ID)
+			statusIDSeen[status.ID] = struct{}{}
+		}
+		if status.ReblogOfID.Valid {
+			rebloggedID := status.ReblogOfID.Int64
+			if _, ok := statusIDSeen[rebloggedID]; !ok {
+				statusIDs = append(statusIDs, rebloggedID)
+				statusIDSeen[rebloggedID] = struct{}{}
+			}
+		}
+
+		if isPinnableStatus(accountID, status) {
+			if _, ok := pinnableSeen[status.ID]; !ok {
+				pinnableIDs = append(pinnableIDs, status.ID)
+				pinnableSeen[status.ID] = struct{}{}
+			}
+		}
+	}
+
+	if len(statusIDs) == 0 {
+		return relationships
+	}
+
+	if ids, err := q.ListFavouritedStatusIDs(ctx, db.ListFavouritedStatusIDsParams{
+		AccountID: accountID,
+		StatusIds: statusIDs,
+	}); err == nil {
+		for _, id := range ids {
+			relationships.favourited[id] = true
+		}
+	}
+
+	if ids, err := q.ListBookmarkedStatusIDs(ctx, db.ListBookmarkedStatusIDsParams{
+		AccountID: accountID,
+		StatusIds: statusIDs,
+	}); err == nil {
+		for _, id := range ids {
+			relationships.bookmarked[id] = true
+		}
+	}
+
+	if ids, err := q.ListRebloggedStatusIDs(ctx, db.ListRebloggedStatusIDsParams{
+		AccountID: accountID,
+		StatusIds: statusIDs,
+	}); err == nil {
+		for _, id := range ids {
+			if id.Valid {
+				relationships.reblogged[id.Int64] = true
+			}
+		}
+	}
+
+	if len(pinnableIDs) > 0 {
+		if ids, err := q.ListPinnedStatusIDs(ctx, db.ListPinnedStatusIDsParams{
+			AccountID: accountID,
+			StatusIds: pinnableIDs,
+		}); err == nil {
+			for _, id := range ids {
+				relationships.pinned[id] = true
+			}
+		}
+	}
+
+	return relationships
+}
+
+func applyStatusRelationships(status *Status, dbStatus db.Status, relationships statusRelationships, accountID int64, hasAccount bool) {
+	if status == nil {
+		return
+	}
+
+	status.Favourited = relationships.favourited[dbStatus.ID]
+	status.Reblogged = relationships.reblogged[dbStatus.ID]
+	status.Bookmarked = relationships.bookmarked[dbStatus.ID]
+
+	if hasAccount && isPinnableStatus(accountID, dbStatus) {
+		pinned := relationships.pinned[dbStatus.ID]
+		status.Pinned = &pinned
+	}
+}
+
+func statusEmojiDomain(acc Account) string {
+	acct := strings.TrimSpace(acc.Acct)
+	if acct == "" {
+		return ""
+	}
+	parts := strings.SplitN(acct, "@", 2)
+	if len(parts) == 2 {
+		return strings.ToLower(strings.TrimSpace(parts[1]))
+	}
+	return ""
+}
+
+func statusShortcodes(spoilerText, content string) []string {
+	shortcodes := make([]string, 0)
+	seen := make(map[string]struct{})
+	appendShortcodes(spoilerText, seen, &shortcodes)
+	appendShortcodes(content, seen, &shortcodes)
+	return shortcodes
+}
+
+func buildStatusEmojis(ctx context.Context, q statusEmojiQuerier, statuses []db.Status, accounts map[int64]Account) map[int64][]CustomEmoji {
+	emojisByStatus := make(map[int64][]CustomEmoji, len(statuses))
+	if q == nil || len(statuses) == 0 {
+		return emojisByStatus
+	}
+
+	statusShortcodesMap := make(map[int64][]string, len(statuses))
+	statusDomains := make(map[int64]string, len(statuses))
+	domainShortcodes := make(map[string]map[string]struct{})
+
+	for _, status := range statuses {
+		shortcodes := statusShortcodes(status.SpoilerText, status.Text)
+		if len(shortcodes) == 0 {
+			continue
+		}
+		domain := ""
+		if acc, ok := accounts[status.AccountID]; ok {
+			domain = statusEmojiDomain(acc)
+		}
+		statusShortcodesMap[status.ID] = shortcodes
+		statusDomains[status.ID] = domain
+
+		if _, ok := domainShortcodes[domain]; !ok {
+			domainShortcodes[domain] = make(map[string]struct{})
+		}
+		for _, shortcode := range shortcodes {
+			domainShortcodes[domain][shortcode] = struct{}{}
+		}
+	}
+
+	if len(domainShortcodes) == 0 {
+		return emojisByStatus
+	}
+
+	emojisByDomain := make(map[string]map[string]db.CustomEmoji, len(domainShortcodes))
+	for domain, shortcodes := range domainShortcodes {
+		list := make([]string, 0, len(shortcodes))
+		for shortcode := range shortcodes {
+			list = append(list, shortcode)
+		}
+		emojis, err := q.ListCustomEmojisByShortcodesAndDomain(ctx, db.ListCustomEmojisByShortcodesAndDomainParams{
+			Shortcodes: list,
+			Domain:     domain,
+		})
+		if err != nil {
+			continue
+		}
+		if _, ok := emojisByDomain[domain]; !ok {
+			emojisByDomain[domain] = make(map[string]db.CustomEmoji, len(emojis))
+		}
+		for _, emoji := range emojis {
+			emojisByDomain[domain][emoji.Shortcode] = emoji
+		}
+	}
+
+	for statusID, shortcodes := range statusShortcodesMap {
+		domain := statusDomains[statusID]
+		emojiMap := emojisByDomain[domain]
+		if len(emojiMap) == 0 {
+			emojisByStatus[statusID] = []CustomEmoji{}
+			continue
+		}
+		emojis := make([]CustomEmoji, 0, len(shortcodes))
+		for _, shortcode := range shortcodes {
+			emoji, ok := emojiMap[shortcode]
+			if !ok {
+				continue
+			}
+			emojis = append(emojis, CustomEmoji{
+				Shortcode:       emoji.Shortcode,
+				URL:             GetEmojiURL(emoji),
+				StaticURL:       GetEmojiURL(emoji),
+				VisibleInPicker: emoji.VisibleInPicker,
+			})
+		}
+		emojisByStatus[statusID] = emojis
+	}
+
+	return emojisByStatus
+}
 
 // SerializeStatuses converts a slice of database Status records to API Statuses efficiently
 func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, dbStatuses []db.Status) []Status {
@@ -44,6 +276,8 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 		}
 	}
 
+	accountID, hasAccount := middleware.GetAccountID(ctx)
+
 	// Bulk fetch related data
 	dbAccounts, _ := q.GetAccountsByIDs(ctx, accountIDs)
 	dbMedias, _ := q.GetMediaAttachmentsByStatusIDs(ctx, statusIDs)
@@ -52,6 +286,7 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 
 	// Map data for easy lookup
 	accountsMap := serializeAccounts(ctx, q, cfg, dbAccounts, true)
+	statusEmojis := buildStatusEmojis(ctx, q, dbStatuses, accountsMap)
 
 	mediaMap := make(map[int64][]MediaAttach)
 	for _, m := range dbMedias {
@@ -148,7 +383,7 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 	}
 
 	mutedConversations := make(map[int64]bool)
-	if accountID, ok := middleware.GetAccountID(ctx); ok && len(conversationIDs) > 0 {
+	if hasAccount && len(conversationIDs) > 0 {
 		mutes, err := q.ListConversationMutes(ctx, db.ListConversationMutesParams{
 			AccountID:       accountID,
 			ConversationIds: conversationIDs,
@@ -229,10 +464,10 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 		}
 	}
 
-	// Fetch quoted statuses
-	quotedStatusesMap := make(map[int64]Status)
+	quotedDbStatuses := []db.Status{}
+	quotedAccountsMap := make(map[int64]Account)
 	if len(quotedStatusIDs) > 0 {
-		quotedDbStatuses, _ := q.GetStatusesByIDs(ctx, quotedStatusIDs)
+		quotedDbStatuses, _ = q.GetStatusesByIDs(ctx, quotedStatusIDs)
 
 		// Bulk fetch accounts for quoted statuses to avoid N+1 queries
 		quotedAccountIDs := make([]int64, 0, len(quotedDbStatuses))
@@ -244,19 +479,28 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 			}
 		}
 
-		quotedAccountsMap := make(map[int64]Account)
 		if len(quotedAccountIDs) > 0 {
 			quotedDbAccounts, _ := q.GetAccountsByIDs(ctx, quotedAccountIDs)
 			quotedAccountsMap = serializeAccounts(ctx, q, cfg, quotedDbAccounts, true)
 		}
+	}
 
-		// Serialize quoted statuses (without recursing into their quotes to avoid infinite loops)
+	allStatuses := make([]db.Status, 0, len(dbStatuses)+len(quotedDbStatuses))
+	allStatuses = append(allStatuses, dbStatuses...)
+	allStatuses = append(allStatuses, quotedDbStatuses...)
+	relationships := buildStatusRelationships(ctx, q, accountID, allStatuses)
+
+	// Serialize quoted statuses (without recursing into their quotes to avoid infinite loops)
+	quotedStatusesMap := make(map[int64]Status)
+	if len(quotedDbStatuses) > 0 {
 		for _, qs := range quotedDbStatuses {
 			var accPtr *Account
 			if acc, ok := quotedAccountsMap[qs.AccountID]; ok {
 				accPtr = &acc
 			}
-			quotedStatusesMap[qs.ID] = SerializeStatusSimple(ctx, q, cfg, qs, accPtr)
+			quotedStatus := SerializeStatusSimple(ctx, q, cfg, qs, accPtr)
+			applyStatusRelationships(&quotedStatus, qs, relationships, accountID, hasAccount)
+			quotedStatusesMap[qs.ID] = quotedStatus
 		}
 	}
 
@@ -294,6 +538,11 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 			statusTags = []Tag{}
 		}
 
+		emojis := statusEmojis[dbStatus.ID]
+		if emojis == nil {
+			emojis = []CustomEmoji{}
+		}
+
 		// Stats
 		repliesCount := int64(0)
 		reblogsCount := int64(0)
@@ -308,6 +557,12 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 		if dbStatus.Language.Valid {
 			s := dbStatus.Language.String
 			language = &s
+		}
+
+		var editedAt *time.Time
+		if dbStatus.EditedAt.Valid {
+			s := dbStatus.EditedAt.Time
+			editedAt = &s
 		}
 
 		muted := false
@@ -329,18 +584,15 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 			RepliesCount:       repliesCount,
 			ReblogsCount:       reblogsCount,
 			FavouritesCount:    favouritesCount,
-			Favourited:         false,
-			Reblogged:          false,
+			EditedAt:           editedAt,
 			Muted:              muted,
-			Bookmarked:         false,
 			Content:            dbStatus.Text,
 			Reblog:             nil,
 			Account:            account,
 			MediaAttachments:   mediaAttachments,
 			Mentions:           mentions,
 			Tags:               statusTags,
-			Emojis:             []CustomEmoji{},
-			Pinned:             false,
+			Emojis:             emojis,
 		}
 		if card, ok := previewCardsMap[dbStatus.ID]; ok {
 			s.Card = card
@@ -363,6 +615,8 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 				s.Quote = &quotedStatus
 			}
 		}
+
+		applyStatusRelationships(&s, dbStatus, relationships, accountID, hasAccount)
 
 		results[i] = s
 	}
@@ -412,6 +666,22 @@ func SerializeStatusSimple(ctx context.Context, q db.Querier, cfg *config.Config
 		language = &s
 	}
 
+	var editedAt *time.Time
+	if dbStatus.EditedAt.Valid {
+		s := dbStatus.EditedAt.Time
+		editedAt = &s
+	}
+
+	emojis := []CustomEmoji{}
+	if q != nil {
+		statusEmojis := buildStatusEmojis(ctx, q, []db.Status{dbStatus}, map[int64]Account{
+			dbStatus.AccountID: account,
+		})
+		if list, ok := statusEmojis[dbStatus.ID]; ok {
+			emojis = list
+		}
+	}
+
 	return Status{
 		ID:               strconv.FormatInt(dbStatus.ID, 10),
 		CreatedAt:        dbStatus.CreatedAt.Time,
@@ -421,12 +691,13 @@ func SerializeStatusSimple(ctx context.Context, q db.Querier, cfg *config.Config
 		Language:         language,
 		URI:              dbStatus.Uri.String,
 		URL:              &dbStatus.Url.String,
+		EditedAt:         editedAt,
 		Content:          dbStatus.Text,
 		Account:          account,
 		MediaAttachments: []MediaAttach{},
 		Mentions:         []Mention{},
 		Tags:             []Tag{},
-		Emojis:           []CustomEmoji{},
+		Emojis:           emojis,
 	}
 }
 

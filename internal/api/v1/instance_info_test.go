@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 )
@@ -91,9 +94,50 @@ func TestInstanceInfoHandler_Activity_MockMode(t *testing.T) {
 	}
 }
 
+func TestInstanceInfoHandler_Activity_Counts(t *testing.T) {
+	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
+	queries := &stubInstanceInfoQueries{
+		statusCount:       12,
+		loginCount:        5,
+		registrationCount: 3,
+	}
+	h := NewInstanceInfoHandler(queries, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/instance/activity", nil)
+	rec := httptest.NewRecorder()
+
+	h.Activity(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var weeks []ActivityWeek
+	if err := json.Unmarshal(rec.Body.Bytes(), &weeks); err != nil {
+		t.Fatalf("Failed to unmarshal response: %v", err)
+	}
+
+	if len(weeks) == 0 {
+		t.Fatalf("weeks length = 0, want > 0")
+	}
+
+	if weeks[0].Statuses != "12" || weeks[0].Logins != "5" || weeks[0].Registrations != "3" {
+		t.Fatalf("week counts = %#v, want statuses=12 logins=5 registrations=3", weeks[0])
+	}
+}
 func TestInstanceInfoHandler_ExtendedDescription(t *testing.T) {
 	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
-	h := NewInstanceInfoHandler(nil, cfg)
+	updatedAt := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
+	queries := &stubInstanceInfoQueries{
+		settings: []db.GetSettingsByVarsRow{
+			{
+				Var:       settingSiteExtendedDescription,
+				Value:     pgtype.Text{String: "Welcome to **example**.", Valid: true},
+				UpdatedAt: pgtype.Timestamptz{Time: updatedAt, Valid: true},
+			},
+		},
+	}
+	h := NewInstanceInfoHandler(queries, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/instance/extended_description", nil)
 	rec := httptest.NewRecorder()
@@ -108,6 +152,13 @@ func TestInstanceInfoHandler_ExtendedDescription(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &desc); err != nil {
 		t.Fatalf("Failed to unmarshal response: %v", err)
 	}
+
+	if desc.UpdatedAt == nil || !desc.UpdatedAt.Equal(updatedAt) {
+		t.Fatalf("updated_at = %v, want %v", desc.UpdatedAt, updatedAt)
+	}
+	if !strings.Contains(desc.Content, "<strong>example</strong>") {
+		t.Fatalf("content missing rendered markdown: %q", desc.Content)
+	}
 }
 
 func TestInstanceInfoHandler_PrivacyPolicy(t *testing.T) {
@@ -121,6 +172,20 @@ func TestInstanceInfoHandler_PrivacyPolicy(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var policy PrivacyPolicy
+	if err := json.Unmarshal(rec.Body.Bytes(), &policy); err != nil {
+		t.Fatalf("Failed to unmarshal response: %v", err)
+	}
+	if policy.UpdatedAt == nil || policy.UpdatedAt.Format("2006-01-02") != "2022-10-07" {
+		t.Fatalf("updated_at = %v, want 2022-10-07", policy.UpdatedAt)
+	}
+	if !strings.Contains(policy.Content, "example.com") {
+		t.Fatalf("content missing domain substitution: %q", policy.Content)
+	}
+	if !strings.Contains(policy.Content, "This privacy policy describes how") {
+		t.Fatalf("content missing expected text: %q", policy.Content)
 	}
 }
 
@@ -168,6 +233,58 @@ func TestInstanceInfoHandler_TermsOfServiceByDate_NotFound_MockMode(t *testing.T
 	}
 }
 
+type stubInstanceInfoQueries struct {
+	settings          []db.GetSettingsByVarsRow
+	statusCount       int64
+	loginCount        int64
+	registrationCount int64
+	domainBlocks      []db.DomainBlock
+}
+
+func (s *stubInstanceInfoQueries) GetSettingsByVars(ctx context.Context, vars []string) ([]db.GetSettingsByVarsRow, error) {
+	return s.settings, nil
+}
+
+func (s *stubInstanceInfoQueries) ListRules(ctx context.Context) ([]db.Rule, error) {
+	return nil, nil
+}
+
+func (s *stubInstanceInfoQueries) GetKnownDomains(ctx context.Context) ([]pgtype.Text, error) {
+	return nil, nil
+}
+
+func (s *stubInstanceInfoQueries) CountStatusesInRange(ctx context.Context, arg db.CountStatusesInRangeParams) (int64, error) {
+	return s.statusCount, nil
+}
+
+func (s *stubInstanceInfoQueries) CountUserRegistrationsInRange(ctx context.Context, arg db.CountUserRegistrationsInRangeParams) (int64, error) {
+	return s.registrationCount, nil
+}
+
+func (s *stubInstanceInfoQueries) CountUserLoginsInRange(ctx context.Context, arg db.CountUserLoginsInRangeParams) (int64, error) {
+	return s.loginCount, nil
+}
+
+func (s *stubInstanceInfoQueries) ListPublicDomainBlocks(ctx context.Context) ([]db.DomainBlock, error) {
+	return s.domainBlocks, nil
+}
+
+func (s *stubInstanceInfoQueries) GetTermsOfServiceByEffectiveDate(ctx context.Context, effectiveDate pgtype.Date) (db.TermsOfService, error) {
+	return db.TermsOfService{}, pgx.ErrNoRows
+}
+
+func (s *stubInstanceInfoQueries) GetCurrentTermsOfService(ctx context.Context) (db.TermsOfService, error) {
+	return db.TermsOfService{}, pgx.ErrNoRows
+}
+
+func (s *stubInstanceInfoQueries) GetUpcomingTermsOfService(ctx context.Context) (db.TermsOfService, error) {
+	return db.TermsOfService{}, pgx.ErrNoRows
+}
+
+func (s *stubInstanceInfoQueries) GetTermsOfServiceSucceededBy(ctx context.Context, arg db.GetTermsOfServiceSucceededByParams) (db.TermsOfService, error) {
+	return db.TermsOfService{}, pgx.ErrNoRows
+}
+
 func TestInstanceInfoHandler_TranslationLanguages(t *testing.T) {
 	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
 	h := NewInstanceInfoHandler(nil, cfg)
@@ -210,7 +327,7 @@ func TestInstanceInfoHandler_Languages(t *testing.T) {
 	}
 }
 
-func TestInstanceInfoHandler_DomainBlocks(t *testing.T) {
+func TestInstanceInfoHandler_DomainBlocks_Disabled(t *testing.T) {
 	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
 	h := NewInstanceInfoHandler(nil, cfg)
 
@@ -219,8 +336,117 @@ func TestInstanceInfoHandler_DomainBlocks(t *testing.T) {
 
 	h.DomainBlocksPublic(rec, req)
 
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestInstanceInfoHandler_DomainBlocks_All(t *testing.T) {
+	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
+	queries := &stubInstanceInfoQueries{
+		settings: []db.GetSettingsByVarsRow{
+			{
+				Var:   settingShowDomainBlocks,
+				Value: pgtype.Text{String: "all", Valid: true},
+			},
+			{
+				Var:   settingShowDomainBlocksRationale,
+				Value: pgtype.Text{String: "all", Valid: true},
+			},
+		},
+		domainBlocks: []db.DomainBlock{
+			{
+				Domain:        "example.org",
+				Severity:      0,
+				Obfuscate:     true,
+				PublicComment: pgtype.Text{String: "Bad stuff", Valid: true},
+			},
+		},
+	}
+	h := NewInstanceInfoHandler(queries, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/instance/domain_blocks", nil)
+	rec := httptest.NewRecorder()
+
+	h.DomainBlocksPublic(rec, req)
+
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var blocks []InstanceDomainBlock
+	if err := json.Unmarshal(rec.Body.Bytes(), &blocks); err != nil {
+		t.Fatalf("Failed to unmarshal response: %v", err)
+	}
+	if len(blocks) != 1 {
+		t.Fatalf("blocks length = %d, want 1", len(blocks))
+	}
+	if blocks[0].Digest == "" {
+		t.Fatalf("digest should not be empty")
+	}
+	if blocks[0].Domain == "example.org" || !strings.Contains(blocks[0].Domain, "*") {
+		t.Fatalf("expected obfuscated domain, got %q", blocks[0].Domain)
+	}
+	if blocks[0].Severity != "silence" {
+		t.Fatalf("severity = %q, want %q", blocks[0].Severity, "silence")
+	}
+	if blocks[0].Comment != "Bad stuff" {
+		t.Fatalf("comment = %q, want %q", blocks[0].Comment, "Bad stuff")
+	}
+}
+
+func TestInstanceInfoHandler_DomainBlocks_UsersRequiresAuth(t *testing.T) {
+	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
+	queries := &stubInstanceInfoQueries{
+		settings: []db.GetSettingsByVarsRow{
+			{
+				Var:   settingShowDomainBlocks,
+				Value: pgtype.Text{String: "users", Valid: true},
+			},
+			{
+				Var:   settingShowDomainBlocksRationale,
+				Value: pgtype.Text{String: "users", Valid: true},
+			},
+		},
+		domainBlocks: []db.DomainBlock{
+			{
+				Domain:        "blocked.test",
+				Severity:      1,
+				PublicComment: pgtype.Text{String: "Hidden", Valid: true},
+			},
+		},
+	}
+	h := NewInstanceInfoHandler(queries, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/instance/domain_blocks", nil)
+	rec := httptest.NewRecorder()
+
+	h.DomainBlocksPublic(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+
+	reqAuth := httptest.NewRequest(http.MethodGet, "/api/v1/instance/domain_blocks", nil)
+	ctx := context.WithValue(reqAuth.Context(), middleware.ContextKeyAccountID, int64(123))
+	reqAuth = reqAuth.WithContext(ctx)
+	recAuth := httptest.NewRecorder()
+
+	h.DomainBlocksPublic(recAuth, reqAuth)
+
+	if recAuth.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", recAuth.Code, http.StatusOK)
+	}
+
+	var blocks []InstanceDomainBlock
+	if err := json.Unmarshal(recAuth.Body.Bytes(), &blocks); err != nil {
+		t.Fatalf("Failed to unmarshal response: %v", err)
+	}
+	if len(blocks) != 1 || blocks[0].Severity != "suspend" {
+		t.Fatalf("blocks = %#v, want suspend block", blocks)
+	}
+	if blocks[0].Comment == "" {
+		t.Fatalf("expected comment for authenticated user")
 	}
 }
 

@@ -83,12 +83,17 @@ func (h *SuggestionsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	serialized := v1.SerializeAccounts(r.Context(), h.queries, h.cfg, accounts, true)
 	suggestions := make([]SuggestionV2, 0, len(accounts))
 	for _, account := range accounts {
+		apiAcc, ok := serialized[account.ID]
+		if !ok {
+			apiAcc = v1.SerializeAccount(h.cfg, account)
+		}
 		suggestions = append(suggestions, SuggestionV2{
 			Source:  suggestionLegacySource,
 			Sources: []string{suggestionSourceMostFollowed},
-			Account: v1.SerializeAccount(h.cfg, account),
+			Account: apiAcc,
 		})
 	}
 

@@ -1,5 +1,5 @@
 -- name: GetSettingsByVars :many
-SELECT var, value
+SELECT var, value, updated_at
 FROM settings
 WHERE var = ANY(@vars::text[]);
 

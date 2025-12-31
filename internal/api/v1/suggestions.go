@@ -2,8 +2,12 @@
 package v1
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
@@ -86,9 +90,31 @@ func (h *SuggestionsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	suggestionAccountID := web.Param(r, "account_id")
+	targetID, err := strconv.ParseInt(suggestionAccountID, 10, 64)
+	if err != nil || targetID <= 0 {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
 
-	_ = accountID
-	_ = suggestionAccountID
+	if h.queries != nil {
+		err = h.queries.CreateFollowRecommendationMute(r.Context(), db.CreateFollowRecommendationMuteParams{
+			AccountID:       accountID,
+			TargetAccountID: targetID,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				web.JSONError(w, http.StatusNotFound, "Record not found")
+				return
+			}
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+				web.JSONError(w, http.StatusNotFound, "Record not found")
+				return
+			}
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+	}
 
 	// In production: remove this suggestion for the user
 	web.JSON(w, http.StatusOK, map[string]any{})

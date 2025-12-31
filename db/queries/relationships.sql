@@ -57,6 +57,11 @@ INSERT INTO favourites (account_id, status_id)
 VALUES ($1, $2)
 RETURNING *;
 
+-- name: ListFavouritedStatusIDs :many
+SELECT status_id FROM favourites
+WHERE account_id = $1
+  AND status_id = ANY(@status_ids::bigint[]);
+
 -- name: GetFavourite :one
 SELECT * FROM favourites WHERE account_id = $1 AND status_id = $2;
 

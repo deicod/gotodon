@@ -1262,6 +1262,37 @@ func (q *Queries) ListDomainBlocks(ctx context.Context, arg ListDomainBlocksPara
 	return items, nil
 }
 
+const listFavouritedStatusIDs = `-- name: ListFavouritedStatusIDs :many
+SELECT status_id FROM favourites
+WHERE account_id = $1
+  AND status_id = ANY($2::bigint[])
+`
+
+type ListFavouritedStatusIDsParams struct {
+	AccountID int64   `db:"account_id" json:"account_id"`
+	StatusIds []int64 `db:"status_ids" json:"status_ids"`
+}
+
+func (q *Queries) ListFavouritedStatusIDs(ctx context.Context, arg ListFavouritedStatusIDsParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listFavouritedStatusIDs, arg.AccountID, arg.StatusIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int64{}
+	for rows.Next() {
+		var status_id int64
+		if err := rows.Scan(&status_id); err != nil {
+			return nil, err
+		}
+		items = append(items, status_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listFavourites = `-- name: ListFavourites :many
 SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at, s.quote_approval_policy FROM statuses s
 JOIN favourites f ON f.status_id = s.id

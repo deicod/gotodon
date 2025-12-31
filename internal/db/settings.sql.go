@@ -12,14 +12,15 @@ import (
 )
 
 const getSettingsByVars = `-- name: GetSettingsByVars :many
-SELECT var, value
+SELECT var, value, updated_at
 FROM settings
 WHERE var = ANY($1::text[])
 `
 
 type GetSettingsByVarsRow struct {
-	Var   string      `db:"var" json:"var"`
-	Value pgtype.Text `db:"value" json:"value"`
+	Var       string             `db:"var" json:"var"`
+	Value     pgtype.Text        `db:"value" json:"value"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 func (q *Queries) GetSettingsByVars(ctx context.Context, vars []string) ([]GetSettingsByVarsRow, error) {
@@ -31,7 +32,7 @@ func (q *Queries) GetSettingsByVars(ctx context.Context, vars []string) ([]GetSe
 	items := []GetSettingsByVarsRow{}
 	for rows.Next() {
 		var i GetSettingsByVarsRow
-		if err := rows.Scan(&i.Var, &i.Value); err != nil {
+		if err := rows.Scan(&i.Var, &i.Value, &i.UpdatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

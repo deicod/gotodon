@@ -237,6 +237,48 @@ func (q *Queries) ListCustomEmojis(ctx context.Context) ([]CustomEmoji, error) {
 	return items, nil
 }
 
+const listCustomEmojisByIDs = `-- name: ListCustomEmojisByIDs :many
+SELECT id, shortcode, domain, image_file_name, image_content_type, image_file_size, image_updated_at, created_at, updated_at, disabled, uri, image_remote_url, visible_in_picker, category_id, image_storage_schema_version FROM custom_emojis
+WHERE disabled = false
+  AND id = ANY($1::bigint[])
+`
+
+func (q *Queries) ListCustomEmojisByIDs(ctx context.Context, ids []int64) ([]CustomEmoji, error) {
+	rows, err := q.db.Query(ctx, listCustomEmojisByIDs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CustomEmoji{}
+	for rows.Next() {
+		var i CustomEmoji
+		if err := rows.Scan(
+			&i.ID,
+			&i.Shortcode,
+			&i.Domain,
+			&i.ImageFileName,
+			&i.ImageContentType,
+			&i.ImageFileSize,
+			&i.ImageUpdatedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Disabled,
+			&i.Uri,
+			&i.ImageRemoteUrl,
+			&i.VisibleInPicker,
+			&i.CategoryID,
+			&i.ImageStorageSchemaVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCustomEmojisByShortcodesAndDomain = `-- name: ListCustomEmojisByShortcodesAndDomain :many
 SELECT id, shortcode, domain, image_file_name, image_content_type, image_file_size, image_updated_at, created_at, updated_at, disabled, uri, image_remote_url, visible_in_picker, category_id, image_storage_schema_version FROM custom_emojis
 WHERE disabled = false

@@ -24,7 +24,8 @@ type accountSerializeOptions struct {
 	IncludeMoved bool
 }
 
-type accountDataQueries interface {
+// AccountDataQuerier exposes the account data needed for full serialization.
+type AccountDataQuerier interface {
 	ListAccountStatsByAccountIDs(ctx context.Context, accountIds []int64) ([]db.AccountStat, error)
 	ListUserSettingsByAccountIDs(ctx context.Context, accountIds []int64) ([]db.ListUserSettingsByAccountIDsRow, error)
 	ListUserRolesByAccountIDs(ctx context.Context, accountIds []int64) ([]db.ListUserRolesByAccountIDsRow, error)
@@ -33,7 +34,7 @@ type accountDataQueries interface {
 }
 
 type accountCredentialQueries interface {
-	accountDataQueries
+	AccountDataQuerier
 	GetUserByAccountID(ctx context.Context, accountID int64) (db.User, error)
 	CountFollowRequestsForAccount(ctx context.Context, targetAccountID int64) (int64, error)
 	GetUserRole(ctx context.Context, userID int64) (db.UserRole, error)
@@ -44,7 +45,12 @@ func SerializeAccount(cfg *config.Config, dbAcc db.Account) Account {
 	return serializeAccount(cfg, dbAcc, accountSerializeOptions{})
 }
 
-func serializeAccounts(ctx context.Context, q accountDataQueries, cfg *config.Config, dbAccounts []db.Account, includeMoved bool) map[int64]Account {
+// SerializeAccounts converts a slice of db.Account records to API accounts with full stats/fields/emojis.
+func SerializeAccounts(ctx context.Context, q AccountDataQuerier, cfg *config.Config, dbAccounts []db.Account, includeMoved bool) map[int64]Account {
+	return serializeAccounts(ctx, q, cfg, dbAccounts, includeMoved)
+}
+
+func serializeAccounts(ctx context.Context, q AccountDataQuerier, cfg *config.Config, dbAccounts []db.Account, includeMoved bool) map[int64]Account {
 	accounts := make(map[int64]Account, len(dbAccounts))
 	if len(dbAccounts) == 0 {
 		return accounts

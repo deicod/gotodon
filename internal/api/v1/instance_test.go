@@ -14,7 +14,7 @@ import (
 )
 
 type stubInstanceQueries struct {
-	settings    []db.Setting
+	settings    []db.GetSettingsByVarsRow
 	rules       []db.Rule
 	userCount   int64
 	statusCount int64
@@ -22,7 +22,7 @@ type stubInstanceQueries struct {
 	account     db.Account
 }
 
-func (s *stubInstanceQueries) GetSettingsByVars(_ context.Context, _ []string) ([]db.Setting, error) {
+func (s *stubInstanceQueries) GetSettingsByVars(_ context.Context, _ []string) ([]db.GetSettingsByVarsRow, error) {
 	return s.settings, nil
 }
 
@@ -124,7 +124,7 @@ func TestInstanceHandler_Get_Defaults(t *testing.T) {
 }
 
 func TestInstanceHandler_Get_WithSettings(t *testing.T) {
-	settings := []db.Setting{
+	settings := []db.GetSettingsByVarsRow{
 		{Var: settingSiteTitle, Value: pgtype.Text{String: "Custom", Valid: true}},
 		{Var: settingSiteDescription, Value: pgtype.Text{String: "Long desc", Valid: true}},
 		{Var: settingSiteShortDescription, Value: pgtype.Text{String: "Short desc", Valid: true}},
@@ -205,11 +205,14 @@ func TestInstanceHandler_Get_WithSettings(t *testing.T) {
 	}
 
 	languages, ok := resp["languages"].([]any)
-	if !ok || len(languages) != 1 {
+	if !ok || len(languages) != 2 {
 		t.Fatalf("languages missing or invalid: %T", resp["languages"])
 	}
 	if languages[0] != "es" {
 		t.Fatalf("languages[0] = %v, want %q", languages[0], "es")
+	}
+	if languages[1] != "fr" {
+		t.Fatalf("languages[1] = %v, want %q", languages[1], "fr")
 	}
 
 	configuration, ok := resp["configuration"].(map[string]any)

@@ -10,6 +10,13 @@ WHERE account_id = $1 AND reblog_of_id = $2 AND deleted_at IS NULL
 ORDER BY id DESC
 LIMIT 1;
 
+-- name: ListRebloggedStatusIDs :many
+SELECT reblog_of_id AS status_id
+FROM statuses
+WHERE account_id = $1
+  AND reblog_of_id = ANY(@status_ids::bigint[])
+  AND deleted_at IS NULL;
+
 -- name: GetStatusesByIDs :many
 SELECT * FROM statuses WHERE id = ANY(@ids::bigint[]) AND deleted_at IS NULL;
 
@@ -113,6 +120,11 @@ SELECT s.* FROM statuses s
 JOIN status_pins sp ON sp.status_id = s.id
 WHERE sp.account_id = $1 AND s.deleted_at IS NULL
 ORDER BY sp.id DESC;
+
+-- name: ListPinnedStatusIDs :many
+SELECT status_id FROM status_pins
+WHERE account_id = $1
+  AND status_id = ANY(@status_ids::bigint[]);
 
 -- name: GetHomeTimeline :many
 SELECT s.* FROM statuses s

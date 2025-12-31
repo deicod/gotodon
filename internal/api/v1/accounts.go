@@ -58,36 +58,36 @@ func (h *AccountsHandler) useDB() bool {
 
 // Account represents a Mastodon account in API responses
 type Account struct {
-	ID              string                 `json:"id"`
-	Username        string                 `json:"username"`
-	Acct            string                 `json:"acct"`
-	DisplayName     string                 `json:"display_name"`
-	Locked          bool                   `json:"locked"`
-	Bot             bool                   `json:"bot"`
-	Discoverable    *bool                  `json:"discoverable"`
-	Indexable       bool                   `json:"indexable"`
-	Group           bool                   `json:"group"`
-	CreatedAt       time.Time              `json:"created_at"`
-	Note            string                 `json:"note"`
-	URL             string                 `json:"url"`
-	URI             string                 `json:"uri"`
-	Avatar          string                 `json:"avatar"`
-	AvatarStatic    string                 `json:"avatar_static"`
-	Header          string                 `json:"header"`
-	HeaderStatic    string                 `json:"header_static"`
-	FollowersCount  int64                  `json:"followers_count"`
-	FollowingCount  int64                  `json:"following_count"`
-	StatusesCount   int64                  `json:"statuses_count"`
-	LastStatusAt    *string                `json:"last_status_at"`
-	HideCollections bool                   `json:"hide_collections"`
-	Moved           *Account               `json:"moved,omitempty"`
-	Suspended       *bool                  `json:"suspended,omitempty"`
-	Limited         *bool                  `json:"limited,omitempty"`
-	NoIndex         *bool                  `json:"noindex,omitempty"`
-	Memorial        *bool                  `json:"memorial,omitempty"`
-	Roles           *[]AccountRoleSummary  `json:"roles,omitempty"`
-	Emojis          []CustomEmoji          `json:"emojis"`
-	Fields          []Field                `json:"fields"`
+	ID              string                `json:"id"`
+	Username        string                `json:"username"`
+	Acct            string                `json:"acct"`
+	DisplayName     string                `json:"display_name"`
+	Locked          bool                  `json:"locked"`
+	Bot             bool                  `json:"bot"`
+	Discoverable    *bool                 `json:"discoverable"`
+	Indexable       bool                  `json:"indexable"`
+	Group           bool                  `json:"group"`
+	CreatedAt       time.Time             `json:"created_at"`
+	Note            string                `json:"note"`
+	URL             string                `json:"url"`
+	URI             string                `json:"uri"`
+	Avatar          string                `json:"avatar"`
+	AvatarStatic    string                `json:"avatar_static"`
+	Header          string                `json:"header"`
+	HeaderStatic    string                `json:"header_static"`
+	FollowersCount  int64                 `json:"followers_count"`
+	FollowingCount  int64                 `json:"following_count"`
+	StatusesCount   int64                 `json:"statuses_count"`
+	LastStatusAt    *string               `json:"last_status_at"`
+	HideCollections bool                  `json:"hide_collections"`
+	Moved           *Account              `json:"moved,omitempty"`
+	Suspended       *bool                 `json:"suspended,omitempty"`
+	Limited         *bool                 `json:"limited,omitempty"`
+	NoIndex         *bool                 `json:"noindex,omitempty"`
+	Memorial        *bool                 `json:"memorial,omitempty"`
+	Roles           *[]AccountRoleSummary `json:"roles,omitempty"`
+	Emojis          []CustomEmoji         `json:"emojis"`
+	Fields          []Field               `json:"fields"`
 }
 
 // Field represents a profile field

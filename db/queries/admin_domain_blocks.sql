@@ -3,6 +3,11 @@ SELECT * FROM domain_blocks
 ORDER BY domain ASC
 LIMIT $1 OFFSET $2;
 
+-- name: ListPublicDomainBlocks :many
+SELECT * FROM domain_blocks
+WHERE severity IN (0, 1)
+ORDER BY severity ASC, domain ASC;
+
 -- name: AdminGetDomainBlock :one
 SELECT * FROM domain_blocks WHERE id = $1;
 

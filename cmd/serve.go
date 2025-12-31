@@ -236,7 +236,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		})
 	}
 
-	announcementsHandler := v1.NewAnnouncementsHandler(queries)
+	announcementsHandler := v1.NewAnnouncementsHandler(queries, cfg)
 	announcementsHandler.RegisterRoutes(mux)
 
 	markersHandler := v1.NewMarkersHandler(queries)

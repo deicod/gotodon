@@ -1020,6 +1020,70 @@ func (q *Queries) IncrementStatusReplies(ctx context.Context, statusID int64) er
 	return err
 }
 
+const listPinnedStatusIDs = `-- name: ListPinnedStatusIDs :many
+SELECT status_id FROM status_pins
+WHERE account_id = $1
+  AND status_id = ANY($2::bigint[])
+`
+
+type ListPinnedStatusIDsParams struct {
+	AccountID int64   `db:"account_id" json:"account_id"`
+	StatusIds []int64 `db:"status_ids" json:"status_ids"`
+}
+
+func (q *Queries) ListPinnedStatusIDs(ctx context.Context, arg ListPinnedStatusIDsParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listPinnedStatusIDs, arg.AccountID, arg.StatusIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int64{}
+	for rows.Next() {
+		var status_id int64
+		if err := rows.Scan(&status_id); err != nil {
+			return nil, err
+		}
+		items = append(items, status_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRebloggedStatusIDs = `-- name: ListRebloggedStatusIDs :many
+SELECT reblog_of_id AS status_id
+FROM statuses
+WHERE account_id = $1
+  AND reblog_of_id = ANY($2::bigint[])
+  AND deleted_at IS NULL
+`
+
+type ListRebloggedStatusIDsParams struct {
+	AccountID int64   `db:"account_id" json:"account_id"`
+	StatusIds []int64 `db:"status_ids" json:"status_ids"`
+}
+
+func (q *Queries) ListRebloggedStatusIDs(ctx context.Context, arg ListRebloggedStatusIDsParams) ([]pgtype.Int8, error) {
+	rows, err := q.db.Query(ctx, listRebloggedStatusIDs, arg.AccountID, arg.StatusIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.Int8{}
+	for rows.Next() {
+		var status_id pgtype.Int8
+		if err := rows.Scan(&status_id); err != nil {
+			return nil, err
+		}
+		items = append(items, status_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const pinStatus = `-- name: PinStatus :one
 INSERT INTO status_pins (account_id, status_id)
 VALUES ($1, $2)

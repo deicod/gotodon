@@ -100,7 +100,7 @@ var instanceSettingKeys = []string{
 }
 
 type instanceQuerier interface {
-	GetSettingsByVars(ctx context.Context, vars []string) ([]db.Setting, error)
+	GetSettingsByVars(ctx context.Context, vars []string) ([]db.GetSettingsByVarsRow, error)
 	ListRules(ctx context.Context) ([]db.Rule, error)
 	CountInstanceUsers(ctx context.Context) (int64, error)
 	CountInstanceStatuses(ctx context.Context) (int64, error)
@@ -236,7 +236,7 @@ func (h *InstanceHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	languages := []string{"en"}
 	if len(settings.Languages) > 0 {
-		languages = []string{settings.Languages[0]}
+		languages = settings.Languages
 	}
 
 	resp := InstanceResponse{
@@ -289,7 +289,11 @@ func (h *InstanceHandler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *InstanceHandler) loadInstanceSettings(ctx context.Context) instanceSettings {
-	registrations, approvalRequired := defaultRegistrations(h.cfg)
+	var cfg *config.Config
+	if h != nil {
+		cfg = h.cfg
+	}
+	registrations, approvalRequired := defaultRegistrations(cfg)
 	settings := instanceSettings{
 		Title:            defaultInstanceTitle,
 		ShortDescription: defaultInstanceDescription,
@@ -422,7 +426,7 @@ func (h *InstanceHandler) contactAccount(ctx context.Context, username string) *
 		return nil
 	}
 
-	if dataQueries, ok := h.queries.(accountDataQueries); ok {
+	if dataQueries, ok := h.queries.(AccountDataQuerier); ok {
 		serialized := serializeAccounts(ctx, dataQueries, h.cfg, []db.Account{acc}, true)
 		if api, ok := serialized[acc.ID]; ok {
 			return &api
