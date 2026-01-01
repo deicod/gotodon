@@ -43,6 +43,21 @@ const (
 
 const streamingPathPrefix = "/api/v1/streaming"
 
+// UserStreamKey returns the account-scoped stream key for the user stream.
+func UserStreamKey(accountID int64) string {
+	return fmt.Sprintf("%s:%d", StreamUser, accountID)
+}
+
+// UserNotificationStreamKey returns the account-scoped stream key for the notifications stream.
+func UserNotificationStreamKey(accountID int64) string {
+	return fmt.Sprintf("%s:%d", StreamUserNotification, accountID)
+}
+
+// DirectStreamKey returns the account-scoped stream key for the direct stream.
+func DirectStreamKey(accountID int64) string {
+	return fmt.Sprintf("%s:%d", StreamDirect, accountID)
+}
+
 type streamRequestError struct {
 	status  int
 	message string
@@ -162,18 +177,15 @@ func (h *Hub) Run(ctx context.Context) {
 					continue
 				}
 
-				// Check stream subscription
-				subscribed := false
+				// Deliver once per matching stream so WS payloads include the right stream array.
 				for _, stream := range msg.Streams {
-					if sub.IsSubscribed(stream) {
-						subscribed = true
-						break
+					if !sub.IsSubscribed(stream) {
+						continue
 					}
-				}
-
-				if subscribed {
+					event := *msg.Event
+					event.Stream = streamPayloadForKey(stream)
 					select {
-					case sub.Events <- msg.Event:
+					case sub.Events <- &event:
 					default:
 						// Drop message if buffer is full
 					}
@@ -197,7 +209,7 @@ func (h *Hub) Unregister(sub *Subscriber) {
 // Broadcast sends an event to all matching subscribers
 func (h *Hub) Broadcast(streams []string, event *Event) {
 	h.broadcast <- &BroadcastMessage{
-		Streams: streams,
+		Streams: dedupeStrings(streams),
 		Event:   event,
 	}
 }
@@ -205,7 +217,7 @@ func (h *Hub) Broadcast(streams []string, event *Event) {
 // BroadcastToAccount sends an event to a specific account
 func (h *Hub) BroadcastToAccount(accountID int64, streams []string, event *Event) {
 	h.broadcast <- &BroadcastMessage{
-		Streams:   streams,
+		Streams:   dedupeStrings(streams),
 		Event:     event,
 		AccountID: &accountID,
 	}
@@ -217,7 +229,6 @@ func (h *Hub) PublishStatus(status any, streams []string) {
 	h.Broadcast(streams, &Event{
 		Event:   EventUpdate,
 		Payload: string(payload),
-		Stream:  streams,
 	})
 }
 
@@ -226,18 +237,80 @@ func (h *Hub) PublishDelete(statusID string, streams []string) {
 	h.Broadcast(streams, &Event{
 		Event:   EventDelete,
 		Payload: statusID,
-		Stream:  streams,
 	})
 }
 
 // PublishNotification publishes a notification to a user
 func (h *Hub) PublishNotification(accountID int64, notification any) {
 	payload, _ := json.Marshal(notification)
-	h.BroadcastToAccount(accountID, []string{StreamUser, StreamUserNotification}, &Event{
+	h.Broadcast([]string{UserNotificationStreamKey(accountID)}, &Event{
 		Event:   EventNotification,
 		Payload: string(payload),
-		Stream:  []string{StreamUserNotification},
 	})
+}
+
+func streamPayloadForKey(stream string) []string {
+	if stream == "" {
+		return nil
+	}
+	if strings.HasPrefix(stream, StreamHashtagLocal+":") {
+		return []string{StreamHashtagLocal, strings.TrimPrefix(stream, StreamHashtagLocal+":")}
+	}
+	if strings.HasPrefix(stream, StreamHashtag+":") {
+		return []string{StreamHashtag, strings.TrimPrefix(stream, StreamHashtag+":")}
+	}
+	if strings.HasPrefix(stream, StreamList+":") {
+		return []string{StreamList, strings.TrimPrefix(stream, StreamList+":")}
+	}
+	if stream == StreamUserNotification || strings.HasPrefix(stream, StreamUserNotification+":") {
+		return []string{StreamUserNotification}
+	}
+	if stream == StreamUser || strings.HasPrefix(stream, StreamUser+":") {
+		return []string{StreamUser}
+	}
+	if stream == StreamDirect || strings.HasPrefix(stream, StreamDirect+":") {
+		return []string{StreamDirect}
+	}
+	return []string{stream}
+}
+
+func expandAccountScopedStreams(streams []string, accountID int64) []string {
+	if accountID <= 0 {
+		return streams
+	}
+	scoped := make([]string, 0, len(streams))
+	for _, stream := range streams {
+		switch stream {
+		case StreamUser:
+			scoped = append(scoped, StreamUser, UserStreamKey(accountID), UserNotificationStreamKey(accountID))
+		case StreamUserNotification:
+			scoped = append(scoped, UserNotificationStreamKey(accountID))
+		case StreamDirect:
+			scoped = append(scoped, DirectStreamKey(accountID))
+		default:
+			scoped = append(scoped, stream)
+		}
+	}
+	return dedupeStrings(scoped)
+}
+
+func dedupeStrings(values []string) []string {
+	if len(values) <= 1 {
+		return values
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func resolveStreamSubscriptions(path string, query url.Values, defaultStream string) ([]string, error) {
@@ -400,7 +473,7 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Create subscriber
 	sub := NewSubscriber(fmt.Sprintf("sse-%d-%d", accountID, time.Now().UnixNano()), accountID)
-	for _, stream := range subscriptions {
+	for _, stream := range expandAccountScopedStreams(subscriptions, accountID) {
 		sub.Subscribe(stream)
 	}
 

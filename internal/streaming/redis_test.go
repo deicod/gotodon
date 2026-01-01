@@ -14,6 +14,8 @@ func TestExtractStreamFromChannel(t *testing.T) {
 		{"gotodon:stream:user", "gotodon", "user"},
 		{"gotodon:stream:hashtag:golang", "gotodon", "hashtag:golang"},
 		{"gotodon:stream:user:12345", "gotodon", "user:12345"},
+		{"gotodon:stream:user:notification:12345", "gotodon", "user:notification:12345"},
+		{"gotodon:stream:direct:42", "gotodon", "direct:42"},
 		{"prefix:stream:list:1", "prefix", "list:1"},
 	}
 

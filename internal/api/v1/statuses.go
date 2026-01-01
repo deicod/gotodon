@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -236,10 +237,11 @@ func (e statusCreateError) StatusCode() int {
 }
 
 type statusCreationResult struct {
-	Status     db.Status
-	Sender     db.Account
-	Tags       []string
-	NotifTasks []notificationTask
+	Status         db.Status
+	Sender         db.Account
+	Tags           []string
+	NotifTasks     []notificationTask
+	ActiveMentions []db.Account
 }
 
 type mentionStore interface {
@@ -744,10 +746,11 @@ func (h *StatusesHandler) createStatusTx(ctx context.Context, qtx statusCreateSt
 	}
 
 	return statusCreationResult{
-		Status:     dbStatus,
-		Sender:     sender,
-		Tags:       tags,
-		NotifTasks: notifTasks,
+		Status:         dbStatus,
+		Sender:         sender,
+		Tags:           tags,
+		NotifTasks:     notifTasks,
+		ActiveMentions: activeMentions,
 	}, nil
 }
 
@@ -756,20 +759,7 @@ func (h *StatusesHandler) publishCreatedStatus(ctx context.Context, accountID in
 
 	// Publish streaming events
 	if h.publisher != nil {
-		// Publish to public timeline if public
-		streams := []string{}
-		if result.Status.Visibility == VisibilityPublic {
-			streams = append(streams, streaming.StreamPublic, streaming.StreamPublicLocal)
-		}
-
-		// Publish to user stream (home of followers would be distributed by worker usually,
-		// but simply publishing to author's user stream is good for self)
-		streams = append(streams, fmt.Sprintf("user:%d", accountID))
-
-		for _, t := range result.Tags {
-			streams = append(streams, fmt.Sprintf("hashtag:%s", t))
-		}
-
+		streams := statusStreamsForPublish(accountID, result.Status.Visibility, result.Tags)
 		_ = h.publisher.PublishStatusToRedis(context.Background(), apiStatus, streams)
 
 		// Publish notifications
@@ -783,6 +773,10 @@ func (h *StatusesHandler) publishCreatedStatus(ctx context.Context, accountID in
 				Status:    &apiStatus,
 			}
 			_ = h.publisher.PublishNotificationToRedis(ctx, task.Account.ID, apiNotif)
+		}
+
+		if result.Status.Visibility == VisibilityDirect {
+			h.publishConversationEvents(ctx, result.Status, result.Sender, result.ActiveMentions)
 		}
 	}
 
@@ -799,6 +793,183 @@ func (h *StatusesHandler) publishCreatedStatus(ctx context.Context, accountID in
 	}
 
 	return apiStatus
+}
+
+func (h *StatusesHandler) publishStatusUpdate(ctx context.Context, status Status, streams []string) {
+	if h == nil || h.publisher == nil || len(streams) == 0 {
+		return
+	}
+	publisher, ok := h.publisher.(streaming.EventPublisher)
+	if !ok {
+		return
+	}
+	_ = publisher.PublishEventToRedis(ctx, streaming.EventStatusUpdate, status, streams)
+}
+
+func (h *StatusesHandler) publishConversationEvents(ctx context.Context, status db.Status, author db.Account, mentions []db.Account) {
+	if h == nil || h.publisher == nil || h.queries == nil {
+		return
+	}
+	if !status.ConversationID.Valid || status.ID == 0 {
+		return
+	}
+	publisher, ok := h.publisher.(streaming.EventPublisher)
+	if !ok {
+		return
+	}
+
+	recipients := localRecipientsForStreaming(author, mentions)
+	if len(recipients) == 0 {
+		return
+	}
+
+	participants := participantAccountIDs(author, mentions)
+	convHandler := &ConversationsHandler{queries: h.queries, cfg: h.cfg}
+
+	for _, recipient := range recipients {
+		participantIDs := removeAccountID(participants, recipient.ID)
+		conv, err := h.queries.GetAccountConversationByParticipants(ctx, db.GetAccountConversationByParticipantsParams{
+			AccountID:             recipient.ID,
+			ConversationID:        status.ConversationID.Int64,
+			ParticipantAccountIds: participantIDs,
+		})
+		if err != nil {
+			continue
+		}
+		apiConv, err := convHandler.buildConversation(ctx, recipient.ID, conv)
+		if err != nil {
+			continue
+		}
+		_ = publisher.PublishEventToRedis(ctx, streaming.EventConversation, apiConv, []string{streaming.DirectStreamKey(recipient.ID)})
+	}
+}
+
+func statusStreamsForPublish(accountID int64, visibility int32, tags []string) []string {
+	streams := make([]string, 0, 2+len(tags))
+	if accountID > 0 {
+		streams = append(streams, streaming.UserStreamKey(accountID))
+	}
+	if visibility == VisibilityPublic {
+		streams = append(streams, streaming.StreamPublic, streaming.StreamPublicLocal)
+	}
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		streams = append(streams, fmt.Sprintf("hashtag:%s", tag))
+	}
+	return streams
+}
+
+func (h *StatusesHandler) loadStatusTagNames(ctx context.Context, q db.Querier, statusID int64) []string {
+	if h == nil || q == nil || statusID <= 0 {
+		return nil
+	}
+	rows, err := q.GetTagsByStatusIDs(ctx, []int64{statusID})
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(rows))
+	seen := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		tag := strings.TrimSpace(row.Name)
+		if tag == "" {
+			continue
+		}
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		seen[tag] = struct{}{}
+		out = append(out, tag)
+	}
+	return out
+}
+
+func mergeTags(tags ...[]string) []string {
+	out := []string{}
+	seen := map[string]struct{}{}
+	for _, list := range tags {
+		for _, tag := range list {
+			tag = strings.TrimSpace(tag)
+			if tag == "" {
+				continue
+			}
+			if _, ok := seen[tag]; ok {
+				continue
+			}
+			seen[tag] = struct{}{}
+			out = append(out, tag)
+		}
+	}
+	return out
+}
+
+func participantAccountIDs(author db.Account, mentions []db.Account) []int64 {
+	ids := make([]int64, 0, len(mentions)+1)
+	if author.ID != 0 {
+		ids = append(ids, author.ID)
+	}
+	for _, acc := range mentions {
+		if acc.ID != 0 {
+			ids = append(ids, acc.ID)
+		}
+	}
+	return uniqueSortedIDs(ids)
+}
+
+func localRecipientsForStreaming(author db.Account, mentions []db.Account) []db.Account {
+	recipients := make(map[int64]db.Account)
+	if isLocalAccount(author) {
+		recipients[author.ID] = author
+	}
+	for _, acc := range mentions {
+		if isLocalAccount(acc) {
+			recipients[acc.ID] = acc
+		}
+	}
+	if len(recipients) == 0 {
+		return nil
+	}
+	out := make([]db.Account, 0, len(recipients))
+	for _, acc := range recipients {
+		out = append(out, acc)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+func isLocalAccount(acc db.Account) bool {
+	return !acc.Domain.Valid || strings.TrimSpace(acc.Domain.String) == ""
+}
+
+func uniqueSortedIDs(ids []int64) []int64 {
+	if len(ids) == 0 {
+		return nil
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	out := ids[:0]
+	var prev int64
+	for i, id := range ids {
+		if i == 0 || id != prev {
+			out = append(out, id)
+			prev = id
+		}
+	}
+	return out
+}
+
+func removeAccountID(ids []int64, target int64) []int64 {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id != target {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func extractFirstURL(text string) string {
@@ -2185,6 +2356,7 @@ func (h *StatusesHandler) Edit(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Handle Hashtags Sync (Replace all)
+		oldTags := h.loadStatusTagNames(r.Context(), qtx, statusID)
 		if err := qtx.ClearStatusTags(r.Context(), statusID); err != nil {
 			web.JSONError(w, http.StatusInternalServerError, "Failed to clear tags")
 			return
@@ -2196,6 +2368,7 @@ func (h *StatusesHandler) Edit(w http.ResponseWriter, r *http.Request) {
 			web.JSONError(w, http.StatusInternalServerError, "Failed to save tags")
 			return
 		}
+		streamTags := mergeTags(oldTags, newTags)
 
 		if err := tx.Commit(r.Context()); err != nil {
 			web.JSONError(w, http.StatusInternalServerError, "Failed to commit transaction")
@@ -2213,6 +2386,9 @@ func (h *StatusesHandler) Edit(w http.ResponseWriter, r *http.Request) {
 			if err := h.outgoing.DeliverStatusUpdate(r.Context(), statusID); err != nil {
 				fmt.Printf("Failed to deliver Update activity: %v\n", err)
 			}
+		}
+		if h.publisher != nil {
+			h.publishStatusUpdate(r.Context(), s, statusStreamsForPublish(updatedStatus.AccountID, updatedStatus.Visibility, streamTags))
 		}
 		web.JSON(w, http.StatusOK, s)
 		return

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/streaming"
 )
 
 func mockAnnouncementRequest(method, path string, body string) (*http.Request, *httptest.ResponseRecorder) {
@@ -136,6 +138,50 @@ func TestAnnouncementsHandler_Reactions(t *testing.T) {
 	h.RemoveReaction(rec4, req4)
 }
 
+func TestAnnouncementsHandler_PublishesReactionEvent(t *testing.T) {
+	queries := &stubAnnouncementQueries{}
+	publisher := &stubEventPublisher{}
+	h := NewAnnouncementsHandler(queries, nil)
+	h.SetPublisher(publisher)
+
+	req, rec := mockAnnouncementRequest(http.MethodPut, "/api/v1/announcements/100/reactions/👍", "")
+	req.SetPathValue("id", "100")
+	req.SetPathValue("name", "👍")
+
+	h.AddReaction(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("events = %d, want 1", len(publisher.events))
+	}
+	event := publisher.events[0]
+	if event.eventType != streaming.EventAnnouncementReaction {
+		t.Fatalf("eventType = %q, want %q", event.eventType, streaming.EventAnnouncementReaction)
+	}
+	wantStreams := []string{streaming.StreamUser}
+	if !reflect.DeepEqual(event.streams, wantStreams) {
+		t.Fatalf("streams = %#v, want %#v", event.streams, wantStreams)
+	}
+	payload, ok := event.payload.(map[string]any)
+	if !ok {
+		t.Fatalf("payload type = %T, want map[string]any", event.payload)
+	}
+	if payload["announcement_id"] != "100" {
+		t.Fatalf("announcement_id = %#v, want %q", payload["announcement_id"], "100")
+	}
+	if payload["name"] != "👍" {
+		t.Fatalf("name = %#v, want %q", payload["name"], "👍")
+	}
+	if payload["me"] != false {
+		t.Fatalf("me = %#v, want false", payload["me"])
+	}
+	if payload["count"] != 1 {
+		t.Fatalf("count = %#v, want 1", payload["count"])
+	}
+}
+
 type stubAnnouncementQueries struct {
 	announcements          []db.Announcement
 	reactionsByAnnID       map[int64][]db.AnnouncementReaction
@@ -159,10 +205,45 @@ func (s *stubAnnouncementQueries) ListAnnouncementReactions(ctx context.Context,
 
 func (s *stubAnnouncementQueries) AddAnnouncementReaction(ctx context.Context, arg db.AddAnnouncementReactionParams) (db.AnnouncementReaction, error) {
 	s.addedReactionRequested = true
-	return s.addedReaction, nil
+	reaction := s.addedReaction
+	if reaction.AnnouncementID == 0 {
+		reaction.AnnouncementID = arg.AnnouncementID
+	}
+	if reaction.Name == "" {
+		reaction.Name = arg.Name
+	}
+	if !reaction.AccountID.Valid {
+		reaction.AccountID = arg.AccountID
+	}
+	if s.reactionsByAnnID == nil {
+		s.reactionsByAnnID = make(map[int64][]db.AnnouncementReaction)
+	}
+	s.reactionsByAnnID[arg.AnnouncementID] = append(s.reactionsByAnnID[arg.AnnouncementID], reaction)
+	s.addedReaction = reaction
+	return reaction, nil
 }
 
 func (s *stubAnnouncementQueries) RemoveAnnouncementReaction(ctx context.Context, arg db.RemoveAnnouncementReactionParams) error {
+	if s.reactionsByAnnID == nil {
+		return nil
+	}
+	reactions := s.reactionsByAnnID[arg.AnnouncementID]
+	remaining := reactions[:0]
+	for _, reaction := range reactions {
+		if reaction.Name != arg.Name {
+			remaining = append(remaining, reaction)
+			continue
+		}
+		if reaction.AccountID.Valid && reaction.AccountID.Int64 == arg.AccountID.Int64 {
+			continue
+		}
+		remaining = append(remaining, reaction)
+	}
+	if len(remaining) == 0 {
+		delete(s.reactionsByAnnID, arg.AnnouncementID)
+	} else {
+		s.reactionsByAnnID[arg.AnnouncementID] = remaining
+	}
 	return nil
 }
 

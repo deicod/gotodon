@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/streaming"
 )
 
 func mockFilterRequest(method, path, body string, accountID int64) (*http.Request, *httptest.ResponseRecorder) {
@@ -174,5 +176,43 @@ func TestFiltersHandler_List_Unauthorized(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+type stubEventPublisher struct {
+	events []publishedEvent
+}
+
+type publishedEvent struct {
+	eventType string
+	payload   any
+	streams   []string
+}
+
+func (s *stubEventPublisher) PublishEventToRedis(ctx context.Context, eventType string, payload any, streams []string) error {
+	s.events = append(s.events, publishedEvent{eventType: eventType, payload: payload, streams: streams})
+	return nil
+}
+
+func TestFiltersHandler_PublishesFiltersChanged(t *testing.T) {
+	h := NewFiltersHandler(nil, nil)
+	publisher := &stubEventPublisher{}
+	h.SetPublisher(publisher)
+
+	body := `{"phrase":"spoilers","context":["home"]}`
+	req, rec := mockFilterRequest(http.MethodPost, "/api/v1/filters", body, 12345)
+
+	h.Create(rec, req)
+
+	if len(publisher.events) != 1 {
+		t.Fatalf("events = %d, want 1", len(publisher.events))
+	}
+	event := publisher.events[0]
+	if event.eventType != streaming.EventFiltersChanged {
+		t.Fatalf("eventType = %q, want %q", event.eventType, streaming.EventFiltersChanged)
+	}
+	wantStreams := []string{streaming.UserStreamKey(12345)}
+	if !reflect.DeepEqual(event.streams, wantStreams) {
+		t.Fatalf("streams = %#v, want %#v", event.streams, wantStreams)
 	}
 }

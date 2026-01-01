@@ -61,7 +61,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		status, message := streamErrorDetails(err)
 		_ = conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"error":%q,"status":%d}`, message, status)))
 	} else {
-		for _, stream := range initialStreams {
+		for _, stream := range expandAccountScopedStreams(initialStreams, accountID) {
 			sub.Subscribe(stream)
 		}
 	}
@@ -96,10 +96,14 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			switch msg.Type {
 			case "subscribe":
 				stream := h.resolveStream(msg)
-				sub.Subscribe(stream)
+				for _, key := range expandAccountScopedStreams([]string{stream}, accountID) {
+					sub.Subscribe(key)
+				}
 			case "unsubscribe":
 				stream := h.resolveStream(msg)
-				sub.Unsubscribe(stream)
+				for _, key := range expandAccountScopedStreams([]string{stream}, accountID) {
+					sub.Unsubscribe(key)
+				}
 			}
 		}
 	}()

@@ -214,6 +214,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	notificationsHandler.RegisterRoutes(mux)
 
 	filtersHandler := v1.NewFiltersHandler(queries, pool)
+	if streamingHub != nil {
+		filtersHandler.SetPublisher(streamingHub)
+	}
 	filtersHandler.RegisterRoutes(mux)
 
 	mediaStorage := media.NewLocalStorage("./uploads", fmt.Sprintf("https://%s/files", cfg.Instance.LocalDomain))
@@ -237,6 +240,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	}
 
 	announcementsHandler := v1.NewAnnouncementsHandler(queries, cfg)
+	if streamingHub != nil {
+		announcementsHandler.SetPublisher(streamingHub)
+	}
 	announcementsHandler.RegisterRoutes(mux)
 
 	markersHandler := v1.NewMarkersHandler(queries)
@@ -321,6 +327,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	// Filters
 	v2FiltersHandler := v2.NewFiltersHandler(queries)
+	if streamingHub != nil {
+		v2FiltersHandler.SetPublisher(streamingHub)
+	}
 	v2FiltersHandler.RegisterRoutes(mux)
 
 	searchHandler := v2.NewSearchHandler(queries, cfg)

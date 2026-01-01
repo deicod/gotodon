@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -89,6 +90,9 @@ func TestWSHandler_InitialQuerySubscription(t *testing.T) {
 	if payload.Payload != "hello" {
 		t.Fatalf("payload = %q, want %q", payload.Payload, "hello")
 	}
+	if !reflect.DeepEqual(payload.Stream, []string{StreamPublic}) {
+		t.Fatalf("stream = %#v, want %#v", payload.Stream, []string{StreamPublic})
+	}
 }
 
 func TestWSHandler_InitialPathSubscription(t *testing.T) {
@@ -112,6 +116,9 @@ func TestWSHandler_InitialPathSubscription(t *testing.T) {
 	}
 	if payload.Payload != "path" {
 		t.Fatalf("payload = %q, want %q", payload.Payload, "path")
+	}
+	if !reflect.DeepEqual(payload.Stream, []string{StreamPublic}) {
+		t.Fatalf("stream = %#v, want %#v", payload.Stream, []string{StreamPublic})
 	}
 }
 
@@ -137,6 +144,9 @@ func TestWSHandler_InitialPathHashtagSubscription(t *testing.T) {
 	if payload.Payload != "tagged" {
 		t.Fatalf("payload = %q, want %q", payload.Payload, "tagged")
 	}
+	if !reflect.DeepEqual(payload.Stream, []string{StreamHashtag, "go"}) {
+		t.Fatalf("stream = %#v, want %#v", payload.Stream, []string{StreamHashtag, "go"})
+	}
 }
 
 func TestWSHandler_SubscribeUnsubscribe(t *testing.T) {
@@ -159,12 +169,16 @@ func TestWSHandler_SubscribeUnsubscribe(t *testing.T) {
 	env.hub.Broadcast([]string{StreamHashtag + ":go"}, &Event{Event: EventUpdate, Payload: "tagged"})
 
 	var payload struct {
-		Event   string `json:"event"`
-		Payload string `json:"payload"`
+		Event   string   `json:"event"`
+		Payload string   `json:"payload"`
+		Stream  []string `json:"stream"`
 	}
 	readWSJSON(t, conn, &payload)
 	if payload.Payload != "tagged" {
 		t.Fatalf("payload = %q, want %q", payload.Payload, "tagged")
+	}
+	if !reflect.DeepEqual(payload.Stream, []string{StreamHashtag, "go"}) {
+		t.Fatalf("stream = %#v, want %#v", payload.Stream, []string{StreamHashtag, "go"})
 	}
 
 	unsubscribe := map[string]string{

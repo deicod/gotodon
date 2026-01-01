@@ -14,18 +14,25 @@ import (
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/streaming"
 	"github.com/deicod/gotodon/internal/web"
 )
 
 // AnnouncementsHandler handles announcement endpoints
 type AnnouncementsHandler struct {
-	queries announcementQueries
-	cfg     *config.Config
+	queries   announcementQueries
+	cfg       *config.Config
+	publisher streaming.EventPublisher
 }
 
 // NewAnnouncementsHandler creates a new announcements handler
 func NewAnnouncementsHandler(queries announcementQueries, cfg *config.Config) *AnnouncementsHandler {
 	return &AnnouncementsHandler{queries: queries, cfg: cfg}
+}
+
+// SetPublisher sets the streaming publisher for announcement events.
+func (h *AnnouncementsHandler) SetPublisher(publisher streaming.EventPublisher) {
+	h.publisher = publisher
 }
 
 // Announcement represents a server announcement
@@ -171,6 +178,7 @@ func (h *AnnouncementsHandler) AddReaction(w http.ResponseWriter, r *http.Reques
 	}
 
 	web.JSON(w, http.StatusOK, map[string]any{})
+	h.publishAnnouncementReaction(r.Context(), id, name)
 }
 
 // RemoveReaction handles DELETE /api/v1/announcements/:id/reactions/:name
@@ -197,6 +205,7 @@ func (h *AnnouncementsHandler) RemoveReaction(w http.ResponseWriter, r *http.Req
 	}
 
 	web.JSON(w, http.StatusOK, map[string]any{})
+	h.publishAnnouncementReaction(r.Context(), id, name)
 }
 
 func buildAnnouncements(ctx context.Context, q announcementQueries, cfg *config.Config, accountID int64, anns []db.Announcement) []Announcement {
@@ -634,6 +643,47 @@ func tagURL(publicDomain, name string) string {
 		return "/tags/" + name
 	}
 	return "https://" + publicDomain + "/tags/" + name
+}
+
+func (h *AnnouncementsHandler) publishAnnouncementReaction(ctx context.Context, announcementID int64, name string) {
+	if h == nil || h.publisher == nil || h.queries == nil || announcementID <= 0 || strings.TrimSpace(name) == "" {
+		return
+	}
+
+	reactions, err := h.queries.ListAnnouncementReactions(ctx, announcementID)
+	if err != nil {
+		return
+	}
+
+	count := 0
+	var emojiID *int64
+	for _, reaction := range reactions {
+		if reaction.Name != name {
+			continue
+		}
+		count++
+		if emojiID == nil && reaction.CustomEmojiID.Valid {
+			id := reaction.CustomEmojiID.Int64
+			emojiID = &id
+		}
+	}
+
+	payload := map[string]any{
+		"name":            name,
+		"count":           count,
+		"me":              false,
+		"announcement_id": strconv.FormatInt(announcementID, 10),
+	}
+
+	if emojiID != nil {
+		if emojis, err := h.queries.ListCustomEmojisByIDs(ctx, []int64{*emojiID}); err == nil && len(emojis) > 0 {
+			url := GetEmojiURL(emojis[0])
+			payload["url"] = url
+			payload["static_url"] = url
+		}
+	}
+
+	_ = h.publisher.PublishEventToRedis(ctx, streaming.EventAnnouncementReaction, payload, []string{streaming.StreamUser})
 }
 
 // RegisterRoutes registers announcement routes

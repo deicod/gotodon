@@ -104,13 +104,15 @@ func (h *RedisHub) PublishToRedis(ctx context.Context, stream string, event *Eve
 	return h.client.Publish(ctx, channel, payload).Err()
 }
 
-// PublishStatusToRedis publishes a status to Redis
-func (h *RedisHub) PublishStatusToRedis(ctx context.Context, status any, streams []string) error {
-	payload, _ := json.Marshal(status)
+// PublishEventToRedis publishes an event to Redis for distribution.
+func (h *RedisHub) PublishEventToRedis(ctx context.Context, eventType string, payload any, streams []string) error {
+	payloadStr, err := encodePayload(payload)
+	if err != nil {
+		return err
+	}
 	event := &Event{
-		Event:   EventUpdate,
-		Payload: string(payload),
-		Stream:  streams,
+		Event:   eventType,
+		Payload: payloadStr,
 	}
 
 	var lastErr error
@@ -120,38 +122,21 @@ func (h *RedisHub) PublishStatusToRedis(ctx context.Context, status any, streams
 		}
 	}
 	return lastErr
+}
+
+// PublishStatusToRedis publishes a status to Redis
+func (h *RedisHub) PublishStatusToRedis(ctx context.Context, status any, streams []string) error {
+	return h.PublishEventToRedis(ctx, EventUpdate, status, streams)
 }
 
 // PublishDeleteToRedis publishes a deletion to Redis
 func (h *RedisHub) PublishDeleteToRedis(ctx context.Context, statusID string, streams []string) error {
-	event := &Event{
-		Event:   EventDelete,
-		Payload: statusID,
-		Stream:  streams,
-	}
-
-	var lastErr error
-	for _, stream := range streams {
-		if err := h.PublishToRedis(ctx, stream, event); err != nil {
-			lastErr = err
-		}
-	}
-	return lastErr
+	return h.PublishEventToRedis(ctx, EventDelete, statusID, streams)
 }
 
 // PublishNotificationToRedis publishes a notification via Redis
 func (h *RedisHub) PublishNotificationToRedis(ctx context.Context, accountID int64, notification any) error {
-	payload, _ := json.Marshal(notification)
-	event := &Event{
-		Event:   EventNotification,
-		Payload: string(payload),
-		Stream:  []string{StreamUserNotification},
-	}
-
-	// Publish to user-specific channel
-	channel := fmt.Sprintf("%s:stream:user:%d", h.prefix, accountID)
-	eventPayload, _ := json.Marshal(event)
-	return h.client.Publish(ctx, channel, eventPayload).Err()
+	return h.PublishEventToRedis(ctx, EventNotification, notification, []string{UserNotificationStreamKey(accountID)})
 }
 
 func extractStreamFromChannel(channel, prefix string) string {
@@ -162,6 +147,23 @@ func extractStreamFromChannel(channel, prefix string) string {
 		return channel[prefixLen:]
 	}
 	return ""
+}
+
+func encodePayload(payload any) (string, error) {
+	switch value := payload.(type) {
+	case nil:
+		return "", nil
+	case string:
+		return value, nil
+	case []byte:
+		return string(value), nil
+	default:
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	}
 }
 
 // RedisTimeline tracks timeline state in Redis

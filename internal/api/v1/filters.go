@@ -3,6 +3,7 @@ package v1
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"sort"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/streaming"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/snowflake"
 )
@@ -34,9 +36,10 @@ var validFilterContexts = map[string]bool{
 
 // FiltersHandler handles v1 filter endpoints.
 type FiltersHandler struct {
-	queries *db.Queries
-	pool    *pgxpool.Pool
-	idGen   *snowflake.Generator
+	queries   *db.Queries
+	pool      *pgxpool.Pool
+	idGen     *snowflake.Generator
+	publisher streaming.EventPublisher
 
 	// In-memory storage for fallback when queries is nil.
 	memFilters map[int64]map[int64]*FilterV1
@@ -50,6 +53,11 @@ func NewFiltersHandler(queries *db.Queries, pool *pgxpool.Pool) *FiltersHandler 
 		idGen:      snowflake.NewGenerator(),
 		memFilters: make(map[int64]map[int64]*FilterV1),
 	}
+}
+
+// SetPublisher sets the streaming publisher for filter change events.
+func (h *FiltersHandler) SetPublisher(publisher streaming.EventPublisher) {
+	h.publisher = publisher
 }
 
 func (h *FiltersHandler) useDB() bool {
@@ -344,6 +352,7 @@ func (h *FiltersHandler) Create(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			web.JSON(w, http.StatusOK, filterV1FromDB(dbFilter, dbKeyword))
+			h.publishFiltersChanged(ctx, accountID)
 			return
 		}
 
@@ -385,6 +394,7 @@ func (h *FiltersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 
 		web.JSON(w, http.StatusOK, filterV1FromDB(dbFilter, dbKeyword))
+		h.publishFiltersChanged(ctx, accountID)
 		return
 	}
 
@@ -402,6 +412,7 @@ func (h *FiltersHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	h.memFilters[accountID][filterID] = filter
 	web.JSON(w, http.StatusOK, filter)
+	h.publishFiltersChanged(r.Context(), accountID)
 }
 
 // Update handles PUT /api/v1/filters/:id
@@ -560,6 +571,7 @@ func (h *FiltersHandler) Update(w http.ResponseWriter, r *http.Request) {
 			}
 
 			web.JSON(w, http.StatusOK, filterV1FromDB(updatedFilter, updatedKeyword))
+			h.publishFiltersChanged(ctx, accountID)
 			return
 		}
 
@@ -617,6 +629,7 @@ func (h *FiltersHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 
 		web.JSON(w, http.StatusOK, filterV1FromDB(updatedFilter, updatedKeyword))
+		h.publishFiltersChanged(ctx, accountID)
 		return
 	}
 
@@ -645,6 +658,7 @@ func (h *FiltersHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	web.JSON(w, http.StatusOK, filter)
+	h.publishFiltersChanged(r.Context(), accountID)
 }
 
 // Delete handles DELETE /api/v1/filters/:id
@@ -676,6 +690,7 @@ func (h *FiltersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		web.JSON(w, http.StatusOK, map[string]any{})
+		h.publishFiltersChanged(ctx, accountID)
 		return
 	}
 
@@ -686,6 +701,7 @@ func (h *FiltersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	delete(accountFilters, filterID)
 	web.JSON(w, http.StatusOK, map[string]any{})
+	h.publishFiltersChanged(r.Context(), accountID)
 }
 
 // RegisterRoutes registers filter routes.
@@ -707,4 +723,11 @@ func equalStringSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func (h *FiltersHandler) publishFiltersChanged(ctx context.Context, accountID int64) {
+	if h == nil || h.publisher == nil || accountID <= 0 {
+		return
+	}
+	_ = h.publisher.PublishEventToRedis(ctx, streaming.EventFiltersChanged, "", []string{streaming.UserStreamKey(accountID)})
 }

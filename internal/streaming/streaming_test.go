@@ -2,6 +2,7 @@ package streaming
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -172,5 +173,41 @@ func TestStreamConstants(t *testing.T) {
 	}
 	if StreamDirect != "direct" {
 		t.Errorf("StreamDirect = %q, want %q", StreamDirect, "direct")
+	}
+}
+
+func TestStreamPayloadForKey(t *testing.T) {
+	tests := []struct {
+		key  string
+		want []string
+	}{
+		{StreamPublic, []string{StreamPublic}},
+		{StreamPublicLocal, []string{StreamPublicLocal}},
+		{"hashtag:golang", []string{StreamHashtag, "golang"}},
+		{"hashtag:local:go", []string{StreamHashtagLocal, "go"}},
+		{"list:42", []string{StreamList, "42"}},
+		{"user:123", []string{StreamUser}},
+		{"user:notification:123", []string{StreamUserNotification}},
+		{"direct:9", []string{StreamDirect}},
+	}
+
+	for _, tt := range tests {
+		if got := streamPayloadForKey(tt.key); !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("streamPayloadForKey(%q) = %#v, want %#v", tt.key, got, tt.want)
+		}
+	}
+}
+
+func TestExpandAccountScopedStreams(t *testing.T) {
+	streams := []string{StreamUser, StreamUserNotification, StreamDirect, StreamPublic}
+	got := expandAccountScopedStreams(streams, 42)
+	want := []string{StreamUser, UserStreamKey(42), UserNotificationStreamKey(42), DirectStreamKey(42), StreamPublic}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expandAccountScopedStreams = %#v, want %#v", got, want)
+	}
+
+	got = expandAccountScopedStreams(streams, 0)
+	if !reflect.DeepEqual(got, streams) {
+		t.Fatalf("expandAccountScopedStreams (no account) = %#v, want %#v", got, streams)
 	}
 }

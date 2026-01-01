@@ -38,7 +38,7 @@ Plan
 2) [x] Reconcile remaining index differences from `SCHEMA_DIFF.md` (name alignment + unique constraints).
 3) [x] Add read/unread tracking for conversations (align with Mastodon logic; likely `conversation_mutes` or new table).
 4) Regenerate sqlc (`sqlc generate`) and update query usage after each schema change.
-5) Add schema parity tests (create tables + verify index names/uniqueness).
+5) [x] Add schema parity tests (create tables + verify index names/uniqueness).
 
 ---
 
@@ -194,7 +194,7 @@ Gaps
 Plan
 1) [x] Add wildcard streaming route and per-stream path handling.
 2) [x] Support multi-stream subscriptions (stream[] + tag/list combos).
-3) [ ] Align event types and payload formats to Mastodon.
+3) [x] Align event types and payload formats to Mastodon.
 4) [x] Add streaming tests (SSE + WS) and multi-stream coverage.
 
 ---

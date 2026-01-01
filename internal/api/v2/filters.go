@@ -11,6 +11,7 @@ import (
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/streaming"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/snowflake"
 )
@@ -33,8 +34,9 @@ var stringToFilterAction = map[string]int32{
 
 // FiltersHandler handles filter endpoints
 type FiltersHandler struct {
-	queries *db.Queries
-	idGen   *snowflake.Generator
+	queries   *db.Queries
+	idGen     *snowflake.Generator
+	publisher streaming.EventPublisher
 	// In-memory storage for fallback when queries is nil
 	memFilters map[int64]map[int64]*FilterV2 // account_id -> filter_id -> filter
 }
@@ -46,6 +48,11 @@ func NewFiltersHandler(queries *db.Queries) *FiltersHandler {
 		idGen:      snowflake.NewGenerator(),
 		memFilters: make(map[int64]map[int64]*FilterV2),
 	}
+}
+
+// SetPublisher sets the streaming publisher for filter change events.
+func (h *FiltersHandler) SetPublisher(publisher streaming.EventPublisher) {
+	h.publisher = publisher
 }
 
 func (h *FiltersHandler) useDB() bool {
@@ -295,6 +302,7 @@ func (h *FiltersHandler) Get(w http.ResponseWriter, r *http.Request) {
 		filter.Keywords = h.loadFilterKeywords(ctx, filterID)
 		filter.Statuses = h.loadFilterStatuses(ctx, filterID)
 		web.JSON(w, http.StatusOK, filter)
+		h.publishFiltersChanged(ctx, accountID)
 		return
 	}
 
@@ -399,6 +407,7 @@ func (h *FiltersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		filter.Keywords = keywords
 		filter.Statuses = []FilterStatus{}
 		web.JSON(w, http.StatusOK, filter)
+		h.publishFiltersChanged(ctx, accountID)
 		return
 	}
 
@@ -433,6 +442,7 @@ func (h *FiltersHandler) Create(w http.ResponseWriter, r *http.Request) {
 	h.memFilters[accountID][filterID] = filter
 
 	web.JSON(w, http.StatusOK, filter)
+	h.publishFiltersChanged(r.Context(), accountID)
 }
 
 // Update handles PUT /api/v2/filters/:id
@@ -637,6 +647,7 @@ func (h *FiltersHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	web.JSON(w, http.StatusOK, filter)
+	h.publishFiltersChanged(r.Context(), accountID)
 }
 
 // Delete handles DELETE /api/v2/filters/:id
@@ -664,6 +675,7 @@ func (h *FiltersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		web.JSON(w, http.StatusOK, map[string]any{})
+		h.publishFiltersChanged(ctx, accountID)
 		return
 	}
 
@@ -675,6 +687,7 @@ func (h *FiltersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	delete(accountFilters, filterID)
 	web.JSON(w, http.StatusOK, map[string]any{})
+	h.publishFiltersChanged(r.Context(), accountID)
 }
 
 // ListKeywords handles GET /api/v2/filters/:filter_id/keywords
@@ -815,6 +828,7 @@ func (h *FiltersHandler) GetKeywordByID(w http.ResponseWriter, r *http.Request) 
 			Keyword:   dbKw.Keyword,
 			WholeWord: dbKw.WholeWord,
 		})
+		h.publishFiltersChanged(ctx, accountID)
 		return
 	}
 
@@ -824,6 +838,7 @@ func (h *FiltersHandler) GetKeywordByID(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	web.JSON(w, http.StatusOK, filter.Keywords[idx])
+	h.publishFiltersChanged(r.Context(), accountID)
 }
 
 // UpdateKeywordByID handles PUT /api/v2/filters/keywords/:id
@@ -936,6 +951,7 @@ func (h *FiltersHandler) DeleteKeywordByID(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		web.JSON(w, http.StatusOK, map[string]any{})
+		h.publishFiltersChanged(ctx, accountID)
 		return
 	}
 
@@ -946,6 +962,7 @@ func (h *FiltersHandler) DeleteKeywordByID(w http.ResponseWriter, r *http.Reques
 	}
 	filter.Keywords = append(filter.Keywords[:idx], filter.Keywords[idx+1:]...)
 	web.JSON(w, http.StatusOK, map[string]any{})
+	h.publishFiltersChanged(r.Context(), accountID)
 }
 
 // CreateKeyword handles POST /api/v2/filters/:filter_id/keywords
@@ -1004,6 +1021,7 @@ func (h *FiltersHandler) CreateKeyword(w http.ResponseWriter, r *http.Request) {
 			Keyword:   dbKw.Keyword,
 			WholeWord: dbKw.WholeWord,
 		})
+		h.publishFiltersChanged(ctx, accountID)
 		return
 	}
 
@@ -1025,6 +1043,7 @@ func (h *FiltersHandler) CreateKeyword(w http.ResponseWriter, r *http.Request) {
 	}
 	filter.Keywords = append(filter.Keywords, kw)
 	web.JSON(w, http.StatusOK, kw)
+	h.publishFiltersChanged(r.Context(), accountID)
 }
 
 // DeleteKeyword handles DELETE /api/v2/filters/:filter_id/keywords/:id
@@ -1064,6 +1083,7 @@ func (h *FiltersHandler) DeleteKeyword(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		web.JSON(w, http.StatusOK, map[string]any{})
+		h.publishFiltersChanged(ctx, accountID)
 		return
 	}
 
@@ -1084,6 +1104,7 @@ func (h *FiltersHandler) DeleteKeyword(w http.ResponseWriter, r *http.Request) {
 		if kw.ID == keywordIDStr {
 			filter.Keywords = append(filter.Keywords[:i], filter.Keywords[i+1:]...)
 			web.JSON(w, http.StatusOK, map[string]any{})
+			h.publishFiltersChanged(r.Context(), accountID)
 			return
 		}
 	}
@@ -1195,6 +1216,7 @@ func (h *FiltersHandler) CreateStatus(w http.ResponseWriter, r *http.Request) {
 			ID:       strconv.FormatInt(dbStatus.ID, 10),
 			StatusID: strconv.FormatInt(dbStatus.StatusID, 10),
 		})
+		h.publishFiltersChanged(ctx, accountID)
 		return
 	}
 
@@ -1211,6 +1233,7 @@ func (h *FiltersHandler) CreateStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	filter.Statuses = append(filter.Statuses, status)
 	web.JSON(w, http.StatusOK, status)
+	h.publishFiltersChanged(r.Context(), accountID)
 }
 
 // GetStatus handles GET /api/v2/filters/statuses/:id
@@ -1285,6 +1308,7 @@ func (h *FiltersHandler) DeleteStatus(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		web.JSON(w, http.StatusOK, map[string]any{})
+		h.publishFiltersChanged(ctx, accountID)
 		return
 	}
 
@@ -1295,6 +1319,7 @@ func (h *FiltersHandler) DeleteStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	filter.Statuses = append(filter.Statuses[:idx], filter.Statuses[idx+1:]...)
 	web.JSON(w, http.StatusOK, map[string]any{})
+	h.publishFiltersChanged(r.Context(), accountID)
 }
 
 // RegisterRoutes registers filter routes
@@ -1315,4 +1340,11 @@ func (h *FiltersHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v2/filters/{filter_id}/statuses", h.CreateStatus)
 	mux.HandleFunc("GET /api/v2/filters/statuses/{id}", h.GetStatus)
 	mux.HandleFunc("DELETE /api/v2/filters/statuses/{id}", h.DeleteStatus)
+}
+
+func (h *FiltersHandler) publishFiltersChanged(ctx context.Context, accountID int64) {
+	if h == nil || h.publisher == nil || accountID <= 0 {
+		return
+	}
+	_ = h.publisher.PublishEventToRedis(ctx, streaming.EventFiltersChanged, "", []string{streaming.UserStreamKey(accountID)})
 }
