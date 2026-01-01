@@ -160,13 +160,6 @@ func statusEmojiDomain(acc Account) string {
 	return ""
 }
 
-func statusShortcodes(spoilerText, content string) []string {
-	shortcodes := make([]string, 0)
-	seen := make(map[string]struct{})
-	appendShortcodes(spoilerText, seen, &shortcodes)
-	appendShortcodes(content, seen, &shortcodes)
-	return shortcodes
-}
 
 func buildStatusEmojis(ctx context.Context, q statusEmojiQuerier, statuses []db.Status, accounts map[int64]Account) map[int64][]CustomEmoji {
 	emojisByStatus := make(map[int64][]CustomEmoji, len(statuses))
@@ -178,8 +171,18 @@ func buildStatusEmojis(ctx context.Context, q statusEmojiQuerier, statuses []db.
 	statusDomains := make(map[int64]string, len(statuses))
 	domainShortcodes := make(map[string]map[string]struct{})
 
+	seenShortcodes := make(map[string]struct{})
+
 	for _, status := range statuses {
-		shortcodes := statusShortcodes(status.SpoilerText, status.Text)
+		// Clear map
+		for k := range seenShortcodes {
+			delete(seenShortcodes, k)
+		}
+
+		shortcodes := make([]string, 0)
+		appendShortcodes(status.SpoilerText, seenShortcodes, &shortcodes)
+		appendShortcodes(status.Text, seenShortcodes, &shortcodes)
+
 		if len(shortcodes) == 0 {
 			continue
 		}
@@ -370,10 +373,11 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 	// Fetch tags
 	dbTags, _ := q.GetTagsByStatusIDs(ctx, statusIDs)
 	tagsMap := make(map[int64][]Tag)
+	tagURLPrefix := "https://" + cfg.Instance.LocalDomain + "/tags/"
 	for _, t := range dbTags {
 		tagsMap[t.StatusID] = append(tagsMap[t.StatusID], Tag{
 			Name: t.Name,
-			URL:  "https://" + cfg.Instance.LocalDomain + "/tags/" + t.Name, // Construct local tag URL
+			URL:  tagURLPrefix + t.Name, // Construct local tag URL
 		})
 	}
 

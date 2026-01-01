@@ -61,6 +61,8 @@ func serializeAccounts(ctx context.Context, q AccountDataQuerier, cfg *config.Co
 	shortcodesByID := make(map[int64][]string, len(dbAccounts))
 	domainShortcodes := make(map[string]map[string]struct{})
 
+	seenShortcodes := make(map[string]struct{})
+
 	for _, acc := range dbAccounts {
 		accountIDs = append(accountIDs, acc.ID)
 		fields := parseAccountFields(acc.Fields)
@@ -70,7 +72,18 @@ func serializeAccounts(ctx context.Context, q AccountDataQuerier, cfg *config.Co
 			continue
 		}
 
-		shortcodes := accountShortcodes(acc, fields)
+		// Clear map
+		for k := range seenShortcodes {
+			delete(seenShortcodes, k)
+		}
+
+		shortcodes := make([]string, 0)
+		appendShortcodes(acc.DisplayName, seenShortcodes, &shortcodes)
+		appendShortcodes(acc.Note, seenShortcodes, &shortcodes)
+		for _, field := range fields {
+			appendShortcodes(field.Value, seenShortcodes, &shortcodes)
+		}
+
 		shortcodesByID[acc.ID] = shortcodes
 		if len(shortcodes) == 0 {
 			continue
@@ -515,16 +528,6 @@ func accountEmojiDomain(dbAcc db.Account) string {
 	return ""
 }
 
-func accountShortcodes(acc db.Account, fields []Field) []string {
-	shortcodes := make([]string, 0)
-	seen := make(map[string]struct{})
-	appendShortcodes(acc.DisplayName, seen, &shortcodes)
-	appendShortcodes(acc.Note, seen, &shortcodes)
-	for _, field := range fields {
-		appendShortcodes(field.Value, seen, &shortcodes)
-	}
-	return shortcodes
-}
 
 func appendShortcodes(text string, seen map[string]struct{}, out *[]string) {
 	if strings.TrimSpace(text) == "" {
