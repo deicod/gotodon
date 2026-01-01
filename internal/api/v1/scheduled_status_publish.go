@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/deicod/gotodon/internal/db"
 )
 
@@ -144,6 +146,10 @@ func (h *StatusesHandler) PublishScheduledStatus(ctx context.Context, scheduled 
 	}
 	req, err := parseScheduledStatusParams(scheduled.Params)
 	if err != nil {
+		_, _ = h.queries.DetachMediaFromScheduledStatus(ctx, db.DetachMediaFromScheduledStatusParams{
+			ScheduledStatusID: pgtype.Int8{Int64: scheduled.ID, Valid: true},
+			AccountID:         pgtype.Int8{Int64: scheduled.AccountID, Valid: true},
+		})
 		_ = h.queries.DeleteScheduledStatus(ctx, db.DeleteScheduledStatusParams{
 			ID:        scheduled.ID,
 			AccountID: scheduled.AccountID,
@@ -165,6 +171,10 @@ func (h *StatusesHandler) PublishScheduledStatus(ctx context.Context, scheduled 
 	if err != nil {
 		var statusErr statusCodeError
 		if errors.As(err, &statusErr) && statusErr.StatusCode() >= 400 && statusErr.StatusCode() < 500 {
+			_, _ = h.queries.DetachMediaFromScheduledStatus(ctx, db.DetachMediaFromScheduledStatusParams{
+				ScheduledStatusID: pgtype.Int8{Int64: scheduled.ID, Valid: true},
+				AccountID:         pgtype.Int8{Int64: scheduled.AccountID, Valid: true},
+			})
 			_ = h.queries.DeleteScheduledStatus(ctx, db.DeleteScheduledStatusParams{
 				ID:        scheduled.ID,
 				AccountID: scheduled.AccountID,
@@ -173,6 +183,10 @@ func (h *StatusesHandler) PublishScheduledStatus(ctx context.Context, scheduled 
 		return err
 	}
 
+	_, _ = qtx.DetachMediaFromScheduledStatus(ctx, db.DetachMediaFromScheduledStatusParams{
+		ScheduledStatusID: pgtype.Int8{Int64: scheduled.ID, Valid: true},
+		AccountID:         pgtype.Int8{Int64: scheduled.AccountID, Valid: true},
+	})
 	if err := qtx.DeleteScheduledStatus(ctx, db.DeleteScheduledStatusParams{
 		ID:        scheduled.ID,
 		AccountID: scheduled.AccountID,

@@ -78,12 +78,12 @@ Behavior gaps
 - Trends links now backed by preview cards; trending statuses payloads now use the full status serializer; status content now linkifies mentions/hashtags/URLs and sanitizes remote HTML; status emojis now include custom emojis from content/spoiler text; status relationship flags (favourited/reblogged/bookmarked/pinned) and edited_at now use DB state; reblogs now embed the original status with full serialization; quoted statuses now embed full status payloads (without nested quotes); account bot/group flags now derive from actor_type and discoverable defaults to false when unset; account acct now uses IDNA pretty domains for remote accounts; account search now requires auth and supports resolve/following/offset; instance activity now uses DB counts for statuses/logins/registrations; instance domain blocks now use settings and stored blocks; notifications now attach full status payloads; suggestions deletion now persists mutes; tag history now uses DB-backed counts; announcements now include statuses, mentions, tags, emojis, and reaction emoji URLs; instance privacy policy + extended description now use settings/default templates; several account/status payloads are still minimal or mock.
 - [x] Account profile fields now format URLs/mentions/hashtags with rel=me for local accounts; remote verified fields use shortened links; credential account source fields remain raw.
 - [x] Account notes now use html-aware formatting (linkify local, sanitize remote) and credential account source note stays raw.
-- Scheduled status creation is missing (no `scheduled_at` in POST /api/v1/statuses).
+- [x] Scheduled status creation now supports `scheduled_at` in POST /api/v1/statuses.
 
 Plan
 1) Implement all missing routes listed above and wire queries/services.
 2) Align v1 payloads to Mastodon formats (accounts, statuses, notifications, trends, search results, instance info).
-3) Add scheduled status creation in `POST /api/v1/statuses` with worker integration.
+3) [x] Add scheduled status creation in `POST /api/v1/statuses` with worker integration.
 4) Implement v1 filters API (legacy semantics) and migration paths from v2 filters if needed.
 5) Add tests for each new/changed handler (including error cases and auth boundaries).
 

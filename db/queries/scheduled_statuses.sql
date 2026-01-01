@@ -5,6 +5,14 @@ INSERT INTO scheduled_statuses (
     $1, $2, $3
 ) RETURNING *;
 
+-- name: CountScheduledStatusesByAccount :one
+SELECT COUNT(*) FROM scheduled_statuses WHERE account_id = $1;
+
+-- name: CountScheduledStatusesByAccountAndDate :one
+SELECT COUNT(*) FROM scheduled_statuses
+WHERE account_id = $1
+  AND scheduled_at::date = $2::date;
+
 -- name: GetScheduledStatus :one
 SELECT * FROM scheduled_statuses WHERE id = $1 AND account_id = $2;
 

@@ -61,6 +61,12 @@ var stringToVisibility = map[string]int32{
 const defaultStatusesLimit = 20
 
 const (
+	scheduledStatusMinOffset  = 5 * time.Minute
+	scheduledStatusDailyLimit = 25
+	scheduledStatusTotalLimit = 300
+)
+
+const (
 	quotePolicyFlagUnsupported int32 = 1 << 0
 	quotePolicyFlagPublic      int32 = 1 << 1
 	quotePolicyFlagFollowers   int32 = 1 << 2
@@ -540,6 +546,7 @@ type CreateStatusRequest struct {
 	SpoilerText string   `json:"spoiler_text" form:"spoiler_text"`
 	Visibility  string   `json:"visibility" form:"visibility"`
 	Language    *string  `json:"language" form:"language"`
+	ScheduledAt *string  `json:"scheduled_at" form:"scheduled_at"`
 	Poll        *PollReq `json:"poll" form:"poll"`
 }
 
@@ -571,6 +578,153 @@ func normalizeCreateStatusRequest(req *CreateStatusRequest) error {
 		}
 	}
 	return nil
+}
+
+type scheduledStatusStore interface {
+	CreateScheduledStatus(ctx context.Context, arg db.CreateScheduledStatusParams) (db.ScheduledStatus, error)
+	AttachMediaToScheduledStatus(ctx context.Context, arg db.AttachMediaToScheduledStatusParams) (int64, error)
+	DeleteScheduledStatus(ctx context.Context, arg db.DeleteScheduledStatusParams) error
+	DetachMediaFromScheduledStatus(ctx context.Context, arg db.DetachMediaFromScheduledStatusParams) (int64, error)
+}
+
+type scheduledStatusParamsPayload struct {
+	Text        string   `json:"text"`
+	InReplyToID *string  `json:"in_reply_to_id"`
+	MediaIDs    []string `json:"media_ids"`
+	Sensitive   bool     `json:"sensitive"`
+	SpoilerText string   `json:"spoiler_text"`
+	Visibility  string   `json:"visibility"`
+	Language    *string  `json:"language"`
+	Poll        *PollReq `json:"poll"`
+}
+
+func parseScheduledAt(raw *string) (*time.Time, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(*raw)
+	if trimmed == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, trimmed)
+	if err != nil {
+		parsed, err = time.Parse(time.RFC3339, trimmed)
+		if err != nil {
+			return nil, err
+		}
+	}
+	utc := parsed.UTC()
+	return &utc, nil
+}
+
+func buildScheduledStatusParams(req CreateStatusRequest) ([]byte, error) {
+	payload := scheduledStatusParamsPayload{
+		Text:        req.Status,
+		InReplyToID: req.InReplyToID,
+		MediaIDs:    req.MediaIDs,
+		Sensitive:   req.Sensitive,
+		SpoilerText: req.SpoilerText,
+		Visibility:  req.Visibility,
+		Language:    req.Language,
+		Poll:        req.Poll,
+	}
+	return json.Marshal(payload)
+}
+
+func (h *StatusesHandler) validateScheduledStatusLimits(ctx context.Context, accountID int64, scheduledAt time.Time) error {
+	if !h.useDB() || h.queries == nil {
+		return statusCreateError{Status: http.StatusInternalServerError, Message: "Database not configured"}
+	}
+	total, err := h.queries.CountScheduledStatusesByAccount(ctx, accountID)
+	if err != nil {
+		return statusCreateError{Status: http.StatusInternalServerError, Message: "Failed to check scheduled status limits"}
+	}
+	if total >= scheduledStatusTotalLimit {
+		return statusCreateError{
+			Status:  http.StatusUnprocessableEntity,
+			Message: fmt.Sprintf("Validation failed: You can only have %d scheduled statuses", scheduledStatusTotalLimit),
+		}
+	}
+	daily, err := h.queries.CountScheduledStatusesByAccountAndDate(ctx, db.CountScheduledStatusesByAccountAndDateParams{
+		AccountID: accountID,
+		Column2:   pgtype.Date{Time: scheduledAt, Valid: true},
+	})
+	if err != nil {
+		return statusCreateError{Status: http.StatusInternalServerError, Message: "Failed to check scheduled status limits"}
+	}
+	if daily >= scheduledStatusDailyLimit {
+		return statusCreateError{
+			Status:  http.StatusUnprocessableEntity,
+			Message: fmt.Sprintf("Validation failed: You can only have %d scheduled statuses per day", scheduledStatusDailyLimit),
+		}
+	}
+	return nil
+}
+
+func (h *StatusesHandler) createScheduledStatusTx(ctx context.Context, q scheduledStatusStore, accountID int64, req CreateStatusRequest, scheduledAt time.Time) (db.ScheduledStatus, error) {
+	params, err := buildScheduledStatusParams(req)
+	if err != nil {
+		return db.ScheduledStatus{}, statusCreateError{Status: http.StatusInternalServerError, Message: "Failed to serialize scheduled status"}
+	}
+
+	scheduled, err := q.CreateScheduledStatus(ctx, db.CreateScheduledStatusParams{
+		AccountID:   accountID,
+		ScheduledAt: pgtype.Timestamptz{Time: scheduledAt, Valid: true},
+		Params:      params,
+	})
+	if err != nil {
+		return db.ScheduledStatus{}, statusCreateError{Status: http.StatusInternalServerError, Message: "Failed to create scheduled status"}
+	}
+
+	for _, mediaIDStr := range req.MediaIDs {
+		mediaID, err := strconv.ParseInt(mediaIDStr, 10, 64)
+		if err != nil {
+			continue
+		}
+		rows, err := q.AttachMediaToScheduledStatus(ctx, db.AttachMediaToScheduledStatusParams{
+			ID:                mediaID,
+			ScheduledStatusID: pgtype.Int8{Int64: scheduled.ID, Valid: true},
+			AccountID:         pgtype.Int8{Int64: accountID, Valid: true},
+		})
+		if err != nil || rows != 1 {
+			_, _ = q.DetachMediaFromScheduledStatus(ctx, db.DetachMediaFromScheduledStatusParams{
+				ScheduledStatusID: pgtype.Int8{Int64: scheduled.ID, Valid: true},
+				AccountID:         pgtype.Int8{Int64: accountID, Valid: true},
+			})
+			_ = q.DeleteScheduledStatus(ctx, db.DeleteScheduledStatusParams{
+				ID:        scheduled.ID,
+				AccountID: accountID,
+			})
+			return db.ScheduledStatus{}, statusCreateError{Status: http.StatusForbidden, Message: "Media not found or not owned by you"}
+		}
+	}
+
+	return scheduled, nil
+}
+
+func (h *StatusesHandler) createScheduledStatus(ctx context.Context, accountID int64, req CreateStatusRequest, scheduledAt time.Time) (db.ScheduledStatus, error) {
+	if h.pool == nil {
+		store, ok := h.queries.(scheduledStatusStore)
+		if !ok {
+			return db.ScheduledStatus{}, statusCreateError{Status: http.StatusInternalServerError, Message: "Database not configured"}
+		}
+		return h.createScheduledStatusTx(ctx, store, accountID, req, scheduledAt)
+	}
+	tx, err := h.pool.Begin(ctx)
+	if err != nil {
+		return db.ScheduledStatus{}, statusCreateError{Status: http.StatusInternalServerError, Message: "Failed to start transaction"}
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	qtx := db.New(tx)
+	scheduled, err := h.createScheduledStatusTx(ctx, qtx, accountID, req, scheduledAt)
+	if err != nil {
+		return db.ScheduledStatus{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.ScheduledStatus{}, statusCreateError{Status: http.StatusInternalServerError, Message: "Failed to commit transaction"}
+	}
+	return scheduled, nil
 }
 
 func (h *StatusesHandler) createStatus(ctx context.Context, accountID int64, req CreateStatusRequest) (statusCreationResult, error) {
@@ -1246,8 +1400,56 @@ func (h *StatusesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	parsedScheduledAt, err := parseScheduledAt(req.ScheduledAt)
+	if err != nil {
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Scheduled at is invalid")
+		return
+	}
+	now := time.Now().UTC()
+	if parsedScheduledAt != nil && !parsedScheduledAt.After(now) {
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Scheduled status must be in the future")
+		return
+	}
 
 	if h.useDB() {
+		if parsedScheduledAt != nil {
+			if err := normalizeCreateStatusRequest(&req); err != nil {
+				var createErr statusCreateError
+				if errors.As(err, &createErr) {
+					web.JSONError(w, createErr.Status, createErr.Message)
+					return
+				}
+				web.JSONError(w, http.StatusInternalServerError, "Failed to create status")
+				return
+			}
+			if !parsedScheduledAt.After(now.Add(scheduledStatusMinOffset)) {
+				web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Scheduled status must be at least 5 minutes in the future")
+				return
+			}
+			if err := h.validateScheduledStatusLimits(ctx, accountID, *parsedScheduledAt); err != nil {
+				var createErr statusCreateError
+				if errors.As(err, &createErr) {
+					web.JSONError(w, createErr.Status, createErr.Message)
+					return
+				}
+				web.JSONError(w, http.StatusInternalServerError, "Failed to create status")
+				return
+			}
+			scheduled, err := h.createScheduledStatus(ctx, accountID, req, *parsedScheduledAt)
+			if err != nil {
+				var createErr statusCreateError
+				if errors.As(err, &createErr) {
+					web.JSONError(w, createErr.Status, createErr.Message)
+					return
+				}
+				web.JSONError(w, http.StatusInternalServerError, "Failed to create status")
+				return
+			}
+			mediaMap := scheduledStatusMediaAttachments(ctx, h.queries, []int64{scheduled.ID})
+			web.JSON(w, http.StatusOK, serializeScheduledStatus(scheduled, mediaMap[scheduled.ID]))
+			return
+		}
+
 		result, err := h.createStatus(ctx, accountID, req)
 		if err != nil {
 			var createErr statusCreateError
@@ -1275,13 +1477,13 @@ func (h *StatusesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Mock fallback
-	now := time.Now()
-	statusID := strconv.FormatInt(now.UnixNano(), 10)
+	fallbackNow := time.Now()
+	statusID := strconv.FormatInt(fallbackNow.UnixNano(), 10)
 	discoverable := true
 
 	web.JSON(w, http.StatusOK, Status{
 		ID:          statusID,
-		CreatedAt:   now,
+		CreatedAt:   fallbackNow,
 		Sensitive:   req.Sensitive,
 		SpoilerText: req.SpoilerText,
 		Visibility:  req.Visibility,
@@ -1295,7 +1497,7 @@ func (h *StatusesHandler) Create(w http.ResponseWriter, r *http.Request) {
 			Acct:         "user",
 			DisplayName:  "Test User",
 			Discoverable: &discoverable,
-			CreatedAt:    now.Add(-24 * time.Hour),
+			CreatedAt:    fallbackNow.Add(-24 * time.Hour),
 			Emojis:       []CustomEmoji{},
 			Fields:       []Field{},
 		},

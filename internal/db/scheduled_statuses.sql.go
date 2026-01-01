@@ -11,6 +11,35 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countScheduledStatusesByAccount = `-- name: CountScheduledStatusesByAccount :one
+SELECT COUNT(*) FROM scheduled_statuses WHERE account_id = $1
+`
+
+func (q *Queries) CountScheduledStatusesByAccount(ctx context.Context, accountID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countScheduledStatusesByAccount, accountID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countScheduledStatusesByAccountAndDate = `-- name: CountScheduledStatusesByAccountAndDate :one
+SELECT COUNT(*) FROM scheduled_statuses
+WHERE account_id = $1
+  AND scheduled_at::date = $2::date
+`
+
+type CountScheduledStatusesByAccountAndDateParams struct {
+	AccountID int64       `db:"account_id" json:"account_id"`
+	Column2   pgtype.Date `db:"column_2" json:"column_2"`
+}
+
+func (q *Queries) CountScheduledStatusesByAccountAndDate(ctx context.Context, arg CountScheduledStatusesByAccountAndDateParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countScheduledStatusesByAccountAndDate, arg.AccountID, arg.Column2)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createScheduledStatus = `-- name: CreateScheduledStatus :one
 INSERT INTO scheduled_statuses (
     account_id, scheduled_at, params

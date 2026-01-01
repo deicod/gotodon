@@ -126,6 +126,7 @@ type Querier interface {
 	AdminUpdateStatusTrendable(ctx context.Context, arg AdminUpdateStatusTrendableParams) (Status, error)
 	AdminUpdateTag(ctx context.Context, arg AdminUpdateTagParams) (Tag, error)
 	AdminUpdateTagTrendable(ctx context.Context, arg AdminUpdateTagTrendableParams) (Tag, error)
+	AttachMediaToScheduledStatus(ctx context.Context, arg AttachMediaToScheduledStatusParams) (int64, error)
 	AttachMediaToStatus(ctx context.Context, arg AttachMediaToStatusParams) (int64, error)
 	AttachPreviewCardToStatus(ctx context.Context, arg AttachPreviewCardToStatusParams) error
 	BulkAcceptNotificationRequests(ctx context.Context, arg BulkAcceptNotificationRequestsParams) error
@@ -153,6 +154,8 @@ type Querier interface {
 	CountMigrationFollowers(ctx context.Context, targetAccountID pgtype.Int8) (int64, error)
 	CountNotificationRequests(ctx context.Context, accountID int64) (int64, error)
 	CountQuotesByQuotedStatus(ctx context.Context, quotedStatusID pgtype.Int8) (int64, error)
+	CountScheduledStatusesByAccount(ctx context.Context, accountID int64) (int64, error)
+	CountScheduledStatusesByAccountAndDate(ctx context.Context, arg CountScheduledStatusesByAccountAndDateParams) (int64, error)
 	CountSessionActivationsByUser(ctx context.Context, userID int64) (int64, error)
 	CountStatusEdits(ctx context.Context, statusID int64) (int64, error)
 	CountStatusesInRange(ctx context.Context, arg CountStatusesInRangeParams) (int64, error)
@@ -270,6 +273,7 @@ type Querier interface {
 	DeleteTombstone(ctx context.Context, id int64) error
 	DeleteTombstoneByURI(ctx context.Context, uri string) error
 	DeleteWebAuthnCredential(ctx context.Context, id int64) error
+	DetachMediaFromScheduledStatus(ctx context.Context, arg DetachMediaFromScheduledStatusParams) (int64, error)
 	DetachMediaFromStatus(ctx context.Context, arg DetachMediaFromStatusParams) (int64, error)
 	DetachPreviewCardFromStatus(ctx context.Context, arg DetachPreviewCardFromStatusParams) error
 	DismissAnnouncement(ctx context.Context, arg DismissAnnouncementParams) error
@@ -343,6 +347,7 @@ type Querier interface {
 	GetMediaAttachment(ctx context.Context, id int64) (MediaAttachment, error)
 	GetMediaAttachmentByAccount(ctx context.Context, arg GetMediaAttachmentByAccountParams) (MediaAttachment, error)
 	GetMediaAttachmentsByIDs(ctx context.Context, dollar_1 []int64) ([]MediaAttachment, error)
+	GetMediaAttachmentsByScheduledStatusIDs(ctx context.Context, dollar_1 []int64) ([]MediaAttachment, error)
 	GetMediaAttachmentsByStatusIDs(ctx context.Context, statusIds []int64) ([]MediaAttachment, error)
 	GetMentionsByAccountID(ctx context.Context, arg GetMentionsByAccountIDParams) ([]Mention, error)
 	GetMentionsByStatusID(ctx context.Context, statusID int64) ([]Mention, error)

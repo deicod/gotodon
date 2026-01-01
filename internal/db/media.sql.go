@@ -11,8 +11,30 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const attachMediaToScheduledStatus = `-- name: AttachMediaToScheduledStatus :execrows
+UPDATE media_attachments SET scheduled_status_id = $2, updated_at = now()
+WHERE id = $1
+  AND account_id = $3
+  AND status_id IS NULL
+  AND scheduled_status_id IS NULL
+`
+
+type AttachMediaToScheduledStatusParams struct {
+	ID                int64       `db:"id" json:"id"`
+	ScheduledStatusID pgtype.Int8 `db:"scheduled_status_id" json:"scheduled_status_id"`
+	AccountID         pgtype.Int8 `db:"account_id" json:"account_id"`
+}
+
+func (q *Queries) AttachMediaToScheduledStatus(ctx context.Context, arg AttachMediaToScheduledStatusParams) (int64, error) {
+	result, err := q.db.Exec(ctx, attachMediaToScheduledStatus, arg.ID, arg.ScheduledStatusID, arg.AccountID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const attachMediaToStatus = `-- name: AttachMediaToStatus :execrows
-UPDATE media_attachments SET status_id = $2, updated_at = now()
+UPDATE media_attachments SET status_id = $2, scheduled_status_id = NULL, updated_at = now()
 WHERE id = $1 AND account_id = $3 AND status_id IS NULL
 `
 
@@ -183,6 +205,24 @@ func (q *Queries) DeleteMediaAttachmentByID(ctx context.Context, id int64) error
 	return err
 }
 
+const detachMediaFromScheduledStatus = `-- name: DetachMediaFromScheduledStatus :execrows
+UPDATE media_attachments SET scheduled_status_id = NULL, updated_at = now()
+WHERE scheduled_status_id = $1 AND account_id = $2
+`
+
+type DetachMediaFromScheduledStatusParams struct {
+	ScheduledStatusID pgtype.Int8 `db:"scheduled_status_id" json:"scheduled_status_id"`
+	AccountID         pgtype.Int8 `db:"account_id" json:"account_id"`
+}
+
+func (q *Queries) DetachMediaFromScheduledStatus(ctx context.Context, arg DetachMediaFromScheduledStatusParams) (int64, error) {
+	result, err := q.db.Exec(ctx, detachMediaFromScheduledStatus, arg.ScheduledStatusID, arg.AccountID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const detachMediaFromStatus = `-- name: DetachMediaFromStatus :execrows
 UPDATE media_attachments SET status_id = NULL, updated_at = now()
 WHERE id = $1 AND account_id = $2 AND status_id IS NOT NULL
@@ -282,6 +322,56 @@ SELECT id, status_id, file_file_name, file_content_type, file_file_size, file_up
 
 func (q *Queries) GetMediaAttachmentsByIDs(ctx context.Context, dollar_1 []int64) ([]MediaAttachment, error) {
 	rows, err := q.db.Query(ctx, getMediaAttachmentsByIDs, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MediaAttachment{}
+	for rows.Next() {
+		var i MediaAttachment
+		if err := rows.Scan(
+			&i.ID,
+			&i.StatusID,
+			&i.FileFileName,
+			&i.FileContentType,
+			&i.FileFileSize,
+			&i.FileUpdatedAt,
+			&i.RemoteUrl,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Shortcode,
+			&i.Type,
+			&i.FileMeta,
+			&i.AccountID,
+			&i.Description,
+			&i.ScheduledStatusID,
+			&i.Blurhash,
+			&i.Processing,
+			&i.FileStorageSchemaVersion,
+			&i.ThumbnailFileName,
+			&i.ThumbnailContentType,
+			&i.ThumbnailFileSize,
+			&i.ThumbnailUpdatedAt,
+			&i.ThumbnailRemoteUrl,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getMediaAttachmentsByScheduledStatusIDs = `-- name: GetMediaAttachmentsByScheduledStatusIDs :many
+SELECT id, status_id, file_file_name, file_content_type, file_file_size, file_updated_at, remote_url, created_at, updated_at, shortcode, type, file_meta, account_id, description, scheduled_status_id, blurhash, processing, file_storage_schema_version, thumbnail_file_name, thumbnail_content_type, thumbnail_file_size, thumbnail_updated_at, thumbnail_remote_url FROM media_attachments
+WHERE scheduled_status_id = ANY($1::bigint[])
+ORDER BY id
+`
+
+func (q *Queries) GetMediaAttachmentsByScheduledStatusIDs(ctx context.Context, dollar_1 []int64) ([]MediaAttachment, error) {
+	rows, err := q.db.Query(ctx, getMediaAttachmentsByScheduledStatusIDs, dollar_1)
 	if err != nil {
 		return nil, err
 	}

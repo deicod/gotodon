@@ -60,8 +60,15 @@ WHERE id = $1
 RETURNING *;
 
 -- name: AttachMediaToStatus :execrows
-UPDATE media_attachments SET status_id = $2, updated_at = now()
+UPDATE media_attachments SET status_id = $2, scheduled_status_id = NULL, updated_at = now()
 WHERE id = $1 AND account_id = $3 AND status_id IS NULL;
+
+-- name: AttachMediaToScheduledStatus :execrows
+UPDATE media_attachments SET scheduled_status_id = $2, updated_at = now()
+WHERE id = $1
+  AND account_id = $3
+  AND status_id IS NULL
+  AND scheduled_status_id IS NULL;
 
 -- name: DeleteMediaAttachment :exec
 DELETE FROM media_attachments WHERE id = $1 AND account_id = $2;
@@ -70,6 +77,10 @@ DELETE FROM media_attachments WHERE id = $1 AND account_id = $2;
 UPDATE media_attachments SET status_id = NULL, updated_at = now()
 WHERE id = $1 AND account_id = $2 AND status_id IS NOT NULL;
 
+-- name: DetachMediaFromScheduledStatus :execrows
+UPDATE media_attachments SET scheduled_status_id = NULL, updated_at = now()
+WHERE scheduled_status_id = $1 AND account_id = $2;
+
 -- name: ListOrphanedMediaAttachments :many
 SELECT * FROM media_attachments
 WHERE status_id IS NULL
@@ -77,6 +88,11 @@ WHERE status_id IS NULL
   AND created_at < @before
 ORDER BY id ASC
 LIMIT sqlc.arg('limit');
+
+-- name: GetMediaAttachmentsByScheduledStatusIDs :many
+SELECT * FROM media_attachments
+WHERE scheduled_status_id = ANY($1::bigint[])
+ORDER BY id;
 
 -- name: DeleteMediaAttachmentByID :exec
 DELETE FROM media_attachments WHERE id = $1;

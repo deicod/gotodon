@@ -477,17 +477,15 @@ func (h *ScheduledStatusesHandler) List(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 
+		ids := make([]int64, 0, len(statuses))
+		for _, s := range statuses {
+			ids = append(ids, s.ID)
+		}
+		mediaMap := scheduledStatusMediaAttachments(r.Context(), h.queries, ids)
+
 		res := make([]ScheduledStatus, len(statuses))
 		for i, s := range statuses {
-			var scheduledAt interface{}
-			if s.ScheduledAt.Valid {
-				scheduledAt = s.ScheduledAt.Time
-			}
-			res[i] = ScheduledStatus{
-				ID:          strconv.FormatInt(s.ID, 10),
-				ScheduledAt: scheduledAt,
-				Params:      s.Params, // Raw JSON bytes
-			}
+			res[i] = serializeScheduledStatus(s, mediaMap[s.ID])
 		}
 		web.JSON(w, http.StatusOK, res)
 		return
@@ -497,9 +495,10 @@ func (h *ScheduledStatusesHandler) List(w http.ResponseWriter, r *http.Request) 
 }
 
 type ScheduledStatus struct {
-	ID          string      `json:"id"`
-	ScheduledAt interface{} `json:"scheduled_at"` // Time or string
-	Params      interface{} `json:"params"`
+	ID               string          `json:"id"`
+	ScheduledAt      interface{}     `json:"scheduled_at"` // Time or string
+	Params           json.RawMessage `json:"params"`
+	MediaAttachments []MediaAttach   `json:"media_attachments"`
 }
 
 // Get handles GET /api/v1/scheduled_statuses/:id
@@ -525,15 +524,8 @@ func (h *ScheduledStatusesHandler) Get(w http.ResponseWriter, r *http.Request) {
 			web.JSONError(w, http.StatusNotFound, "Record not found")
 			return
 		}
-		var scheduledAt interface{}
-		if s.ScheduledAt.Valid {
-			scheduledAt = s.ScheduledAt.Time
-		}
-		web.JSON(w, http.StatusOK, ScheduledStatus{
-			ID:          strconv.FormatInt(s.ID, 10),
-			ScheduledAt: scheduledAt,
-			Params:      s.Params,
-		})
+		mediaMap := scheduledStatusMediaAttachments(r.Context(), h.queries, []int64{s.ID})
+		web.JSON(w, http.StatusOK, serializeScheduledStatus(s, mediaMap[s.ID]))
 		return
 	}
 
@@ -566,6 +558,10 @@ func (h *ScheduledStatusesHandler) Delete(w http.ResponseWriter, r *http.Request
 	}
 
 	if h.useDB() {
+		_, _ = h.queries.DetachMediaFromScheduledStatus(r.Context(), db.DetachMediaFromScheduledStatusParams{
+			ScheduledStatusID: pgtype.Int8{Int64: id, Valid: true},
+			AccountID:         pgtype.Int8{Int64: accountID, Valid: true},
+		})
 		_ = h.queries.DeleteScheduledStatus(r.Context(), db.DeleteScheduledStatusParams{
 			ID:        id,
 			AccountID: accountID,
