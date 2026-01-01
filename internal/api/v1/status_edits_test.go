@@ -271,7 +271,7 @@ func TestStatusSourceStruct(t *testing.T) {
 	}
 }
 
-func TestFormatContent(t *testing.T) {
+func TestFormatStatusText(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
@@ -290,15 +290,15 @@ func TestFormatContent(t *testing.T) {
 		{
 			name:  "text with newlines",
 			input: "Line 1\nLine 2",
-			want:  "<p>Line 1\nLine 2</p>",
+			want:  "<p>Line 1<br />Line 2</p>",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := formatContent(tt.input)
+			got := formatStatusText(nil, true, tt.input, statusContentOptions{})
 			if got != tt.want {
-				t.Errorf("formatContent(%q) = %q, want %q", tt.input, got, tt.want)
+				t.Errorf("formatStatusText(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}

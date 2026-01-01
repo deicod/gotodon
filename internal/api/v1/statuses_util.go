@@ -23,6 +23,25 @@ type statusEmojiQuerier interface {
 	ListCustomEmojisByShortcodesAndDomain(ctx context.Context, arg db.ListCustomEmojisByShortcodesAndDomainParams) ([]db.CustomEmoji, error)
 }
 
+type statusSerializeOptions struct {
+	includeReblogs bool
+	includeQuotes  bool
+}
+
+type statusSerializerQuerier interface {
+	AccountDataQuerier
+	statusRelationshipQuerier
+	GetAccountByID(ctx context.Context, id int64) (db.Account, error)
+	GetMediaAttachmentsByStatusIDs(ctx context.Context, statusIds []int64) ([]db.MediaAttachment, error)
+	GetMentionsByStatusIDs(ctx context.Context, statusIds []int64) ([]db.Mention, error)
+	GetStatusStatsByIDs(ctx context.Context, statusIds []int64) ([]db.StatusStat, error)
+	GetTagsByStatusIDs(ctx context.Context, statusIds []int64) ([]db.GetTagsByStatusIDsRow, error)
+	ListConversationMutes(ctx context.Context, arg db.ListConversationMutesParams) ([]int64, error)
+	GetPreviewCardsByStatusIDs(ctx context.Context, statusIds []int64) ([]db.GetPreviewCardsByStatusIDsRow, error)
+	GetQuotesByStatusIDs(ctx context.Context, statusIds []int64) ([]db.Quote, error)
+	GetStatusesByIDs(ctx context.Context, ids []int64) ([]db.Status, error)
+}
+
 type statusRelationshipQuerier interface {
 	ListFavouritedStatusIDs(ctx context.Context, arg db.ListFavouritedStatusIDsParams) ([]int64, error)
 	ListBookmarkedStatusIDs(ctx context.Context, arg db.ListBookmarkedStatusIDsParams) ([]int64, error)
@@ -251,8 +270,45 @@ func buildStatusEmojis(ctx context.Context, q statusEmojiQuerier, statuses []db.
 
 // SerializeStatuses converts a slice of database Status records to API Statuses efficiently
 func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, dbStatuses []db.Status) []Status {
+	return serializeStatusesInternal(ctx, q, cfg, dbStatuses, statusSerializeOptions{
+		includeReblogs: true,
+		includeQuotes:  true,
+	})
+}
+
+func serializeStatusesInternal(ctx context.Context, q statusSerializerQuerier, cfg *config.Config, dbStatuses []db.Status, opts statusSerializeOptions) []Status {
 	if len(dbStatuses) == 0 {
 		return []Status{}
+	}
+
+	rebloggedStatuses := map[int64]Status{}
+	if opts.includeReblogs {
+		reblogIDs := make([]int64, 0)
+		reblogIDSeen := make(map[int64]struct{})
+		for _, status := range dbStatuses {
+			if !status.ReblogOfID.Valid {
+				continue
+			}
+			reblogID := status.ReblogOfID.Int64
+			if _, ok := reblogIDSeen[reblogID]; ok {
+				continue
+			}
+			reblogIDSeen[reblogID] = struct{}{}
+			reblogIDs = append(reblogIDs, reblogID)
+		}
+		if len(reblogIDs) > 0 {
+			if rebloggedDbStatuses, err := q.GetStatusesByIDs(ctx, reblogIDs); err == nil {
+				serialized := serializeStatusesInternal(ctx, q, cfg, rebloggedDbStatuses, statusSerializeOptions{
+					includeReblogs: false,
+					includeQuotes:  true,
+				})
+				for _, status := range serialized {
+					if statusID, err := strconv.ParseInt(status.ID, 10, 64); err == nil {
+						rebloggedStatuses[statusID] = status
+					}
+				}
+			}
+		}
 	}
 
 	statusIDs := make([]int64, len(dbStatuses))
@@ -357,11 +413,15 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 		for _, m := range dbMentions {
 			acc, ok := mentionedAccountsMap[m.AccountID]
 			if ok {
+				url := acc.URL
+				if strings.TrimSpace(url) == "" {
+					url = acc.URI
+				}
 				mentionsMap[m.StatusID] = append(mentionsMap[m.StatusID], Mention{
 					ID:       acc.ID,
 					Username: acc.Username,
 					Acct:     acc.Acct,
-					URL:      acc.URI,
+					URL:      url,
 				})
 			}
 		}
@@ -453,56 +513,35 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 		}
 	}
 
-	// Fetch quotes for statuses (quotes where these statuses are the quoting status)
-	dbQuotes, _ := q.GetQuotesByStatusIDs(ctx, statusIDs)
-	quotesMap := make(map[int64]db.Quote) // status_id -> quote
-	quotedStatusIDs := make([]int64, 0)
-	for _, qr := range dbQuotes {
-		quotesMap[qr.StatusID] = qr
-		if qr.QuotedStatusID.Valid {
-			quotedStatusIDs = append(quotedStatusIDs, qr.QuotedStatusID.Int64)
-		}
-	}
-
-	quotedDbStatuses := []db.Status{}
-	quotedAccountsMap := make(map[int64]Account)
-	if len(quotedStatusIDs) > 0 {
-		quotedDbStatuses, _ = q.GetStatusesByIDs(ctx, quotedStatusIDs)
-
-		// Bulk fetch accounts for quoted statuses to avoid N+1 queries
-		quotedAccountIDs := make([]int64, 0, len(quotedDbStatuses))
-		quotedAccountIDSeen := make(map[int64]bool)
-		for _, qs := range quotedDbStatuses {
-			if !quotedAccountIDSeen[qs.AccountID] {
-				quotedAccountIDs = append(quotedAccountIDs, qs.AccountID)
-				quotedAccountIDSeen[qs.AccountID] = true
-			}
-		}
-
-		if len(quotedAccountIDs) > 0 {
-			quotedDbAccounts, _ := q.GetAccountsByIDs(ctx, quotedAccountIDs)
-			quotedAccountsMap = serializeAccounts(ctx, q, cfg, quotedDbAccounts, true)
-		}
-	}
-
-	allStatuses := make([]db.Status, 0, len(dbStatuses)+len(quotedDbStatuses))
-	allStatuses = append(allStatuses, dbStatuses...)
-	allStatuses = append(allStatuses, quotedDbStatuses...)
-	relationships := buildStatusRelationships(ctx, q, accountID, allStatuses)
-
-	// Serialize quoted statuses (without recursing into their quotes to avoid infinite loops)
+	quotesMap := make(map[int64]db.Quote)
 	quotedStatusesMap := make(map[int64]Status)
-	if len(quotedDbStatuses) > 0 {
-		for _, qs := range quotedDbStatuses {
-			var accPtr *Account
-			if acc, ok := quotedAccountsMap[qs.AccountID]; ok {
-				accPtr = &acc
+	if opts.includeQuotes {
+		// Fetch quotes for statuses (quotes where these statuses are the quoting status)
+		dbQuotes, _ := q.GetQuotesByStatusIDs(ctx, statusIDs)
+		quotedStatusIDs := make([]int64, 0)
+		for _, qr := range dbQuotes {
+			quotesMap[qr.StatusID] = qr
+			if qr.QuotedStatusID.Valid {
+				quotedStatusIDs = append(quotedStatusIDs, qr.QuotedStatusID.Int64)
 			}
-			quotedStatus := SerializeStatusSimple(ctx, q, cfg, qs, accPtr)
-			applyStatusRelationships(&quotedStatus, qs, relationships, accountID, hasAccount)
-			quotedStatusesMap[qs.ID] = quotedStatus
+		}
+
+		if len(quotedStatusIDs) > 0 {
+			if quotedDbStatuses, err := q.GetStatusesByIDs(ctx, quotedStatusIDs); err == nil {
+				serialized := serializeStatusesInternal(ctx, q, cfg, quotedDbStatuses, statusSerializeOptions{
+					includeReblogs: true,
+					includeQuotes:  false,
+				})
+				for _, status := range serialized {
+					if statusID, err := strconv.ParseInt(status.ID, 10, 64); err == nil {
+						quotedStatusesMap[statusID] = status
+					}
+				}
+			}
 		}
 	}
+
+	relationships := buildStatusRelationships(ctx, q, accountID, dbStatuses)
 
 	results := make([]Status, len(dbStatuses))
 	for i, dbStatus := range dbStatuses {
@@ -542,6 +581,24 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 		if emojis == nil {
 			emojis = []CustomEmoji{}
 		}
+
+		var quoteStatus *Status
+		var quoteIDStr *string
+		if qr, hasQuote := quotesMap[dbStatus.ID]; hasQuote && qr.QuotedStatusID.Valid {
+			idStr := strconv.FormatInt(qr.QuotedStatusID.Int64, 10)
+			quoteIDStr = &idStr
+			if quotedStatus, ok := quotedStatusesMap[qr.QuotedStatusID.Int64]; ok {
+				quoteCopy := quotedStatus
+				quoteStatus = &quoteCopy
+			}
+		}
+
+		content := formatStatusContent(cfg, dbStatus, statusContentOptions{
+			author:   &account,
+			mentions: mentions,
+			tags:     statusTags,
+			quote:    quoteStatus,
+		})
 
 		// Stats
 		repliesCount := int64(0)
@@ -586,13 +643,15 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 			FavouritesCount:    favouritesCount,
 			EditedAt:           editedAt,
 			Muted:              muted,
-			Content:            dbStatus.Text,
+			Content:            content,
 			Reblog:             nil,
 			Account:            account,
 			MediaAttachments:   mediaAttachments,
 			Mentions:           mentions,
 			Tags:               statusTags,
 			Emojis:             emojis,
+			Quote:              quoteStatus,
+			QuoteID:            quoteIDStr,
 		}
 		if card, ok := previewCardsMap[dbStatus.ID]; ok {
 			s.Card = card
@@ -607,12 +666,9 @@ func SerializeStatuses(ctx context.Context, q db.Querier, cfg *config.Config, db
 			s.InReplyToAccountID = &idStr
 		}
 
-		// Add quote fields if the status quotes another
-		if qr, hasQuote := quotesMap[dbStatus.ID]; hasQuote && qr.QuotedStatusID.Valid {
-			quoteIDStr := strconv.FormatInt(qr.QuotedStatusID.Int64, 10)
-			s.QuoteID = &quoteIDStr
-			if quotedStatus, ok := quotedStatusesMap[qr.QuotedStatusID.Int64]; ok {
-				s.Quote = &quotedStatus
+		if opts.includeReblogs && dbStatus.ReblogOfID.Valid {
+			if reblog, ok := rebloggedStatuses[dbStatus.ReblogOfID.Int64]; ok {
+				s.Reblog = &reblog
 			}
 		}
 
@@ -634,7 +690,7 @@ func SerializeStatus(ctx context.Context, q db.Querier, cfg *config.Config, dbSt
 }
 
 // SerializeStatusSimple converts a status without recursing into quotes (to avoid infinite loops)
-func SerializeStatusSimple(ctx context.Context, q db.Querier, cfg *config.Config, dbStatus db.Status, preFetchedAccount *Account) Status {
+func SerializeStatusSimple(ctx context.Context, q statusSerializerQuerier, cfg *config.Config, dbStatus db.Status, preFetchedAccount *Account) Status {
 	// Get account
 	var account Account
 	if preFetchedAccount != nil {
@@ -682,6 +738,10 @@ func SerializeStatusSimple(ctx context.Context, q db.Querier, cfg *config.Config
 		}
 	}
 
+	content := formatStatusText(cfg, !dbStatus.Local.Valid || dbStatus.Local.Bool, dbStatus.Text, statusContentOptions{
+		author: &account,
+	})
+
 	return Status{
 		ID:               strconv.FormatInt(dbStatus.ID, 10),
 		CreatedAt:        dbStatus.CreatedAt.Time,
@@ -692,7 +752,7 @@ func SerializeStatusSimple(ctx context.Context, q db.Querier, cfg *config.Config
 		URI:              dbStatus.Uri.String,
 		URL:              &dbStatus.Url.String,
 		EditedAt:         editedAt,
-		Content:          dbStatus.Text,
+		Content:          content,
 		Account:          account,
 		MediaAttachments: []MediaAttach{},
 		Mentions:         []Mention{},

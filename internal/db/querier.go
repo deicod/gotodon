@@ -526,6 +526,7 @@ type Querier interface {
 	RevokeOAuthAccessTokensByApplication(ctx context.Context, arg RevokeOAuthAccessTokensByApplicationParams) error
 	RevokeOAuthAccessTokensByUser(ctx context.Context, resourceOwnerID pgtype.Int8) error
 	SearchAccounts(ctx context.Context, arg SearchAccountsParams) ([]Account, error)
+	SearchAccountsFollowing(ctx context.Context, arg SearchAccountsFollowingParams) ([]Account, error)
 	SearchAccountsV2(ctx context.Context, arg SearchAccountsV2Params) ([]Account, error)
 	SearchHashtags(ctx context.Context, arg SearchHashtagsParams) ([]Tag, error)
 	SearchStatuses(ctx context.Context, arg SearchStatusesParams) ([]SearchStatusesRow, error)

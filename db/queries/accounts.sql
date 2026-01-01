@@ -98,6 +98,21 @@ ORDER BY
     id DESC
 LIMIT $1 OFFSET $2;
 
+-- name: SearchAccountsFollowing :many
+SELECT a.* FROM accounts a
+LEFT JOIN follows f ON f.target_account_id = a.id AND f.account_id = $1
+WHERE a.suspended_at IS NULL
+  AND (f.account_id IS NOT NULL OR a.id = $1)
+  AND (
+    lower(a.username) LIKE lower(@query) || '%'
+    OR lower(a.display_name) LIKE '%' || lower(@query) || '%'
+  )
+ORDER BY
+    CASE WHEN a.domain IS NULL THEN 0 ELSE 1 END,
+    lower(a.username) = lower(@query) DESC,
+    a.id DESC
+LIMIT $2 OFFSET $3;
+
 -- name: GetAccountsByUsernames :many
 SELECT * FROM accounts 
 WHERE lower(username) = ANY(@usernames::text[]) 

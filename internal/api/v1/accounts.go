@@ -560,7 +560,14 @@ func (h *AccountsHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 // Search handles GET /api/v1/accounts/search
 func (h *AccountsHandler) Search(w http.ResponseWriter, r *http.Request) {
-	query := web.QueryParam(r, "q")
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	query := strings.TrimSpace(web.QueryParam(r, "q"))
+	query = strings.TrimPrefix(query, "@")
 	if query == "" {
 		web.JSON(w, http.StatusOK, []Account{})
 		return
@@ -572,15 +579,20 @@ func (h *AccountsHandler) Search(w http.ResponseWriter, r *http.Request) {
 			limit = parsed
 		}
 	}
+	offset := 0
+	if o := web.QueryParam(r, "offset"); o != "" {
+		if parsed, err := strconv.Atoi(o); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+
+	resolve := parseBoolParam(web.QueryParam(r, "resolve"))
+	following := parseBoolParam(web.QueryParam(r, "following"))
 
 	ctx := r.Context()
 
 	if h.useDB() {
-		dbAccounts, err := h.queries.SearchAccounts(ctx, db.SearchAccountsParams{
-			Query:  query,
-			Limit:  int32(limit),
-			Offset: 0,
-		})
+		dbAccounts, err := accountSearch(ctx, h.queries, h.resolver, h.cfg, accountID, query, limit, offset, resolve, following)
 		if err != nil {
 			web.JSON(w, http.StatusOK, []Account{})
 			return
@@ -598,6 +610,145 @@ func (h *AccountsHandler) Search(w http.ResponseWriter, r *http.Request) {
 	}
 
 	web.JSON(w, http.StatusOK, []Account{})
+}
+
+type accountSearchQuerier interface {
+	SearchAccounts(ctx context.Context, arg db.SearchAccountsParams) ([]db.Account, error)
+	SearchAccountsFollowing(ctx context.Context, arg db.SearchAccountsFollowingParams) ([]db.Account, error)
+	GetAccountByUsername(ctx context.Context, username string) (db.Account, error)
+	GetAccountByUsernameAndDomain(ctx context.Context, arg db.GetAccountByUsernameAndDomainParams) (db.Account, error)
+	GetFollow(ctx context.Context, arg db.GetFollowParams) (db.Follow, error)
+}
+
+type accountSearchResolver interface {
+	ResolveAccount(ctx context.Context, acct string) (db.Account, error)
+}
+
+func accountSearch(ctx context.Context, q accountSearchQuerier, resolver accountSearchResolver, cfg *config.Config, accountID int64, query string, limit, offset int, resolve, following bool) ([]db.Account, error) {
+	if q == nil {
+		return []db.Account{}, nil
+	}
+
+	trimmed := strings.TrimSpace(query)
+	trimmed = strings.TrimPrefix(trimmed, "@")
+	if trimmed == "" || limit < 1 {
+		return []db.Account{}, nil
+	}
+
+	term := accountSearchTerms(trimmed, cfg)
+
+	results := make([]db.Account, 0, limit)
+	seen := make(map[int64]struct{})
+
+	if offset == 0 {
+		if exact, ok := accountSearchExactMatch(ctx, q, resolver, cfg, accountID, trimmed, resolve, following); ok {
+			results = append(results, exact)
+			seen[exact.ID] = struct{}{}
+			if limit > 0 {
+				limit--
+			}
+		}
+	}
+
+	if limit > 0 {
+		var rows []db.Account
+		var err error
+		if following {
+			rows, err = q.SearchAccountsFollowing(ctx, db.SearchAccountsFollowingParams{
+				AccountID: accountID,
+				Query:     term,
+				Limit:     int32(limit),
+				Offset:    int32(offset),
+			})
+		} else {
+			rows, err = q.SearchAccounts(ctx, db.SearchAccountsParams{
+				Query:  term,
+				Limit:  int32(limit),
+				Offset: int32(offset),
+			})
+		}
+		if err != nil {
+			return results, err
+		}
+		for _, acc := range rows {
+			if _, ok := seen[acc.ID]; ok {
+				continue
+			}
+			seen[acc.ID] = struct{}{}
+			results = append(results, acc)
+		}
+	}
+
+	return results, nil
+}
+
+func accountSearchExactMatch(ctx context.Context, q accountSearchQuerier, resolver accountSearchResolver, cfg *config.Config, accountID int64, query string, resolve, following bool) (db.Account, bool) {
+	username, domain, err := activitypub.ParseAcct(query)
+	if err != nil || username == "" || domain == "" {
+		return db.Account{}, false
+	}
+
+	var acc db.Account
+	if resolve && resolver != nil {
+		acc, err = resolver.ResolveAccount(ctx, query)
+		if err != nil {
+			return db.Account{}, false
+		}
+	} else {
+		if accountSearchDomainIsLocal(domain, cfg) {
+			acc, err = q.GetAccountByUsername(ctx, username)
+		} else {
+			acc, err = q.GetAccountByUsernameAndDomain(ctx, db.GetAccountByUsernameAndDomainParams{
+				Username: username,
+				Domain:   domain,
+			})
+		}
+		if err != nil {
+			return db.Account{}, false
+		}
+	}
+
+	if following && acc.ID != accountID {
+		if _, err := q.GetFollow(ctx, db.GetFollowParams{
+			AccountID:       accountID,
+			TargetAccountID: acc.ID,
+		}); err != nil {
+			return db.Account{}, false
+		}
+	}
+
+	return acc, true
+}
+
+func accountSearchTerms(query string, cfg *config.Config) string {
+	username, domain, err := activitypub.ParseAcct(query)
+	if err != nil {
+		return query
+	}
+	if accountSearchDomainIsLocal(domain, cfg) {
+		return username
+	}
+	return query
+}
+
+func accountSearchDomainIsLocal(domain string, cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	localDomain := strings.TrimSpace(cfg.Instance.LocalDomain)
+	if localDomain == "" {
+		return false
+	}
+	return strings.EqualFold(domain, localDomain)
+}
+
+func parseBoolParam(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "t", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // Followers handles GET /api/v1/accounts/:id/followers

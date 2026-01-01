@@ -993,6 +993,104 @@ func (q *Queries) SearchAccounts(ctx context.Context, arg SearchAccountsParams) 
 	return items, nil
 }
 
+const searchAccountsFollowing = `-- name: SearchAccountsFollowing :many
+SELECT a.id, a.username, a.domain, a.private_key, a.public_key, a.created_at, a.updated_at, a.note, a.display_name, a.uri, a.url, a.avatar_file_name, a.avatar_content_type, a.avatar_file_size, a.avatar_updated_at, a.header_file_name, a.header_content_type, a.header_file_size, a.header_updated_at, a.avatar_remote_url, a.locked, a.header_remote_url, a.last_webfingered_at, a.inbox_url, a.outbox_url, a.shared_inbox_url, a.followers_url, a.following_url, a.protocol, a.memorial, a.moved_to_account_id, a.featured_collection_url, a.fields, a.actor_type, a.discoverable, a.also_known_as, a.silenced_at, a.suspended_at, a.hide_collections, a.avatar_storage_schema_version, a.header_storage_schema_version, a.suspension_origin, a.sensitized_at, a.trendable, a.reviewed_at, a.requested_review_at, a.indexable, a.attribution_domains, a.id_scheme FROM accounts a
+LEFT JOIN follows f ON f.target_account_id = a.id AND f.account_id = $1
+WHERE a.suspended_at IS NULL
+  AND (f.account_id IS NOT NULL OR a.id = $1)
+  AND (
+    lower(a.username) LIKE lower($4) || '%'
+    OR lower(a.display_name) LIKE '%' || lower($4) || '%'
+  )
+ORDER BY
+    CASE WHEN a.domain IS NULL THEN 0 ELSE 1 END,
+    lower(a.username) = lower($4) DESC,
+    a.id DESC
+LIMIT $2 OFFSET $3
+`
+
+type SearchAccountsFollowingParams struct {
+	AccountID int64  `db:"account_id" json:"account_id"`
+	Limit     int32  `db:"limit" json:"limit"`
+	Offset    int32  `db:"offset" json:"offset"`
+	Query     string `db:"query" json:"query"`
+}
+
+func (q *Queries) SearchAccountsFollowing(ctx context.Context, arg SearchAccountsFollowingParams) ([]Account, error) {
+	rows, err := q.db.Query(ctx, searchAccountsFollowing,
+		arg.AccountID,
+		arg.Limit,
+		arg.Offset,
+		arg.Query,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Account{}
+	for rows.Next() {
+		var i Account
+		if err := rows.Scan(
+			&i.ID,
+			&i.Username,
+			&i.Domain,
+			&i.PrivateKey,
+			&i.PublicKey,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Note,
+			&i.DisplayName,
+			&i.Uri,
+			&i.Url,
+			&i.AvatarFileName,
+			&i.AvatarContentType,
+			&i.AvatarFileSize,
+			&i.AvatarUpdatedAt,
+			&i.HeaderFileName,
+			&i.HeaderContentType,
+			&i.HeaderFileSize,
+			&i.HeaderUpdatedAt,
+			&i.AvatarRemoteUrl,
+			&i.Locked,
+			&i.HeaderRemoteUrl,
+			&i.LastWebfingeredAt,
+			&i.InboxUrl,
+			&i.OutboxUrl,
+			&i.SharedInboxUrl,
+			&i.FollowersUrl,
+			&i.FollowingUrl,
+			&i.Protocol,
+			&i.Memorial,
+			&i.MovedToAccountID,
+			&i.FeaturedCollectionUrl,
+			&i.Fields,
+			&i.ActorType,
+			&i.Discoverable,
+			&i.AlsoKnownAs,
+			&i.SilencedAt,
+			&i.SuspendedAt,
+			&i.HideCollections,
+			&i.AvatarStorageSchemaVersion,
+			&i.HeaderStorageSchemaVersion,
+			&i.SuspensionOrigin,
+			&i.SensitizedAt,
+			&i.Trendable,
+			&i.ReviewedAt,
+			&i.RequestedReviewAt,
+			&i.Indexable,
+			&i.AttributionDomains,
+			&i.IDScheme,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const suspendAccount = `-- name: SuspendAccount :exec
 UPDATE accounts SET suspended_at = now(), suspension_origin = $2, updated_at = now()
 WHERE id = $1

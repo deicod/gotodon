@@ -10,6 +10,7 @@ import (
 
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"golang.org/x/net/idna"
 )
 
 var emojiScanRe = regexp.MustCompile(`:([a-zA-Z0-9_]{2,}):`)
@@ -18,6 +19,7 @@ type accountSerializeOptions struct {
 	Stats        *db.AccountStat
 	Fields       []Field
 	Emojis       []CustomEmoji
+	Mentions     []Mention
 	NoIndex      *bool
 	Roles        *[]AccountRoleSummary
 	Moved        *Account
@@ -31,6 +33,8 @@ type AccountDataQuerier interface {
 	ListUserRolesByAccountIDs(ctx context.Context, accountIds []int64) ([]db.ListUserRolesByAccountIDsRow, error)
 	ListCustomEmojisByShortcodesAndDomain(ctx context.Context, arg db.ListCustomEmojisByShortcodesAndDomainParams) ([]db.CustomEmoji, error)
 	GetAccountsByIDs(ctx context.Context, ids []int64) ([]db.Account, error)
+	GetAccountsByUsernames(ctx context.Context, usernames []string) ([]db.Account, error)
+	GetAccountsByUsernamesAndDomains(ctx context.Context, arg db.GetAccountsByUsernamesAndDomainsParams) ([]db.Account, error)
 }
 
 type accountCredentialQueries interface {
@@ -60,6 +64,9 @@ func serializeAccounts(ctx context.Context, q AccountDataQuerier, cfg *config.Co
 	fieldsByID := make(map[int64][]Field, len(dbAccounts))
 	shortcodesByID := make(map[int64][]string, len(dbAccounts))
 	domainShortcodes := make(map[string]map[string]struct{})
+	noteMentionsByID := make(map[int64][]mentionToken, len(dbAccounts))
+	localMentionUsernames := make(map[string]struct{})
+	remoteMentionTokens := make(map[string]mentionToken)
 
 	for _, acc := range dbAccounts {
 		accountIDs = append(accountIDs, acc.ID)
@@ -68,6 +75,20 @@ func serializeAccounts(ctx context.Context, q AccountDataQuerier, cfg *config.Co
 
 		if acc.SuspendedAt.Valid {
 			continue
+		}
+
+		if accountIsLocal(acc) {
+			tokens := extractMentionTokens(acc.Note, cfg)
+			if len(tokens) > 0 {
+				noteMentionsByID[acc.ID] = tokens
+				for _, token := range tokens {
+					if token.Domain == "" {
+						localMentionUsernames[token.Username] = struct{}{}
+					} else {
+						remoteMentionTokens[statusMentionKey(token.Username, token.Domain)] = token
+					}
+				}
+			}
 		}
 
 		shortcodes := accountShortcodes(acc, fields)
@@ -174,6 +195,33 @@ func serializeAccounts(ctx context.Context, q AccountDataQuerier, cfg *config.Co
 		emojisByID[acc.ID] = resolved
 	}
 
+	mentionsByKey := make(map[string]Mention)
+	if q != nil {
+		if len(localMentionUsernames) > 0 {
+			usernames := make([]string, 0, len(localMentionUsernames))
+			for username := range localMentionUsernames {
+				usernames = append(usernames, username)
+			}
+			if accounts, err := q.GetAccountsByUsernames(ctx, usernames); err == nil {
+				addMentionAccounts(cfg, mentionsByKey, accounts)
+			}
+		}
+		if len(remoteMentionTokens) > 0 {
+			usernames := make([]string, 0, len(remoteMentionTokens))
+			domains := make([]string, 0, len(remoteMentionTokens))
+			for _, token := range remoteMentionTokens {
+				usernames = append(usernames, token.Username)
+				domains = append(domains, token.Domain)
+			}
+			if accounts, err := q.GetAccountsByUsernamesAndDomains(ctx, db.GetAccountsByUsernamesAndDomainsParams{
+				Usernames: usernames,
+				Domains:   domains,
+			}); err == nil {
+				addMentionAccounts(cfg, mentionsByKey, accounts)
+			}
+		}
+	}
+
 	movedByID := make(map[int64]*Account)
 	if includeMoved && q != nil {
 		movedIDs := make(map[int64]struct{})
@@ -211,6 +259,9 @@ func serializeAccounts(ctx context.Context, q AccountDataQuerier, cfg *config.Co
 		}
 		opts.Fields = fieldsByID[acc.ID]
 		opts.Emojis = emojisByID[acc.ID]
+		if tokens, ok := noteMentionsByID[acc.ID]; ok {
+			opts.Mentions = mentionsFromTokens(tokens, mentionsByKey)
+		}
 		if noindex, ok := noindexByID[acc.ID]; ok {
 			opts.NoIndex = noindex
 		}
@@ -240,7 +291,13 @@ func serializeAccount(cfg *config.Config, dbAcc db.Account, opts accountSerializ
 
 	acct := dbAcc.Username
 	if !isLocal {
-		acct = dbAcc.Username + "@" + strings.TrimSpace(dbAcc.Domain.String)
+		domain := strings.TrimSpace(dbAcc.Domain.String)
+		if domain != "" {
+			if unicodeDomain, err := idna.Lookup.ToUnicode(domain); err == nil && unicodeDomain != "" {
+				domain = unicodeDomain
+			}
+			acct = dbAcc.Username + "@" + domain
+		}
 	}
 
 	url := dbAcc.Uri
@@ -249,6 +306,12 @@ func serializeAccount(cfg *config.Config, dbAcc db.Account, opts accountSerializ
 	}
 	if url == "" && isLocal && publicDomain != "" {
 		url = "https://" + publicDomain + "/@" + dbAcc.Username
+	}
+
+	author := Account{
+		Username: dbAcc.Username,
+		Acct:     acct,
+		URL:      url,
 	}
 
 	uri := dbAcc.Uri
@@ -261,23 +324,28 @@ func serializeAccount(cfg *config.Config, dbAcc db.Account, opts accountSerializ
 
 	suspended := dbAcc.SuspendedAt.Valid
 	locked := dbAcc.Locked
-	bot := dbAcc.ActorType.Valid && dbAcc.ActorType.String == "Service"
+	actorType := strings.TrimSpace(dbAcc.ActorType.String)
+	isService := dbAcc.ActorType.Valid && (strings.EqualFold(actorType, "Service") || strings.EqualFold(actorType, "Application"))
+	isGroup := dbAcc.ActorType.Valid && strings.EqualFold(actorType, "Group")
+	bot := isService
 	note := dbAcc.Note
 	displayName := dbAcc.DisplayName
 	indexable := dbAcc.Indexable
 
-	var discoverable *bool
+	discoverableValue := false
+	if dbAcc.Discoverable.Valid {
+		discoverableValue = dbAcc.Discoverable.Bool
+	}
+	discoverable := &discoverableValue
 	if suspended {
-		value := false
-		discoverable = &value
+		discoverableValue = false
 		locked = false
 		bot = false
 		note = ""
 		displayName = ""
 		indexable = false
-	} else if dbAcc.Discoverable.Valid {
-		value := dbAcc.Discoverable.Bool
-		discoverable = &value
+	} else {
+		note = formatAccountNote(cfg, dbAcc, author, opts.Mentions)
 	}
 
 	avatar := accountImageURL(publicDomain, "", "/avatars/original/missing.png")
@@ -307,6 +375,8 @@ func serializeAccount(cfg *config.Config, dbAcc db.Account, opts accountSerializ
 	}
 	if suspended {
 		fields = []Field{}
+	} else {
+		fields = formatAccountFields(cfg, dbAcc, fields, author)
 	}
 
 	emojis := opts.Emojis
@@ -323,7 +393,7 @@ func serializeAccount(cfg *config.Config, dbAcc db.Account, opts accountSerializ
 		Bot:             bot,
 		Discoverable:    discoverable,
 		Indexable:       indexable,
-		Group:           false,
+		Group:           isGroup,
 		CreatedAt:       createdAt,
 		Note:            note,
 		URL:             url,
@@ -384,6 +454,44 @@ func serializeAccount(cfg *config.Config, dbAcc db.Account, opts accountSerializ
 	return acc
 }
 
+func formatAccountFields(cfg *config.Config, dbAcc db.Account, fields []Field, author Account) []Field {
+	if len(fields) == 0 {
+		return []Field{}
+	}
+	local := accountIsLocal(dbAcc)
+	formatted := make([]Field, 0, len(fields))
+	opts := statusContentOptions{author: &author}
+	for _, field := range fields {
+		value := field.Value
+		if field.VerifiedAt != nil && !local {
+			value = shortenedLink(value, false)
+		} else if local {
+			value = linkifyAccountFieldText(cfg, value, opts)
+		} else {
+			value = sanitizeStatusHTML(value)
+		}
+		formatted = append(formatted, Field{
+			Name:       field.Name,
+			Value:      value,
+			VerifiedAt: field.VerifiedAt,
+		})
+	}
+	return formatted
+}
+
+func formatAccountNote(cfg *config.Config, dbAcc db.Account, author Account, mentions []Mention) string {
+	note := strings.TrimSpace(dbAcc.Note)
+	if note == "" {
+		return ""
+	}
+	if !accountIsLocal(dbAcc) {
+		return sanitizeStatusHTML(note)
+	}
+	opts := statusContentOptions{author: &author, mentions: mentions}
+	html := linkifyTextWithOptions(cfg, note, opts, false, false)
+	return simpleFormatHTML(html)
+}
+
 func buildCredentialAccount(ctx context.Context, q accountCredentialQueries, cfg *config.Config, dbAcc db.Account) CredentialAccount {
 	apiAcc := SerializeAccount(cfg, dbAcc)
 	if q != nil {
@@ -430,12 +538,14 @@ func buildCredentialAccount(ctx context.Context, q accountCredentialQueries, cfg
 		discoverable = dbAcc.Discoverable.Bool
 	}
 
+	sourceFields := parseAccountFields(dbAcc.Fields)
+	sourceNote := dbAcc.Note
 	source := AccountSource{
 		Privacy:             prefs.PostingDefaultVisibility,
 		Sensitive:           prefs.PostingDefaultSensitive,
 		Language:            prefs.PostingDefaultLanguage,
-		Note:                apiAcc.Note,
-		Fields:              apiAcc.Fields,
+		Note:                sourceNote,
+		Fields:              sourceFields,
 		FollowRequestsCount: followRequests,
 		HideCollections:     apiAcc.HideCollections,
 		Discoverable:        discoverable,
@@ -524,6 +634,112 @@ func accountShortcodes(acc db.Account, fields []Field) []string {
 		appendShortcodes(field.Value, seen, &shortcodes)
 	}
 	return shortcodes
+}
+
+type mentionToken struct {
+	Username string
+	Domain   string
+}
+
+func extractMentionTokens(text string, cfg *config.Config) []mentionToken {
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	entities := extractTextEntities(text)
+	if len(entities) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	tokens := make([]mentionToken, 0)
+	for _, entity := range entities {
+		if entity.kind != entityMention {
+			continue
+		}
+		username, domain := splitAcct(entity.value, entity.value)
+		username = strings.ToLower(strings.TrimSpace(username))
+		domain = normalizeDomain(domain)
+		if domain != "" && isLocalMentionDomain(domain, cfg) {
+			domain = ""
+		}
+		if username == "" {
+			continue
+		}
+		key := statusMentionKey(username, domain)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		tokens = append(tokens, mentionToken{Username: username, Domain: domain})
+	}
+	return tokens
+}
+
+func mentionsFromTokens(tokens []mentionToken, lookup map[string]Mention) []Mention {
+	if len(tokens) == 0 || len(lookup) == 0 {
+		return nil
+	}
+	mentions := make([]Mention, 0, len(tokens))
+	seen := make(map[string]struct{})
+	for _, token := range tokens {
+		key := statusMentionKey(token.Username, token.Domain)
+		mention, ok := lookup[key]
+		if !ok {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		mentions = append(mentions, mention)
+	}
+	return mentions
+}
+
+func addMentionAccounts(cfg *config.Config, lookup map[string]Mention, accounts []db.Account) {
+	if len(accounts) == 0 {
+		return
+	}
+	for _, acc := range accounts {
+		mention := mentionFromAccount(cfg, acc)
+		username, domain := splitAcct(mention.Acct, mention.Username)
+		key := statusMentionKey(username, domain)
+		if _, ok := lookup[key]; ok {
+			continue
+		}
+		lookup[key] = mention
+	}
+}
+
+func mentionFromAccount(cfg *config.Config, dbAcc db.Account) Mention {
+	acct := dbAcc.Username
+	domain := ""
+	if dbAcc.Domain.Valid {
+		domain = strings.TrimSpace(dbAcc.Domain.String)
+		if unicodeDomain, err := idna.Lookup.ToUnicode(domain); err == nil && unicodeDomain != "" {
+			domain = unicodeDomain
+		}
+		if domain != "" {
+			acct = dbAcc.Username + "@" + domain
+		}
+	}
+
+	url := dbAcc.Uri
+	if dbAcc.Url.Valid && strings.TrimSpace(dbAcc.Url.String) != "" {
+		url = strings.TrimSpace(dbAcc.Url.String)
+	}
+	if url == "" && accountIsLocal(dbAcc) {
+		publicDomain := accountPublicDomain(cfg)
+		if publicDomain != "" {
+			url = "https://" + publicDomain + "/@" + dbAcc.Username
+		}
+	}
+
+	return Mention{
+		ID:       strconv.FormatInt(dbAcc.ID, 10),
+		Username: dbAcc.Username,
+		URL:      url,
+		Acct:     acct,
+	}
 }
 
 func appendShortcodes(text string, seen map[string]struct{}, out *[]string) {

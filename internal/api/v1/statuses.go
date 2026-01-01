@@ -2821,6 +2821,7 @@ func (h *StatusesHandler) History(w http.ResponseWriter, r *http.Request) {
 		}
 
 		account := h.dbAccountToAPI(dbAccount)
+		local := !dbStatus.Local.Valid || dbStatus.Local.Bool
 
 		// Get all edits for this status
 		edits, err := h.queries.GetStatusEditsByStatusID(ctx, id)
@@ -2869,7 +2870,7 @@ func (h *StatusesHandler) History(w http.ResponseWriter, r *http.Request) {
 			}
 
 			history = append(history, StatusEdit{
-				Content:          formatContent(edit.Text),
+				Content:          formatStatusText(h.cfg, local, edit.Text, statusContentOptions{author: &account}),
 				SpoilerText:      edit.SpoilerText,
 				Sensitive:        edit.Sensitive.Valid && edit.Sensitive.Bool,
 				CreatedAt:        edit.CreatedAt.Time,
@@ -2882,7 +2883,7 @@ func (h *StatusesHandler) History(w http.ResponseWriter, r *http.Request) {
 
 		// Add current version as the latest entry
 		history = append(history, StatusEdit{
-			Content:          formatContent(dbStatus.Text),
+			Content:          formatStatusText(h.cfg, local, dbStatus.Text, statusContentOptions{author: &account}),
 			SpoilerText:      dbStatus.SpoilerText,
 			Sensitive:        dbStatus.Sensitive,
 			CreatedAt:        dbStatus.CreatedAt.Time,
@@ -2950,15 +2951,6 @@ func (h *StatusesHandler) Source(w http.ResponseWriter, r *http.Request) {
 		Text:        "Hello, world!",
 		SpoilerText: "",
 	})
-}
-
-// formatContent converts plain text to HTML content
-func formatContent(text string) string {
-	if text == "" {
-		return ""
-	}
-	// Simple HTML wrapping - real implementation would linkify mentions/hashtags/URLs
-	return "<p>" + text + "</p>"
 }
 
 // Translation represents a translated status
@@ -3041,7 +3033,7 @@ func (h *StatusesHandler) Translate(w http.ResponseWriter, r *http.Request) {
 		}
 
 		web.JSON(w, http.StatusOK, Translation{
-			Content:                formatContent(result.Content),
+			Content:                formatStatusText(h.cfg, true, result.Content, statusContentOptions{}),
 			SpoilerText:            spoilerText,
 			DetectedSourceLanguage: result.DetectedSourceLanguage,
 			Language:               result.Language,
