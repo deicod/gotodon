@@ -19,6 +19,7 @@ type deleteStore struct {
 	statusesByURI map[string]db.Status
 	statusesByID  map[int64]db.Status
 	tombstones    map[string]db.Tombstone
+	mentions      map[int64][]db.Mention
 }
 
 func newDeleteStore() *deleteStore {
@@ -28,6 +29,7 @@ func newDeleteStore() *deleteStore {
 		statusesByURI: make(map[string]db.Status),
 		statusesByID:  make(map[int64]db.Status),
 		tombstones:    make(map[string]db.Tombstone),
+		mentions:      make(map[int64][]db.Mention),
 	}
 }
 
@@ -92,6 +94,81 @@ func (s *deleteStore) SuspendAccount(ctx context.Context, arg db.SuspendAccountP
 	s.accountsByID[account.ID] = account
 	s.accountsByURI[account.Uri] = account
 	return nil
+}
+
+func (s *deleteStore) GetMentionsByStatusID(ctx context.Context, statusID int64) ([]db.Mention, error) {
+	return s.mentions[statusID], nil
+}
+
+func (s *deleteStore) GetAccountsByIDs(ctx context.Context, ids []int64) ([]db.Account, error) {
+	accounts := make([]db.Account, 0, len(ids))
+	for _, id := range ids {
+		if acc, ok := s.accountsByID[id]; ok {
+			accounts = append(accounts, acc)
+		}
+	}
+	return accounts, nil
+}
+
+func (s *deleteStore) CreateConversation(ctx context.Context, arg db.CreateConversationParams) (db.Conversation, error) {
+	return db.Conversation{ID: 1, ParentStatusID: arg.ParentStatusID, ParentAccountID: arg.ParentAccountID}, nil
+}
+
+func (s *deleteStore) GetConversationByParentStatusID(ctx context.Context, parentStatusID pgtype.Int8) (db.Conversation, error) {
+	return db.Conversation{}, pgx.ErrNoRows
+}
+
+func (s *deleteStore) UpdateStatusConversationID(ctx context.Context, arg db.UpdateStatusConversationIDParams) error {
+	status, ok := s.statusesByID[arg.ID]
+	if !ok {
+		return pgx.ErrNoRows
+	}
+	status.ConversationID = arg.ConversationID
+	s.statusesByID[arg.ID] = status
+	if status.Uri.Valid {
+		s.statusesByURI[status.Uri.String] = status
+	}
+	return nil
+}
+
+func (s *deleteStore) UpdateStatusConversationIDIfNull(ctx context.Context, arg db.UpdateStatusConversationIDIfNullParams) (int64, error) {
+	status, ok := s.statusesByID[arg.ID]
+	if !ok {
+		return 0, pgx.ErrNoRows
+	}
+	if status.ConversationID.Valid {
+		return 0, nil
+	}
+	status.ConversationID = arg.ConversationID
+	s.statusesByID[arg.ID] = status
+	if status.Uri.Valid {
+		s.statusesByURI[status.Uri.String] = status
+	}
+	return 1, nil
+}
+
+func (s *deleteStore) GetAccountConversationByParticipants(ctx context.Context, arg db.GetAccountConversationByParticipantsParams) (db.AccountConversation, error) {
+	return db.AccountConversation{}, pgx.ErrNoRows
+}
+
+func (s *deleteStore) CreateAccountConversation(ctx context.Context, arg db.CreateAccountConversationParams) (db.AccountConversation, error) {
+	return db.AccountConversation{
+		ID:                    1,
+		AccountID:             arg.AccountID,
+		ConversationID:        arg.ConversationID,
+		ParticipantAccountIds: arg.ParticipantAccountIds,
+		StatusIds:             arg.StatusIds,
+		LastStatusID:          arg.LastStatusID,
+		Unread:                arg.Unread,
+	}, nil
+}
+
+func (s *deleteStore) UpdateAccountConversation(ctx context.Context, arg db.UpdateAccountConversationParams) (int64, error) {
+	return 1, nil
+}
+
+func (s *deleteStore) DeleteAccountConversation(ctx context.Context, arg db.DeleteAccountConversationParams) (int64, error) {
+	return 1, nil
 }
 
 func TestDeleteService_DeleteNote(t *testing.T) {

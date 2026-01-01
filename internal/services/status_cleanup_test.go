@@ -62,6 +62,38 @@ func (s *stubStatusCleanupStore) GetAccountsByIDs(ctx context.Context, ids []int
 	return nil, nil
 }
 
+func (s *stubStatusCleanupStore) CreateConversation(ctx context.Context, arg db.CreateConversationParams) (db.Conversation, error) {
+	return db.Conversation{}, nil
+}
+
+func (s *stubStatusCleanupStore) GetConversationByParentStatusID(ctx context.Context, parentStatusID pgtype.Int8) (db.Conversation, error) {
+	return db.Conversation{}, pgx.ErrNoRows
+}
+
+func (s *stubStatusCleanupStore) UpdateStatusConversationID(ctx context.Context, arg db.UpdateStatusConversationIDParams) error {
+	return nil
+}
+
+func (s *stubStatusCleanupStore) UpdateStatusConversationIDIfNull(ctx context.Context, arg db.UpdateStatusConversationIDIfNullParams) (int64, error) {
+	return 0, nil
+}
+
+func (s *stubStatusCleanupStore) GetAccountConversationByParticipants(ctx context.Context, arg db.GetAccountConversationByParticipantsParams) (db.AccountConversation, error) {
+	return db.AccountConversation{}, pgx.ErrNoRows
+}
+
+func (s *stubStatusCleanupStore) CreateAccountConversation(ctx context.Context, arg db.CreateAccountConversationParams) (db.AccountConversation, error) {
+	return db.AccountConversation{}, nil
+}
+
+func (s *stubStatusCleanupStore) UpdateAccountConversation(ctx context.Context, arg db.UpdateAccountConversationParams) (int64, error) {
+	return 0, nil
+}
+
+func (s *stubStatusCleanupStore) DeleteAccountConversation(ctx context.Context, arg db.DeleteAccountConversationParams) (int64, error) {
+	return 0, nil
+}
+
 func TestStatusCleanupServiceRunDeletesStatuses(t *testing.T) {
 	policy := db.AccountStatusesCleanupPolicy{
 		ID:               10,

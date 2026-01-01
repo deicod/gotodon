@@ -16,6 +16,9 @@ LIMIT $2 OFFSET $3;
 -- name: GetConversation :one
 SELECT * FROM conversations WHERE id = $1;
 
+-- name: GetConversationByParentStatusID :one
+SELECT * FROM conversations WHERE parent_status_id = $1;
+
 -- name: CreateConversation :one
 INSERT INTO conversations (uri, parent_status_id, parent_account_id)
 VALUES ($1, $2, $3)
@@ -50,6 +53,24 @@ LIMIT $2 OFFSET $3;
 SELECT * FROM account_conversations
 WHERE account_id = $1 AND id = $2;
 
+-- name: GetAccountConversationByParticipants :one
+SELECT * FROM account_conversations
+WHERE account_id = $1
+  AND conversation_id = $2
+  AND participant_account_ids = $3;
+
+-- name: CreateAccountConversation :one
+INSERT INTO account_conversations (
+    account_id,
+    conversation_id,
+    participant_account_ids,
+    status_ids,
+    last_status_id,
+    unread
+)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING *;
+
 -- name: DeleteAccountConversation :execrows
 DELETE FROM account_conversations
 WHERE account_id = $1 AND id = $2;
@@ -63,3 +84,11 @@ WHERE account_id = $1 AND id = $2;
 UPDATE account_conversations
 SET unread = true
 WHERE account_id = $1 AND id = $2;
+
+-- name: UpdateAccountConversation :execrows
+UPDATE account_conversations
+SET status_ids = $2,
+    last_status_id = $3,
+    unread = $4,
+    lock_version = lock_version + 1
+WHERE id = $1;

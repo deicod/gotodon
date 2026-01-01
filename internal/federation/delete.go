@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	apihandler "github.com/deicod/gotodon/internal/api/activitypub"
+	"github.com/deicod/gotodon/internal/conversations"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/pkg/activitypub"
 )
@@ -20,6 +21,9 @@ type DeleteStore interface {
 	CreateTombstone(ctx context.Context, arg db.CreateTombstoneParams) (db.Tombstone, error)
 	ExistsTombstone(ctx context.Context, uri string) (bool, error)
 	SuspendAccount(ctx context.Context, arg db.SuspendAccountParams) error
+	GetMentionsByStatusID(ctx context.Context, statusID int64) ([]db.Mention, error)
+	GetAccountsByIDs(ctx context.Context, ids []int64) ([]db.Account, error)
+	conversations.ConversationStore
 }
 
 // DeleteService processes incoming Delete activities.
@@ -93,6 +97,16 @@ func (s *DeleteService) handleDeleteNote(ctx context.Context, actorURI, objectUR
 		return err
 	}
 
+	if status.Visibility == httpVisibilityDirect {
+		activeMentions, err := s.loadActiveMentionAccounts(ctx, status.ID)
+		if err != nil {
+			return err
+		}
+		if err := conversations.RemoveStatusFromAccountConversations(ctx, s.store, status, account, activeMentions); err != nil {
+			return err
+		}
+	}
+
 	exists, err := s.store.ExistsTombstone(ctx, objectURI)
 	if err != nil {
 		return err
@@ -134,6 +148,34 @@ func (s *DeleteService) handleDeletePerson(ctx context.Context, actorURI, object
 		ID:               account.ID,
 		SuspensionOrigin: pgtype.Int4{Valid: false},
 	})
+}
+
+func (s *DeleteService) loadActiveMentionAccounts(ctx context.Context, statusID int64) ([]db.Account, error) {
+	mentions, err := s.store.GetMentionsByStatusID(ctx, statusID)
+	if err != nil {
+		return nil, err
+	}
+	if len(mentions) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[int64]struct{})
+	ids := make([]int64, 0, len(mentions))
+	for _, mention := range mentions {
+		if mention.AccountID == 0 || mention.Silent {
+			continue
+		}
+		if _, ok := seen[mention.AccountID]; ok {
+			continue
+		}
+		seen[mention.AccountID] = struct{}{}
+		ids = append(ids, mention.AccountID)
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	return s.store.GetAccountsByIDs(ctx, ids)
 }
 
 func extractDeleteObjectURI(value any) string {

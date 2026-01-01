@@ -31,12 +31,12 @@ Status: High (parity with remaining gaps).
 Gaps
 - [x] Extra `preferences` table (Mastodon uses `users.settings` / `web_settings`).
 - [x] Index name/shape mismatches listed in `SCHEMA_DIFF.md`.
-- Conversation unread tracking is stubbed (no persistent read state).
+- [x] Conversation unread tracking (persistent read state).
 
 Plan
 1) [x] Add migration `040_migrate_preferences.sql` to move preferences into `users.settings` and `web_settings`, then drop `preferences`.
 2) [x] Reconcile remaining index differences from `SCHEMA_DIFF.md` (name alignment + unique constraints).
-3) Add read/unread tracking for conversations (align with Mastodon logic; likely `conversation_mutes` or new table).
+3) [x] Add read/unread tracking for conversations (align with Mastodon logic; likely `conversation_mutes` or new table).
 4) Regenerate sqlc (`sqlc generate`) and update query usage after each schema change.
 5) Add schema parity tests (create tables + verify index names/uniqueness).
 

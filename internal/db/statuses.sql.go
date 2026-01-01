@@ -1181,6 +1181,41 @@ func (q *Queries) UpdateStatus(ctx context.Context, arg UpdateStatusParams) (Sta
 	return i, err
 }
 
+const updateStatusConversationID = `-- name: UpdateStatusConversationID :exec
+UPDATE statuses SET
+    conversation_id = $2
+WHERE id = $1
+`
+
+type UpdateStatusConversationIDParams struct {
+	ID             int64       `db:"id" json:"id"`
+	ConversationID pgtype.Int8 `db:"conversation_id" json:"conversation_id"`
+}
+
+func (q *Queries) UpdateStatusConversationID(ctx context.Context, arg UpdateStatusConversationIDParams) error {
+	_, err := q.db.Exec(ctx, updateStatusConversationID, arg.ID, arg.ConversationID)
+	return err
+}
+
+const updateStatusConversationIDIfNull = `-- name: UpdateStatusConversationIDIfNull :execrows
+UPDATE statuses SET
+    conversation_id = $2
+WHERE id = $1 AND conversation_id IS NULL
+`
+
+type UpdateStatusConversationIDIfNullParams struct {
+	ID             int64       `db:"id" json:"id"`
+	ConversationID pgtype.Int8 `db:"conversation_id" json:"conversation_id"`
+}
+
+func (q *Queries) UpdateStatusConversationIDIfNull(ctx context.Context, arg UpdateStatusConversationIDIfNullParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateStatusConversationIDIfNull, arg.ID, arg.ConversationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateStatusFetchedRepliesAt = `-- name: UpdateStatusFetchedRepliesAt :exec
 UPDATE statuses SET
     fetched_replies_at = $2,

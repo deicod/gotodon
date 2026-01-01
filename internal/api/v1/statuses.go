@@ -19,6 +19,7 @@ import (
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
+	"github.com/deicod/gotodon/internal/conversations"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/federation"
 	"github.com/deicod/gotodon/internal/streaming"
@@ -266,20 +267,22 @@ type statusCreateStore interface {
 	AttachMediaToStatus(ctx context.Context, arg db.AttachMediaToStatusParams) (int64, error)
 	CreatePoll(ctx context.Context, arg db.CreatePollParams) (db.Poll, error)
 	UpdateStatusPollID(ctx context.Context, arg db.UpdateStatusPollIDParams) error
+	conversations.ConversationStore
 	mentionStore
 	tagStore
 }
 
 // processMentions parses mentions from status text and creates notifications
-func (h *StatusesHandler) processMentions(ctx context.Context, q mentionStore, statusID int64, accountID int64, text string) ([]Mention, []notificationTask, error) {
+func (h *StatusesHandler) processMentions(ctx context.Context, q mentionStore, statusID int64, accountID int64, text string) ([]Mention, []notificationTask, []db.Account, error) {
 	// Simple mention regex: @username or @username@domain
 	matches := mentionRegex.FindAllStringSubmatch(text, -1)
 
 	var mentions []Mention
 	var tasks []notificationTask
+	var activeAccounts []db.Account
 
 	if len(matches) == 0 {
-		return mentions, tasks, nil
+		return mentions, tasks, activeAccounts, nil
 	}
 
 	// 1. Collect names to fetch
@@ -329,7 +332,7 @@ func (h *StatusesHandler) processMentions(ctx context.Context, q mentionStore, s
 	}
 
 	if len(accounts) == 0 {
-		return mentions, tasks, nil
+		return mentions, tasks, activeAccounts, nil
 	}
 
 	// 3. Filter valid accounts and prep for Mute/Block check
@@ -348,7 +351,7 @@ func (h *StatusesHandler) processMentions(ctx context.Context, q mentionStore, s
 	}
 
 	if len(targetIDs) == 0 {
-		return mentions, tasks, nil
+		return mentions, tasks, activeAccounts, nil
 	}
 
 	// 4. Bulk check Mutes/Blocks (from mentioned users targeting sender)
@@ -383,6 +386,11 @@ func (h *StatusesHandler) processMentions(ctx context.Context, q mentionStore, s
 		silent := mutedBy[tid] || blockedBy[tid]
 		mentionAccountIDs = append(mentionAccountIDs, tid)
 		mentionSilent = append(mentionSilent, silent)
+		if !silent {
+			if acc, ok := accountMap[tid]; ok {
+				activeAccounts = append(activeAccounts, acc)
+			}
+		}
 	}
 
 	if len(mentionAccountIDs) > 0 {
@@ -392,7 +400,7 @@ func (h *StatusesHandler) processMentions(ctx context.Context, q mentionStore, s
 			Column2:  mentionAccountIDs,
 			Column3:  mentionSilent,
 		}); err != nil {
-			return mentions, tasks, err
+			return mentions, tasks, activeAccounts, err
 		}
 
 		// Prepare Notifications
@@ -408,7 +416,7 @@ func (h *StatusesHandler) processMentions(ctx context.Context, q mentionStore, s
 			Type:          pgtype.Text{String: "mention", Valid: true},
 		})
 		if err != nil {
-			return mentions, tasks, err
+			return mentions, tasks, activeAccounts, err
 		}
 
 		// Map back to tasks
@@ -451,7 +459,7 @@ func (h *StatusesHandler) processMentions(ctx context.Context, q mentionStore, s
 		}
 	}
 
-	return mentions, tasks, nil
+	return mentions, tasks, activeAccounts, nil
 }
 
 // processTags parses hashtags from text
@@ -603,6 +611,7 @@ func (h *StatusesHandler) createStatusTx(ctx context.Context, qtx statusCreateSt
 	}
 
 	var inReplyToID, inReplyToAccountID pgtype.Int8
+	var parentStatus *db.Status
 	if req.InReplyToID != nil {
 		id, err := strconv.ParseInt(*req.InReplyToID, 10, 64)
 		if err == nil {
@@ -611,6 +620,7 @@ func (h *StatusesHandler) createStatusTx(ctx context.Context, qtx statusCreateSt
 			parent, err := qtx.GetStatusByID(ctx, id)
 			if err == nil {
 				inReplyToAccountID = pgtype.Int8{Int64: parent.AccountID, Valid: true}
+				parentStatus = &parent
 			}
 		}
 	}
@@ -688,9 +698,24 @@ func (h *StatusesHandler) createStatusTx(ctx context.Context, qtx statusCreateSt
 		}
 	}
 
-	_, notifTasks, err := h.processMentions(ctx, qtx, dbStatus.ID, accountID, req.Status)
+	_, notifTasks, activeMentions, err := h.processMentions(ctx, qtx, dbStatus.ID, accountID, req.Status)
 	if err != nil {
 		return statusCreationResult{}, statusCreateError{Status: http.StatusInternalServerError, Message: "Failed to process mentions"}
+	}
+
+	if visibility == VisibilityDirect {
+		convParent := parentStatus
+		if convParent != nil && convParent.Visibility != VisibilityDirect && !convParent.ConversationID.Valid {
+			convParent = nil
+		}
+		updatedStatus, err := conversations.EnsureConversationForStatus(ctx, qtx, dbStatus, convParent)
+		if err != nil {
+			return statusCreationResult{}, statusCreateError{Status: http.StatusInternalServerError, Message: "Failed to update conversation"}
+		}
+		dbStatus = updatedStatus
+		if err := conversations.AddStatusToAccountConversations(ctx, qtx, dbStatus, sender, activeMentions); err != nil {
+			return statusCreationResult{}, statusCreateError{Status: http.StatusInternalServerError, Message: "Failed to update conversations"}
+		}
 	}
 
 	// Process Media Attachments
@@ -1196,27 +1221,49 @@ func (h *StatusesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var mentionAccounts []db.Account
-		if h.outgoing != nil {
+		var activeMentionAccounts []db.Account
+		mentionsResolved := false
+		if h.outgoing != nil || dbStatus.Visibility == VisibilityDirect {
 			mentions, err := qtx.GetMentionsByStatusID(ctx, id)
 			if err != nil {
 				fmt.Printf("Failed to load mentions for delete: %v\n", err)
-			} else if len(mentions) > 0 {
+			} else if len(mentions) == 0 {
+				mentionsResolved = true
+			} else {
 				seen := make(map[int64]bool)
 				ids := make([]int64, 0, len(mentions))
+				activeIDs := make([]int64, 0, len(mentions))
 				for _, mention := range mentions {
 					if mention.AccountID == 0 || seen[mention.AccountID] {
 						continue
 					}
 					seen[mention.AccountID] = true
 					ids = append(ids, mention.AccountID)
+					if !mention.Silent {
+						activeIDs = append(activeIDs, mention.AccountID)
+					}
 				}
 				if len(ids) > 0 {
 					accounts, err := qtx.GetAccountsByIDs(ctx, ids)
 					if err != nil {
 						fmt.Printf("Failed to load mention accounts for delete: %v\n", err)
 					} else {
+						mentionsResolved = true
 						mentionAccounts = accounts
+						if len(activeIDs) > 0 {
+							accountMap := make(map[int64]db.Account, len(accounts))
+							for _, acc := range accounts {
+								accountMap[acc.ID] = acc
+							}
+							for _, id := range activeIDs {
+								if acc, ok := accountMap[id]; ok {
+									activeMentionAccounts = append(activeMentionAccounts, acc)
+								}
+							}
+						}
 					}
+				} else {
+					mentionsResolved = true
 				}
 			}
 		}
@@ -1230,6 +1277,18 @@ func (h *StatusesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		if dbStatus.InReplyToID.Valid {
 			if err := qtx.DecrementStatusReplies(ctx, dbStatus.InReplyToID.Int64); err != nil {
 				fmt.Printf("Failed to decrement reply count: %v\n", err)
+			}
+		}
+
+		if dbStatus.Visibility == VisibilityDirect && mentionsResolved {
+			author, err := qtx.GetAccountByID(ctx, dbStatus.AccountID)
+			if err != nil {
+				web.JSONError(w, http.StatusInternalServerError, "Failed to load author")
+				return
+			}
+			if err := conversations.RemoveStatusFromAccountConversations(ctx, qtx, dbStatus, author, activeMentionAccounts); err != nil {
+				web.JSONError(w, http.StatusInternalServerError, "Failed to update conversations")
+				return
 			}
 		}
 

@@ -21,6 +21,8 @@ type createStore struct {
 	nextMediaID   int64
 	nextTagID     int64
 	nextNotifID   int64
+	nextConvID    int64
+	nextAcctConv  int64
 	accountsByURI map[string]db.Account
 	accountsByID  map[int64]db.Account
 	statusesByURI map[string]db.Status
@@ -41,6 +43,8 @@ func newCreateStore() *createStore {
 		nextMediaID:   1,
 		nextTagID:     1,
 		nextNotifID:   1,
+		nextConvID:    1,
+		nextAcctConv:  1,
 		accountsByURI: make(map[string]db.Account),
 		accountsByID:  make(map[int64]db.Account),
 		statusesByURI: make(map[string]db.Status),
@@ -312,6 +316,73 @@ func (s *createStore) CreateRemoteMediaAttachment(ctx context.Context, arg db.Cr
 	}
 	s.media = append(s.media, attachment)
 	return attachment, nil
+}
+
+func (s *createStore) CreateConversation(ctx context.Context, arg db.CreateConversationParams) (db.Conversation, error) {
+	s.nextConvID++
+	return db.Conversation{
+		ID:              s.nextConvID,
+		ParentStatusID:  arg.ParentStatusID,
+		ParentAccountID: arg.ParentAccountID,
+	}, nil
+}
+
+func (s *createStore) GetConversationByParentStatusID(ctx context.Context, parentStatusID pgtype.Int8) (db.Conversation, error) {
+	return db.Conversation{}, pgx.ErrNoRows
+}
+
+func (s *createStore) UpdateStatusConversationID(ctx context.Context, arg db.UpdateStatusConversationIDParams) error {
+	status, ok := s.statusesByID[arg.ID]
+	if !ok {
+		return pgx.ErrNoRows
+	}
+	status.ConversationID = arg.ConversationID
+	s.statusesByID[arg.ID] = status
+	if status.Uri.Valid {
+		s.statusesByURI[status.Uri.String] = status
+	}
+	return nil
+}
+
+func (s *createStore) UpdateStatusConversationIDIfNull(ctx context.Context, arg db.UpdateStatusConversationIDIfNullParams) (int64, error) {
+	status, ok := s.statusesByID[arg.ID]
+	if !ok {
+		return 0, pgx.ErrNoRows
+	}
+	if status.ConversationID.Valid {
+		return 0, nil
+	}
+	status.ConversationID = arg.ConversationID
+	s.statusesByID[arg.ID] = status
+	if status.Uri.Valid {
+		s.statusesByURI[status.Uri.String] = status
+	}
+	return 1, nil
+}
+
+func (s *createStore) GetAccountConversationByParticipants(ctx context.Context, arg db.GetAccountConversationByParticipantsParams) (db.AccountConversation, error) {
+	return db.AccountConversation{}, pgx.ErrNoRows
+}
+
+func (s *createStore) CreateAccountConversation(ctx context.Context, arg db.CreateAccountConversationParams) (db.AccountConversation, error) {
+	s.nextAcctConv++
+	return db.AccountConversation{
+		ID:                    s.nextAcctConv,
+		AccountID:             arg.AccountID,
+		ConversationID:        arg.ConversationID,
+		ParticipantAccountIds: arg.ParticipantAccountIds,
+		StatusIds:             arg.StatusIds,
+		LastStatusID:          arg.LastStatusID,
+		Unread:                arg.Unread,
+	}, nil
+}
+
+func (s *createStore) UpdateAccountConversation(ctx context.Context, arg db.UpdateAccountConversationParams) (int64, error) {
+	return 1, nil
+}
+
+func (s *createStore) DeleteAccountConversation(ctx context.Context, arg db.DeleteAccountConversationParams) (int64, error) {
+	return 1, nil
 }
 
 func TestCreateService_CreateNote(t *testing.T) {

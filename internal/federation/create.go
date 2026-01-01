@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	apihandler "github.com/deicod/gotodon/internal/api/activitypub"
+	"github.com/deicod/gotodon/internal/conversations"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/pkg/activitypub"
 )
@@ -35,6 +36,7 @@ type CreateStore interface {
 	GetTagsByNames(ctx context.Context, tags []string) ([]db.Tag, error)
 	AddStatusTags(ctx context.Context, arg db.AddStatusTagsParams) error
 	CreateRemoteMediaAttachment(ctx context.Context, arg db.CreateRemoteMediaAttachmentParams) (db.MediaAttachment, error)
+	conversations.ConversationStore
 }
 
 // StatusFetcher retrieves remote statuses referenced by incoming activities.
@@ -146,6 +148,7 @@ func (s *CreateService) handleCreate(ctx context.Context, activity *activitypub.
 	}
 
 	var inReplyToID, inReplyToAccountID pgtype.Int8
+	var parentStatus *db.Status
 	inReplyToURI := extractObjectURI(note.InReplyTo)
 	if inReplyToURI != "" {
 		parent, err := s.store.GetStatusByURI(ctx, pgtype.Text{String: inReplyToURI, Valid: true})
@@ -160,6 +163,7 @@ func (s *CreateService) handleCreate(ctx context.Context, activity *activitypub.
 		if parentFound {
 			inReplyToID = pgtype.Int8{Int64: parent.ID, Valid: true}
 			inReplyToAccountID = pgtype.Int8{Int64: parent.AccountID, Valid: true}
+			parentStatus = &parent
 		} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
@@ -230,9 +234,29 @@ func (s *CreateService) handleCreate(ctx context.Context, activity *activitypub.
 	}
 
 	recipients := mergeRecipients(to, cc)
+	var activeMentions []db.Account
 	if !opts.skipMentions {
-		if err := s.processMentions(ctx, author.ID, status.ID, recipients, note.Tags); err != nil {
+		var err error
+		activeMentions, err = s.processMentions(ctx, author.ID, status.ID, recipients, note.Tags)
+		if err != nil {
 			return err
+		}
+	}
+
+	if visibility == httpVisibilityDirect {
+		convParent := parentStatus
+		if convParent != nil && convParent.Visibility != httpVisibilityDirect && !convParent.ConversationID.Valid {
+			convParent = nil
+		}
+		updatedStatus, err := conversations.EnsureConversationForStatus(ctx, s.store, status, convParent)
+		if err != nil {
+			return err
+		}
+		status = updatedStatus
+		if !opts.skipMentions {
+			if err := conversations.AddStatusToAccountConversations(ctx, s.store, status, author, activeMentions); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -394,13 +418,13 @@ func (s *CreateService) saveTags(ctx context.Context, statusID int64, tags []str
 	return nil
 }
 
-func (s *CreateService) processMentions(ctx context.Context, authorID, statusID int64, recipients []string, tags []any) error {
+func (s *CreateService) processMentions(ctx context.Context, authorID, statusID int64, recipients []string, tags []any) ([]db.Account, error) {
 	mentionRefs := extractMentionRefs(tags)
 	mentionRefs = append(mentionRefs, extractRecipientMentions(recipients, s.localDomain)...)
 
 	accounts, err := s.resolveMentionAccounts(ctx, mentionRefs)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	accountMap := make(map[int64]db.Account)
@@ -417,7 +441,7 @@ func (s *CreateService) processMentions(ctx context.Context, authorID, statusID 
 	}
 
 	if len(targetIDs) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	mutedBy := make(map[int64]bool)
@@ -442,8 +466,15 @@ func (s *CreateService) processMentions(ctx context.Context, authorID, statusID 
 	}
 
 	mentionSilent := make([]bool, 0, len(targetIDs))
+	activeAccounts := make([]db.Account, 0, len(targetIDs))
 	for _, tid := range targetIDs {
-		mentionSilent = append(mentionSilent, mutedBy[tid] || blockedBy[tid])
+		silent := mutedBy[tid] || blockedBy[tid]
+		mentionSilent = append(mentionSilent, silent)
+		if !silent {
+			if acc, ok := accountMap[tid]; ok {
+				activeAccounts = append(activeAccounts, acc)
+			}
+		}
 	}
 
 	if err := s.store.CreateMentions(ctx, db.CreateMentionsParams{
@@ -451,7 +482,7 @@ func (s *CreateService) processMentions(ctx context.Context, authorID, statusID 
 		Column2:  targetIDs,
 		Column3:  mentionSilent,
 	}); err != nil {
-		return err
+		return nil, err
 	}
 
 	_, err = s.store.CreateNotifications(ctx, db.CreateNotificationsParams{
@@ -462,10 +493,10 @@ func (s *CreateService) processMentions(ctx context.Context, authorID, statusID 
 		Type:          pgtype.Text{String: "mention", Valid: true},
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return activeAccounts, nil
 }
 
 func (s *CreateService) resolveMentionAccounts(ctx context.Context, mentions []mentionRef) ([]db.Account, error) {

@@ -8,9 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/net/idna"
+
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
-	"golang.org/x/net/idna"
 )
 
 var emojiScanRe = regexp.MustCompile(`:([a-zA-Z0-9_]{2,}):`)
@@ -328,9 +329,9 @@ func serializeAccount(cfg *config.Config, dbAcc db.Account, opts accountSerializ
 	isService := dbAcc.ActorType.Valid && (strings.EqualFold(actorType, "Service") || strings.EqualFold(actorType, "Application"))
 	isGroup := dbAcc.ActorType.Valid && strings.EqualFold(actorType, "Group")
 	bot := isService
-	note := dbAcc.Note
 	displayName := dbAcc.DisplayName
 	indexable := dbAcc.Indexable
+	var note string
 
 	discoverableValue := false
 	if dbAcc.Discoverable.Valid {

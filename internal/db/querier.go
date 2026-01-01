@@ -162,6 +162,7 @@ type Querier interface {
 	CountWebAuthnCredentialsByUser(ctx context.Context, userID pgtype.Int8) (int64, error)
 	CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error)
 	CreateAccountAlias(ctx context.Context, arg CreateAccountAliasParams) (AccountAlias, error)
+	CreateAccountConversation(ctx context.Context, arg CreateAccountConversationParams) (AccountConversation, error)
 	CreateAccountMigration(ctx context.Context, arg CreateAccountMigrationParams) (AccountMigration, error)
 	CreateAccountNote(ctx context.Context, arg CreateAccountNoteParams) (AccountNote, error)
 	CreateAccountPin(ctx context.Context, arg CreateAccountPinParams) (AccountPin, error)
@@ -283,6 +284,7 @@ type Querier interface {
 	GetAccountByUsername(ctx context.Context, username string) (Account, error)
 	GetAccountByUsernameAndDomain(ctx context.Context, arg GetAccountByUsernameAndDomainParams) (Account, error)
 	GetAccountConversation(ctx context.Context, arg GetAccountConversationParams) (AccountConversation, error)
+	GetAccountConversationByParticipants(ctx context.Context, arg GetAccountConversationByParticipantsParams) (AccountConversation, error)
 	// Account Migrations queries
 	GetAccountMigration(ctx context.Context, id int64) (AccountMigration, error)
 	GetAccountMigrationsByAccountID(ctx context.Context, accountID int64) ([]AccountMigration, error)
@@ -305,6 +307,7 @@ type Querier interface {
 	GetBlocksFromAccounts(ctx context.Context, arg GetBlocksFromAccountsParams) ([]Block, error)
 	GetBookmark(ctx context.Context, arg GetBookmarkParams) (Bookmark, error)
 	GetConversation(ctx context.Context, id int64) (Conversation, error)
+	GetConversationByParentStatusID(ctx context.Context, parentStatusID pgtype.Int8) (Conversation, error)
 	GetCurrentTermsOfService(ctx context.Context) (TermsOfService, error)
 	GetCustomEmoji(ctx context.Context, arg GetCustomEmojiParams) (CustomEmoji, error)
 	GetCustomEmojiCategoriesByIDs(ctx context.Context, dollar_1 []int64) ([]GetCustomEmojiCategoriesByIDsRow, error)
@@ -535,6 +538,7 @@ type Querier interface {
 	UnpinStatus(ctx context.Context, arg UnpinStatusParams) error
 	UnsuspendAccount(ctx context.Context, id int64) error
 	UpdateAccount(ctx context.Context, arg UpdateAccountParams) (Account, error)
+	UpdateAccountConversation(ctx context.Context, arg UpdateAccountConversationParams) (int64, error)
 	UpdateAccountNote(ctx context.Context, arg UpdateAccountNoteParams) (AccountNote, error)
 	UpdateAccountStats(ctx context.Context, arg UpdateAccountStatsParams) error
 	UpdateAnnualReportData(ctx context.Context, arg UpdateAnnualReportDataParams) (GeneratedAnnualReport, error)
@@ -555,6 +559,8 @@ type Querier interface {
 	UpdateScheduledStatus(ctx context.Context, arg UpdateScheduledStatusParams) (ScheduledStatus, error)
 	UpdateSessionActivation(ctx context.Context, arg UpdateSessionActivationParams) (SessionActivation, error)
 	UpdateStatus(ctx context.Context, arg UpdateStatusParams) (Status, error)
+	UpdateStatusConversationID(ctx context.Context, arg UpdateStatusConversationIDParams) error
+	UpdateStatusConversationIDIfNull(ctx context.Context, arg UpdateStatusConversationIDIfNullParams) (int64, error)
 	UpdateStatusFetchedRepliesAt(ctx context.Context, arg UpdateStatusFetchedRepliesAtParams) error
 	UpdateStatusInReplyTo(ctx context.Context, arg UpdateStatusInReplyToParams) (int64, error)
 	UpdateStatusPollID(ctx context.Context, arg UpdateStatusPollIDParams) error

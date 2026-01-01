@@ -67,6 +67,16 @@ UPDATE statuses SET
     updated_at = now()
 WHERE id = $1 AND in_reply_to_id IS NULL;
 
+-- name: UpdateStatusConversationID :exec
+UPDATE statuses SET
+    conversation_id = $2
+WHERE id = $1;
+
+-- name: UpdateStatusConversationIDIfNull :execrows
+UPDATE statuses SET
+    conversation_id = $2
+WHERE id = $1 AND conversation_id IS NULL;
+
 -- name: UpdateStatusFetchedRepliesAt :exec
 UPDATE statuses SET
     fetched_replies_at = $2,

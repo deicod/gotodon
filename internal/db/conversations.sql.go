@@ -11,6 +11,51 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const createAccountConversation = `-- name: CreateAccountConversation :one
+INSERT INTO account_conversations (
+    account_id,
+    conversation_id,
+    participant_account_ids,
+    status_ids,
+    last_status_id,
+    unread
+)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, account_id, conversation_id, participant_account_ids, status_ids, last_status_id, lock_version, unread
+`
+
+type CreateAccountConversationParams struct {
+	AccountID             int64       `db:"account_id" json:"account_id"`
+	ConversationID        int64       `db:"conversation_id" json:"conversation_id"`
+	ParticipantAccountIds []int64     `db:"participant_account_ids" json:"participant_account_ids"`
+	StatusIds             []int64     `db:"status_ids" json:"status_ids"`
+	LastStatusID          pgtype.Int8 `db:"last_status_id" json:"last_status_id"`
+	Unread                bool        `db:"unread" json:"unread"`
+}
+
+func (q *Queries) CreateAccountConversation(ctx context.Context, arg CreateAccountConversationParams) (AccountConversation, error) {
+	row := q.db.QueryRow(ctx, createAccountConversation,
+		arg.AccountID,
+		arg.ConversationID,
+		arg.ParticipantAccountIds,
+		arg.StatusIds,
+		arg.LastStatusID,
+		arg.Unread,
+	)
+	var i AccountConversation
+	err := row.Scan(
+		&i.ID,
+		&i.AccountID,
+		&i.ConversationID,
+		&i.ParticipantAccountIds,
+		&i.StatusIds,
+		&i.LastStatusID,
+		&i.LockVersion,
+		&i.Unread,
+	)
+	return i, err
+}
+
 const createConversation = `-- name: CreateConversation :one
 INSERT INTO conversations (uri, parent_status_id, parent_account_id)
 VALUES ($1, $2, $3)
@@ -121,12 +166,59 @@ func (q *Queries) GetAccountConversation(ctx context.Context, arg GetAccountConv
 	return i, err
 }
 
+const getAccountConversationByParticipants = `-- name: GetAccountConversationByParticipants :one
+SELECT id, account_id, conversation_id, participant_account_ids, status_ids, last_status_id, lock_version, unread FROM account_conversations
+WHERE account_id = $1
+  AND conversation_id = $2
+  AND participant_account_ids = $3
+`
+
+type GetAccountConversationByParticipantsParams struct {
+	AccountID             int64   `db:"account_id" json:"account_id"`
+	ConversationID        int64   `db:"conversation_id" json:"conversation_id"`
+	ParticipantAccountIds []int64 `db:"participant_account_ids" json:"participant_account_ids"`
+}
+
+func (q *Queries) GetAccountConversationByParticipants(ctx context.Context, arg GetAccountConversationByParticipantsParams) (AccountConversation, error) {
+	row := q.db.QueryRow(ctx, getAccountConversationByParticipants, arg.AccountID, arg.ConversationID, arg.ParticipantAccountIds)
+	var i AccountConversation
+	err := row.Scan(
+		&i.ID,
+		&i.AccountID,
+		&i.ConversationID,
+		&i.ParticipantAccountIds,
+		&i.StatusIds,
+		&i.LastStatusID,
+		&i.LockVersion,
+		&i.Unread,
+	)
+	return i, err
+}
+
 const getConversation = `-- name: GetConversation :one
 SELECT id, uri, created_at, updated_at, parent_status_id, parent_account_id FROM conversations WHERE id = $1
 `
 
 func (q *Queries) GetConversation(ctx context.Context, id int64) (Conversation, error) {
 	row := q.db.QueryRow(ctx, getConversation, id)
+	var i Conversation
+	err := row.Scan(
+		&i.ID,
+		&i.Uri,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ParentStatusID,
+		&i.ParentAccountID,
+	)
+	return i, err
+}
+
+const getConversationByParentStatusID = `-- name: GetConversationByParentStatusID :one
+SELECT id, uri, created_at, updated_at, parent_status_id, parent_account_id FROM conversations WHERE parent_status_id = $1
+`
+
+func (q *Queries) GetConversationByParentStatusID(ctx context.Context, parentStatusID pgtype.Int8) (Conversation, error) {
+	row := q.db.QueryRow(ctx, getConversationByParentStatusID, parentStatusID)
 	var i Conversation
 	err := row.Scan(
 		&i.ID,
@@ -306,6 +398,35 @@ type MarkConversationUnreadParams struct {
 
 func (q *Queries) MarkConversationUnread(ctx context.Context, arg MarkConversationUnreadParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markConversationUnread, arg.AccountID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateAccountConversation = `-- name: UpdateAccountConversation :execrows
+UPDATE account_conversations
+SET status_ids = $2,
+    last_status_id = $3,
+    unread = $4,
+    lock_version = lock_version + 1
+WHERE id = $1
+`
+
+type UpdateAccountConversationParams struct {
+	ID           int64       `db:"id" json:"id"`
+	StatusIds    []int64     `db:"status_ids" json:"status_ids"`
+	LastStatusID pgtype.Int8 `db:"last_status_id" json:"last_status_id"`
+	Unread       bool        `db:"unread" json:"unread"`
+}
+
+func (q *Queries) UpdateAccountConversation(ctx context.Context, arg UpdateAccountConversationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateAccountConversation,
+		arg.ID,
+		arg.StatusIds,
+		arg.LastStatusID,
+		arg.Unread,
+	)
 	if err != nil {
 		return 0, err
 	}

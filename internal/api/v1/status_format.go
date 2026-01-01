@@ -216,7 +216,7 @@ func validHashtagBoundary(text string, start int) bool {
 	if r == '/' || r == '=' || r == ')' {
 		return false
 	}
-	return !(unicode.IsLetter(r) || unicode.IsDigit(r))
+	return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 }
 
 func isWordRune(r rune) bool {

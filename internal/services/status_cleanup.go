@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/deicod/gotodon/internal/conversations"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/federation"
 	"github.com/deicod/gotodon/internal/streaming"
@@ -38,6 +39,7 @@ type StatusCleanupStore interface {
 	DecrementStatusReplies(ctx context.Context, id int64) error
 	GetMentionsByStatusID(ctx context.Context, statusID int64) ([]db.Mention, error)
 	GetAccountsByIDs(ctx context.Context, ids []int64) ([]db.Account, error)
+	conversations.ConversationStore
 }
 
 // StatusCleanupService deletes statuses according to per-account cleanup policies.
@@ -235,6 +237,20 @@ func (s *StatusCleanupService) deleteStatus(ctx context.Context, status db.Statu
 		}
 	}
 
+	if status.Visibility == 3 {
+		author, err := s.loadAccountByID(ctx, status.AccountID)
+		if err != nil {
+			s.logError("Failed to load author for cleanup conversations", "status_id", status.ID, "error", err)
+		} else {
+			activeMentions, err := s.loadActiveMentionAccounts(ctx, status.ID)
+			if err != nil {
+				s.logError("Failed to load mentions for cleanup conversations", "status_id", status.ID, "error", err)
+			} else if err := conversations.RemoveStatusFromAccountConversations(ctx, s.store, status, author, activeMentions); err != nil {
+				s.logError("Failed to update cleanup conversations", "status_id", status.ID, "error", err)
+			}
+		}
+	}
+
 	if s.publisher != nil {
 		streams := []string{fmt.Sprintf("user:%d", status.AccountID)}
 		if status.Visibility == 0 {
@@ -274,6 +290,48 @@ func (s *StatusCleanupService) loadMentionAccounts(ctx context.Context, statusID
 	}
 
 	return s.store.GetAccountsByIDs(ctx, ids)
+}
+
+func (s *StatusCleanupService) loadActiveMentionAccounts(ctx context.Context, statusID int64) ([]db.Account, error) {
+	mentions, err := s.store.GetMentionsByStatusID(ctx, statusID)
+	if err != nil {
+		return nil, err
+	}
+	if len(mentions) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[int64]struct{})
+	ids := make([]int64, 0, len(mentions))
+	for _, mention := range mentions {
+		if mention.AccountID == 0 || mention.Silent {
+			continue
+		}
+		if _, ok := seen[mention.AccountID]; ok {
+			continue
+		}
+		seen[mention.AccountID] = struct{}{}
+		ids = append(ids, mention.AccountID)
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	return s.store.GetAccountsByIDs(ctx, ids)
+}
+
+func (s *StatusCleanupService) loadAccountByID(ctx context.Context, accountID int64) (db.Account, error) {
+	if accountID == 0 {
+		return db.Account{}, errors.New("missing account ID")
+	}
+	accounts, err := s.store.GetAccountsByIDs(ctx, []int64{accountID})
+	if err != nil {
+		return db.Account{}, err
+	}
+	if len(accounts) == 0 {
+		return db.Account{}, errors.New("account not found")
+	}
+	return accounts[0], nil
 }
 
 func (s *StatusCleanupService) lastPolicyID(ctx context.Context) int64 {
