@@ -17,6 +17,15 @@ WHERE disabled = false
     OR domain = @domain
   );
 
+-- name: ListCustomEmojisByShortcodesAndDomains :many
+SELECT * FROM custom_emojis
+WHERE disabled = false
+  AND shortcode = ANY(@shortcodes::text[])
+  AND (
+    domain = ANY(@domains::text[])
+    OR (domain IS NULL AND @include_local::boolean)
+  );
+
 -- name: GetCustomEmoji :one
 SELECT * FROM custom_emojis
 WHERE shortcode = $1 AND (domain IS NULL OR domain = $2)

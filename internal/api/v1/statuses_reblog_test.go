@@ -97,6 +97,10 @@ func (s *statusSerializerStub) ListUserRolesByAccountIDs(ctx context.Context, ac
 	return nil, nil
 }
 
+func (s *statusSerializerStub) ListCustomEmojisByShortcodesAndDomains(ctx context.Context, arg db.ListCustomEmojisByShortcodesAndDomainsParams) ([]db.CustomEmoji, error) {
+	return nil, nil
+}
+
 func (s *statusSerializerStub) ListCustomEmojisByShortcodesAndDomain(ctx context.Context, arg db.ListCustomEmojisByShortcodesAndDomainParams) ([]db.CustomEmoji, error) {
 	return nil, nil
 }
