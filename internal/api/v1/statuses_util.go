@@ -20,7 +20,7 @@ const (
 )
 
 type statusEmojiQuerier interface {
-	ListCustomEmojisByShortcodesAndDomain(ctx context.Context, arg db.ListCustomEmojisByShortcodesAndDomainParams) ([]db.CustomEmoji, error)
+	ListCustomEmojisByShortcodesAndDomains(ctx context.Context, arg db.ListCustomEmojisByShortcodesAndDomainsParams) ([]db.CustomEmoji, error)
 }
 
 type statusSerializeOptions struct {
@@ -31,6 +31,7 @@ type statusSerializeOptions struct {
 type statusSerializerQuerier interface {
 	AccountDataQuerier
 	statusRelationshipQuerier
+	statusEmojiQuerier
 	GetAccountByID(ctx context.Context, id int64) (db.Account, error)
 	GetMediaAttachmentsByStatusIDs(ctx context.Context, statusIds []int64) ([]db.MediaAttachment, error)
 	GetMentionsByStatusIDs(ctx context.Context, statusIds []int64) ([]db.Mention, error)
@@ -221,25 +222,46 @@ func buildStatusEmojis(ctx context.Context, q statusEmojiQuerier, statuses []db.
 		return emojisByStatus
 	}
 
-	emojisByDomain := make(map[string]map[string]db.CustomEmoji, len(domainShortcodes))
+	// Flatten domains and shortcodes for bulk query
+	allDomains := make([]string, 0, len(domainShortcodes))
+	allShortcodes := make([]string, 0)
+	shortcodeSeen := make(map[string]struct{})
+	includeLocal := false
+
 	for domain, shortcodes := range domainShortcodes {
-		list := make([]string, 0, len(shortcodes))
-		for shortcode := range shortcodes {
-			list = append(list, shortcode)
+		if domain == "" {
+			includeLocal = true
+		} else {
+			allDomains = append(allDomains, domain)
 		}
-		emojis, err := q.ListCustomEmojisByShortcodesAndDomain(ctx, db.ListCustomEmojisByShortcodesAndDomainParams{
-			Shortcodes: list,
-			Domain:     domain,
-		})
-		if err != nil {
-			continue
+		for shortcode := range shortcodes {
+			if _, ok := shortcodeSeen[shortcode]; !ok {
+				allShortcodes = append(allShortcodes, shortcode)
+				shortcodeSeen[shortcode] = struct{}{}
+			}
+		}
+	}
+
+	emojis, err := q.ListCustomEmojisByShortcodesAndDomains(ctx, db.ListCustomEmojisByShortcodesAndDomainsParams{
+		Shortcodes:   allShortcodes,
+		Domains:      allDomains,
+		IncludeLocal: includeLocal,
+	})
+	if err != nil {
+		// Log error? For now just return empty as per original behavior which ignored errors inside loop
+		return emojisByStatus
+	}
+
+	emojisByDomain := make(map[string]map[string]db.CustomEmoji)
+	for _, emoji := range emojis {
+		domain := emoji.Domain.String
+		if !emoji.Domain.Valid {
+			domain = ""
 		}
 		if _, ok := emojisByDomain[domain]; !ok {
-			emojisByDomain[domain] = make(map[string]db.CustomEmoji, len(emojis))
+			emojisByDomain[domain] = make(map[string]db.CustomEmoji)
 		}
-		for _, emoji := range emojis {
-			emojisByDomain[domain][emoji.Shortcode] = emoji
-		}
+		emojisByDomain[domain][emoji.Shortcode] = emoji
 	}
 
 	for statusID, shortcodes := range statusShortcodesMap {

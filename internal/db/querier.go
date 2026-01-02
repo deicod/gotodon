@@ -474,6 +474,7 @@ type Querier interface {
 	ListCustomEmojis(ctx context.Context) ([]CustomEmoji, error)
 	ListCustomEmojisByIDs(ctx context.Context, ids []int64) ([]CustomEmoji, error)
 	ListCustomEmojisByShortcodesAndDomain(ctx context.Context, arg ListCustomEmojisByShortcodesAndDomainParams) ([]CustomEmoji, error)
+	ListCustomEmojisByShortcodesAndDomains(ctx context.Context, arg ListCustomEmojisByShortcodesAndDomainsParams) ([]CustomEmoji, error)
 	ListDeepDirectory(ctx context.Context, arg ListDeepDirectoryParams) ([]Account, error)
 	ListDomainAllows(ctx context.Context, arg ListDomainAllowsParams) ([]DomainAllow, error)
 	ListDomainBlockDomains(ctx context.Context, accountID int64) ([]string, error)
