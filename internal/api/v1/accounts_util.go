@@ -3,7 +3,6 @@ package v1
 import (
 	"context"
 	"encoding/json"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -13,8 +12,6 @@ import (
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 )
-
-var emojiScanRe = regexp.MustCompile(`:([a-zA-Z0-9_]{2,}):`)
 
 type accountSerializeOptions struct {
 	Stats        *db.AccountStat
@@ -744,29 +741,77 @@ func mentionFromAccount(cfg *config.Config, dbAcc db.Account) Mention {
 }
 
 func appendShortcodes(text string, seen map[string]struct{}, out *[]string) {
-	if strings.TrimSpace(text) == "" {
+	if len(text) < 4 { // minimum :ab: is 4 chars
 		return
 	}
-	matches := emojiScanRe.FindAllStringSubmatchIndex(text, -1)
-	for _, match := range matches {
-		if len(match) < 4 {
+
+	start := 0
+	n := len(text)
+	for start < n {
+		// Find first colon
+		i := strings.IndexByte(text[start:], ':')
+		if i < 0 {
+			break
+		}
+		pos := start + i
+
+		// Check previous char boundary
+		if pos > 0 && isASCIIAlnum(text[pos-1]) {
+			start = pos + 1
 			continue
 		}
-		if match[0] > 0 && isASCIIAlnum(text[match[0]-1]) {
+
+		// Now scan for closing colon
+		end := -1
+		valid := true
+		// We can scan manually
+		for j := pos + 1; j < n; j++ {
+			c := text[j]
+			if c == ':' {
+				end = j
+				break
+			}
+			if !isASCIIAlnum(c) && c != '_' {
+				// Invalid char (regex was [a-zA-Z0-9_])
+				// isASCIIAlnum definition: a-z, A-Z, 0-9.
+				// Need to check underscore separately as it is valid in shortcode.
+				valid = false
+				start = j
+				break
+			}
+		}
+
+		if !valid || end == -1 {
+			if end == -1 {
+				break
+			}
+			// If we hit an invalid char, start is already updated
 			continue
 		}
-		if match[1] < len(text) && isASCIIAlnum(text[match[1]]) {
+
+		// Found closing colon at 'end'.
+		// Check length.
+		codeLen := end - pos - 1
+		if codeLen < 2 {
+			start = end + 1
 			continue
 		}
-		shortcode := text[match[2]:match[3]]
-		if shortcode == "" {
+
+		// Check next char boundary
+		if end+1 < n && isASCIIAlnum(text[end+1]) {
+			start = end + 1
 			continue
 		}
-		if _, ok := seen[shortcode]; ok {
-			continue
+
+		// Match found!
+		shortcode := text[pos+1 : end]
+		if _, ok := seen[shortcode]; !ok {
+			seen[shortcode] = struct{}{}
+			*out = append(*out, shortcode)
 		}
-		seen[shortcode] = struct{}{}
-		*out = append(*out, shortcode)
+
+		// Advance start
+		start = end + 1
 	}
 }
 
