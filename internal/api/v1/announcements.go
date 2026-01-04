@@ -475,8 +475,8 @@ func parseAnnouncementTags(text string) []string {
 
 func parseAnnouncementShortcodes(text string) []string {
 	shortcodes := make([]string, 0)
-	seen := make(map[string]struct{})
-	appendShortcodes(text, seen, &shortcodes)
+	var seen map[string]struct{}
+	appendShortcodes(text, &seen, &shortcodes)
 	return shortcodes
 }
 
