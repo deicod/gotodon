@@ -182,9 +182,8 @@ func statusEmojiDomain(acc Account) string {
 
 func statusShortcodes(spoilerText, content string) []string {
 	shortcodes := make([]string, 0)
-	var seen map[string]struct{}
-	appendShortcodes(spoilerText, &seen, &shortcodes)
-	appendShortcodes(content, &seen, &shortcodes)
+	appendShortcodes(spoilerText, &shortcodes)
+	appendShortcodes(content, &shortcodes)
 	return shortcodes
 }
 

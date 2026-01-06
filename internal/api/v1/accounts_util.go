@@ -625,11 +625,10 @@ func accountEmojiDomain(dbAcc db.Account) string {
 
 func accountShortcodes(acc db.Account, fields []Field) []string {
 	shortcodes := make([]string, 0)
-	var seen map[string]struct{}
-	appendShortcodes(acc.DisplayName, &seen, &shortcodes)
-	appendShortcodes(acc.Note, &seen, &shortcodes)
+	appendShortcodes(acc.DisplayName, &shortcodes)
+	appendShortcodes(acc.Note, &shortcodes)
 	for _, field := range fields {
-		appendShortcodes(field.Value, &seen, &shortcodes)
+		appendShortcodes(field.Value, &shortcodes)
 	}
 	return shortcodes
 }
@@ -740,7 +739,7 @@ func mentionFromAccount(cfg *config.Config, dbAcc db.Account) Mention {
 	}
 }
 
-func appendShortcodes(text string, seen *map[string]struct{}, out *[]string) {
+func appendShortcodes(text string, out *[]string) {
 	if len(text) < 4 { // minimum :ab: is 4 chars
 		return
 	}
@@ -806,12 +805,15 @@ func appendShortcodes(text string, seen *map[string]struct{}, out *[]string) {
 		// Match found!
 		shortcode := text[pos+1 : end]
 
-		if *seen == nil {
-			*seen = make(map[string]struct{})
+		exists := false
+		for _, s := range *out {
+			if s == shortcode {
+				exists = true
+				break
+			}
 		}
 
-		if _, ok := (*seen)[shortcode]; !ok {
-			(*seen)[shortcode] = struct{}{}
+		if !exists {
 			*out = append(*out, shortcode)
 		}
 
