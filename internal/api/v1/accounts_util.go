@@ -739,13 +739,31 @@ func mentionFromAccount(cfg *config.Config, dbAcc db.Account) Mention {
 	}
 }
 
+// validShortcodeChars is a lookup table for valid shortcode characters [a-zA-Z0-9_].
+// 1 = valid, 0 = invalid.
+var validShortcodeChars = [256]uint8{
+	// 0-9
+	'0': 1, '1': 1, '2': 1, '3': 1, '4': 1, '5': 1, '6': 1, '7': 1, '8': 1, '9': 1,
+	// A-Z
+	'A': 1, 'B': 1, 'C': 1, 'D': 1, 'E': 1, 'F': 1, 'G': 1, 'H': 1, 'I': 1, 'J': 1,
+	'K': 1, 'L': 1, 'M': 1, 'N': 1, 'O': 1, 'P': 1, 'Q': 1, 'R': 1, 'S': 1, 'T': 1,
+	'U': 1, 'V': 1, 'W': 1, 'X': 1, 'Y': 1, 'Z': 1,
+	// a-z
+	'a': 1, 'b': 1, 'c': 1, 'd': 1, 'e': 1, 'f': 1, 'g': 1, 'h': 1, 'i': 1, 'j': 1,
+	'k': 1, 'l': 1, 'm': 1, 'n': 1, 'o': 1, 'p': 1, 'q': 1, 'r': 1, 's': 1, 't': 1,
+	'u': 1, 'v': 1, 'w': 1, 'x': 1, 'y': 1, 'z': 1,
+	// _
+	'_': 1,
+}
+
 func appendShortcodes(text string, out *[]string) {
 	if len(text) < 4 { // minimum :ab: is 4 chars
 		return
 	}
 
-	start := 0
 	n := len(text)
+	start := 0
+
 	for start < n {
 		// Find first colon
 		i := strings.IndexByte(text[start:], ':')
@@ -754,38 +772,44 @@ func appendShortcodes(text string, out *[]string) {
 		}
 		pos := start + i
 
-		// Check previous char boundary
-		if pos > 0 && isASCIIAlnum(text[pos-1]) {
+		// Check previous char boundary (must NOT be alphanumeric)
+		if pos > 0 && validShortcodeChars[text[pos-1]] == 1 {
 			start = pos + 1
 			continue
 		}
 
 		// Now scan for closing colon
 		end := -1
-		valid := true
-		// We can scan manually
-		for j := pos + 1; j < n; j++ {
+
+		// Optimization: We can quickly scan ahead.
+		// A shortcode must be at least 2 chars long (plus colons = 4).
+		scanStart := pos + 1
+		if scanStart >= n {
+			break
+		}
+
+		for j := scanStart; j < n; j++ {
 			c := text[j]
 			if c == ':' {
 				end = j
 				break
 			}
-			if !isASCIIAlnum(c) && c != '_' {
-				// Invalid char (regex was [a-zA-Z0-9_])
-				// isASCIIAlnum definition: a-z, A-Z, 0-9.
-				// Need to check underscore separately as it is valid in shortcode.
-				valid = false
+
+			if validShortcodeChars[c] == 0 {
+				// Invalid char found, this cannot be a shortcode.
+				// We can skip ahead to this position for the next search.
 				start = j
+				end = -2 // Mark as invalid
 				break
 			}
 		}
 
-		if !valid || end == -1 {
-			if end == -1 {
-				break
-			}
-			// If we hit an invalid char, start is already updated
-			continue
+		if end == -2 {
+			continue // start is already updated
+		}
+
+		if end == -1 {
+			break // No closing colon found
 		}
 
 		// Found closing colon at 'end'.
@@ -796,8 +820,8 @@ func appendShortcodes(text string, out *[]string) {
 			continue
 		}
 
-		// Check next char boundary
-		if end+1 < n && isASCIIAlnum(text[end+1]) {
+		// Check next char boundary (must NOT be alphanumeric)
+		if end+1 < n && validShortcodeChars[text[end+1]] == 1 {
 			start = end + 1
 			continue
 		}
@@ -805,6 +829,7 @@ func appendShortcodes(text string, out *[]string) {
 		// Match found!
 		shortcode := text[pos+1 : end]
 
+		// Linear scan is usually faster than map for small N (< 20)
 		exists := false
 		for _, s := range *out {
 			if s == shortcode {
@@ -820,12 +845,6 @@ func appendShortcodes(text string, out *[]string) {
 		// Advance start
 		start = end + 1
 	}
-}
-
-func isASCIIAlnum(b byte) bool {
-	return (b >= 'a' && b <= 'z') ||
-		(b >= 'A' && b <= 'Z') ||
-		(b >= '0' && b <= '9')
 }
 
 func parseAccountFields(raw []byte) []Field {

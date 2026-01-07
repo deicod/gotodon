@@ -107,48 +107,58 @@ func linkifyTextWithOptions(cfg *config.Config, text string, opts statusContentO
 func extractTextEntities(text string) []textEntity {
 	var entities []textEntity
 
-	for _, match := range statusURLRegex.FindAllStringIndex(text, -1) {
-		start, end := match[0], match[1]
-		end, urlValue := trimURLSuffix(text, start, end)
-		if urlValue == "" {
-			continue
+	// Optimization: Pre-check for URL indicators.
+	// The regex explicitly requires "://" or "xmpp:", both of which contain ":".
+	// If the regex is ever updated to support schemeless URLs (e.g. "www.example.com"),
+	// this check must be updated or removed.
+	if strings.Contains(text, ":") {
+		for _, match := range statusURLRegex.FindAllStringIndex(text, -1) {
+			start, end := match[0], match[1]
+			end, urlValue := trimURLSuffix(text, start, end)
+			if urlValue == "" {
+				continue
+			}
+			entities = append(entities, textEntity{
+				start: start,
+				end:   end,
+				kind:  entityURL,
+				value: urlValue,
+			})
 		}
-		entities = append(entities, textEntity{
-			start: start,
-			end:   end,
-			kind:  entityURL,
-			value: urlValue,
-		})
 	}
 
-	for _, match := range statusMentionRegex.FindAllStringIndex(text, -1) {
-		start, end := match[0], match[1]
-		if !validMentionBoundary(text, start) {
-			continue
+	if strings.Contains(text, "@") {
+		for _, match := range statusMentionRegex.FindAllStringIndex(text, -1) {
+			start, end := match[0], match[1]
+			if !validMentionBoundary(text, start) {
+				continue
+			}
+			entities = append(entities, textEntity{
+				start: start,
+				end:   end,
+				kind:  entityMention,
+				value: text[start+1 : end],
+			})
 		}
-		entities = append(entities, textEntity{
-			start: start,
-			end:   end,
-			kind:  entityMention,
-			value: text[start+1 : end],
-		})
 	}
 
-	for _, match := range statusHashtagRegex.FindAllStringIndex(text, -1) {
-		start, end := match[0], match[1]
-		if !validHashtagBoundary(text, start) {
-			continue
+	if strings.Contains(text, "#") || strings.Contains(text, "\uff03") {
+		for _, match := range statusHashtagRegex.FindAllStringIndex(text, -1) {
+			start, end := match[0], match[1]
+			if !validHashtagBoundary(text, start) {
+				continue
+			}
+			tag := extractHashtag(text[start:end])
+			if tag == "" {
+				continue
+			}
+			entities = append(entities, textEntity{
+				start: start,
+				end:   end,
+				kind:  entityHashtag,
+				value: tag,
+			})
 		}
-		tag := extractHashtag(text[start:end])
-		if tag == "" {
-			continue
-		}
-		entities = append(entities, textEntity{
-			start: start,
-			end:   end,
-			kind:  entityHashtag,
-			value: tag,
-		})
 	}
 
 	sort.Slice(entities, func(i, j int) bool {
