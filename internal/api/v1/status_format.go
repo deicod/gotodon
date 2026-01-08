@@ -64,6 +64,7 @@ var (
 	statusMentionRegex  = regexp.MustCompile(`(?i)@[a-z0-9_]+(?:[.-]+[a-z0-9_]+)*(?:@[a-z0-9_]+(?:[.-]+[a-z0-9_]+)*)?`)
 	statusHashtagRegex  = regexp.MustCompile(`(?i)[#\x{FF03}][\p{L}\p{N}_\x{00B7}\x{30FB}\x{200C}]+`)
 	statusURLPrefixExpr = regexp.MustCompile(`(?i)^(https?://(?:www\.)?|xmpp:)`)
+	statusParagraphsRegex = regexp.MustCompile(`\n{2,}`)
 )
 
 func linkifyStatusText(cfg *config.Config, text string, opts statusContentOptions) string {
@@ -436,7 +437,7 @@ func simpleFormatHTML(html string) string {
 	html = strings.ReplaceAll(html, "\r\n", "\n")
 	html = strings.ReplaceAll(html, "\r", "\n")
 
-	paragraphs := regexp.MustCompile(`\n{2,}`).Split(html, -1)
+	paragraphs := statusParagraphsRegex.Split(html, -1)
 	for i, p := range paragraphs {
 		p = strings.ReplaceAll(p, "\n", "<br />")
 		paragraphs[i] = "<p>" + p + "</p>"
