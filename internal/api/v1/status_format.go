@@ -65,6 +65,7 @@ var (
 	statusHashtagRegex  = regexp.MustCompile(`(?i)[#\x{FF03}][\p{L}\p{N}_\x{00B7}\x{30FB}\x{200C}]+`)
 	statusURLPrefixExpr = regexp.MustCompile(`(?i)^(https?://(?:www\.)?|xmpp:)`)
 	statusParagraphsRegex = regexp.MustCompile(`\n{2,}`)
+	newlineReplacer = strings.NewReplacer("\n", "<br />")
 )
 
 func linkifyStatusText(cfg *config.Config, text string, opts statusContentOptions) string {
@@ -162,15 +163,17 @@ func extractTextEntities(text string) []textEntity {
 		}
 	}
 
-	sort.Slice(entities, func(i, j int) bool {
-		if entities[i].start != entities[j].start {
-			return entities[i].start < entities[j].start
-		}
-		if entities[i].kind != entities[j].kind {
-			return entities[i].kind < entities[j].kind
-		}
-		return entities[i].end > entities[j].end
-	})
+	if len(entities) > 1 {
+		sort.Slice(entities, func(i, j int) bool {
+			if entities[i].start != entities[j].start {
+				return entities[i].start < entities[j].start
+			}
+			if entities[i].kind != entities[j].kind {
+				return entities[i].kind < entities[j].kind
+			}
+			return entities[i].end > entities[j].end
+		})
+	}
 
 	filtered := make([]textEntity, 0, len(entities))
 	cursor := 0
@@ -434,15 +437,22 @@ func simpleFormatHTML(html string) string {
 	if html == "" {
 		return ""
 	}
-	html = strings.ReplaceAll(html, "\r\n", "\n")
-	html = strings.ReplaceAll(html, "\r", "\n")
+	if strings.ContainsRune(html, '\r') {
+		html = strings.ReplaceAll(html, "\r\n", "\n")
+		html = strings.ReplaceAll(html, "\r", "\n")
+	}
 
 	paragraphs := statusParagraphsRegex.Split(html, -1)
-	for i, p := range paragraphs {
-		p = strings.ReplaceAll(p, "\n", "<br />")
-		paragraphs[i] = "<p>" + p + "</p>"
+
+	var b strings.Builder
+	b.Grow(len(html) + len(paragraphs)*7)
+
+	for _, p := range paragraphs {
+		b.WriteString("<p>")
+		newlineReplacer.WriteString(&b, p)
+		b.WriteString("</p>")
 	}
-	return strings.Join(paragraphs, "")
+	return b.String()
 }
 
 func addQuoteFallback(html string, quote *Status) string {
