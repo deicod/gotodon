@@ -64,8 +64,6 @@ var (
 	statusMentionRegex  = regexp.MustCompile(`(?i)@[a-z0-9_]+(?:[.-]+[a-z0-9_]+)*(?:@[a-z0-9_]+(?:[.-]+[a-z0-9_]+)*)?`)
 	statusHashtagRegex  = regexp.MustCompile(`(?i)[#\x{FF03}][\p{L}\p{N}_\x{00B7}\x{30FB}\x{200C}]+`)
 	statusURLPrefixExpr = regexp.MustCompile(`(?i)^(https?://(?:www\.)?|xmpp:)`)
-	statusParagraphsRegex = regexp.MustCompile(`\n{2,}`)
-	newlineReplacer = strings.NewReplacer("\n", "<br />")
 )
 
 func linkifyStatusText(cfg *config.Config, text string, opts statusContentOptions) string {
@@ -437,21 +435,61 @@ func simpleFormatHTML(html string) string {
 	if html == "" {
 		return ""
 	}
-	if strings.ContainsRune(html, '\r') {
-		html = strings.ReplaceAll(html, "\r\n", "\n")
-		html = strings.ReplaceAll(html, "\r", "\n")
-	}
-
-	paragraphs := statusParagraphsRegex.Split(html, -1)
 
 	var b strings.Builder
-	b.Grow(len(html) + len(paragraphs)*7)
+	// Estimate growth: original length + roughly 5% overhead for tags
+	b.Grow(len(html) + len(html)/20 + 16)
 
-	for _, p := range paragraphs {
-		b.WriteString("<p>")
-		newlineReplacer.WriteString(&b, p)
-		b.WriteString("</p>")
+	b.WriteString("<p>")
+
+	n := len(html)
+	start := 0
+	i := 0
+
+	for i < n {
+		c := html[i]
+		if c == '\r' || c == '\n' {
+			if i > start {
+				b.WriteString(html[start:i])
+			}
+
+			newlines := 0
+			j := i
+			for j < n {
+				c2 := html[j]
+				if c2 == '\r' {
+					newlines++
+					j++
+					if j < n && html[j] == '\n' {
+						j++
+					}
+				} else if c2 == '\n' {
+					newlines++
+					j++
+				} else {
+					break
+				}
+			}
+
+			if newlines >= 2 {
+				b.WriteString("</p><p>")
+			} else {
+				b.WriteString("<br />")
+			}
+
+			start = j
+			i = j
+		} else {
+			i++
+		}
 	}
+
+	if start < n {
+		b.WriteString(html[start:])
+	}
+
+	b.WriteString("</p>")
+
 	return b.String()
 }
 
