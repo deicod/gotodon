@@ -616,15 +616,25 @@ func sanitizeAnchor(node, parent *xhtml.Node) bool {
 }
 
 func isAllowedLinkScheme(rawURL string) bool {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
+	// Optimization: Extract scheme without full URL parsing.
+	// This function is a hot path in HTML sanitization.
+	// URL schemes must end with a colon.
+	idx := strings.IndexByte(rawURL, ':')
+	if idx == -1 {
 		return false
 	}
-	scheme := strings.ToLower(parsed.Scheme)
-	if scheme == "" {
+
+	scheme := rawURL[:idx]
+	if len(scheme) == 0 {
 		return false
 	}
-	switch scheme {
+
+	// Schemes in the allowed list are simple and lowercase.
+	// We check against the lowercase version of the extracted scheme.
+	// Allocating a small string for the scheme is much cheaper than url.Parse.
+	s := strings.ToLower(scheme)
+
+	switch s {
 	case "http", "https", "dat", "dweb", "ipfs", "ipns", "ssb", "gopher", "xmpp", "magnet", "gemini":
 		return true
 	default:
