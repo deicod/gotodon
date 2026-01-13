@@ -616,14 +616,17 @@ func sanitizeAnchor(node, parent *xhtml.Node) bool {
 }
 
 func isAllowedLinkScheme(rawURL string) bool {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
+	// Optimization: extracting scheme manually is significantly faster than url.Parse
+	// and avoids allocations.
+	idx := strings.IndexByte(rawURL, ':')
+	if idx == -1 {
 		return false
 	}
-	scheme := strings.ToLower(parsed.Scheme)
-	if scheme == "" {
+	scheme := rawURL[:idx]
+	if len(scheme) == 0 || len(scheme) > 20 {
 		return false
 	}
+	scheme = strings.ToLower(scheme)
 	switch scheme {
 	case "http", "https", "dat", "dweb", "ipfs", "ipns", "ssb", "gopher", "xmpp", "magnet", "gemini":
 		return true
