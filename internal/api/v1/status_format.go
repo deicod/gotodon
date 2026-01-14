@@ -80,7 +80,20 @@ func linkifyTextWithOptions(cfg *config.Config, text string, opts statusContentO
 		return stdhtml.EscapeString(text)
 	}
 
-	mentionLookup, usernameDomains := buildMentionLookup(opts.author, opts.mentions, cfg)
+	hasMentions := false
+	for _, e := range entities {
+		if e.kind == entityMention {
+			hasMentions = true
+			break
+		}
+	}
+
+	var mentionLookup map[string]mentionAccount
+	var usernameDomains map[string]map[string]struct{}
+	// Optimization: Skip expensive map build if no mentions are present
+	if hasMentions {
+		mentionLookup, usernameDomains = buildMentionLookup(opts.author, opts.mentions, cfg)
+	}
 
 	var b strings.Builder
 	last := 0
