@@ -2,6 +2,7 @@
 package v1
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,7 +10,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1089,7 +1090,9 @@ func localRecipientsForStreaming(author db.Account, mentions []db.Account) []db.
 	for _, acc := range recipients {
 		out = append(out, acc)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	slices.SortFunc(out, func(a, b db.Account) int {
+		return cmp.Compare(a.ID, b.ID)
+	})
 	return out
 }
 
@@ -1101,7 +1104,7 @@ func uniqueSortedIDs(ids []int64) []int64 {
 	if len(ids) == 0 {
 		return nil
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	slices.Sort(ids)
 	out := ids[:0]
 	var prev int64
 	for i, id := range ids {
