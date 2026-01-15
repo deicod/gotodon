@@ -6,7 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -228,7 +228,15 @@ func (h *FiltersHandler) List(w http.ResponseWriter, r *http.Request) {
 	for id := range accountFilters {
 		ids = append(ids, id)
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] > ids[j] })
+	slices.SortFunc(ids, func(a, b int64) int {
+		if a > b {
+			return -1
+		}
+		if a < b {
+			return 1
+		}
+		return 0
+	})
 
 	result := make([]FilterV1, 0, len(ids))
 	for _, id := range ids {

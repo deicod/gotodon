@@ -5,7 +5,7 @@ import (
 	stdhtml "html"
 	"net/url"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"unicode"
@@ -175,14 +175,14 @@ func extractTextEntities(text string) []textEntity {
 	}
 
 	if len(entities) > 1 {
-		sort.Slice(entities, func(i, j int) bool {
-			if entities[i].start != entities[j].start {
-				return entities[i].start < entities[j].start
+		slices.SortFunc(entities, func(a, b textEntity) int {
+			if a.start != b.start {
+				return a.start - b.start
 			}
-			if entities[i].kind != entities[j].kind {
-				return entities[i].kind < entities[j].kind
+			if a.kind != b.kind {
+				return int(a.kind - b.kind)
 			}
-			return entities[i].end > entities[j].end
+			return b.end - a.end
 		})
 	}
 
