@@ -96,23 +96,26 @@ func linkifyTextWithOptions(cfg *config.Config, text string, opts statusContentO
 	}
 
 	var b strings.Builder
+	// Conservative estimate: length of text + 20% overhead + 40 chars per entity for HTML tags
+	b.Grow(len(text) + len(text)/5 + len(entities)*40)
+
 	last := 0
 	for _, entity := range entities {
 		if entity.start > last {
-			b.WriteString(stdhtml.EscapeString(text[last:entity.start]))
+			writeEscapeString(&b, text[last:entity.start])
 		}
 		switch entity.kind {
 		case entityURL:
-			b.WriteString(shortenedLink(entity.value, withRelMe))
+			writeShortenedLink(&b, entity.value, withRelMe)
 		case entityMention:
-			b.WriteString(formatMention(entity.value, mentionLookup, usernameDomains, cfg, withDomains))
+			writeMention(&b, entity.value, mentionLookup, usernameDomains, cfg, withDomains)
 		case entityHashtag:
-			b.WriteString(formatHashtag(cfg, entity.value))
+			writeHashtag(&b, cfg, entity.value)
 		}
 		last = entity.end
 	}
 	if last < len(text) {
-		b.WriteString(stdhtml.EscapeString(text[last:]))
+		writeEscapeString(&b, text[last:])
 	}
 	return b.String()
 }
@@ -344,6 +347,12 @@ func normalizeDomain(domain string) string {
 }
 
 func formatMention(screenName string, lookup map[string]mentionAccount, usernameDomains map[string]map[string]struct{}, cfg *config.Config, withDomains bool) string {
+	var b strings.Builder
+	writeMention(&b, screenName, lookup, usernameDomains, cfg, withDomains)
+	return b.String()
+}
+
+func writeMention(b *strings.Builder, screenName string, lookup map[string]mentionAccount, usernameDomains map[string]map[string]struct{}, cfg *config.Config, withDomains bool) {
 	username, domain := splitAcct(screenName, screenName)
 	domain = normalizeDomain(domain)
 	if domain != "" && isLocalMentionDomain(domain, cfg) {
@@ -352,7 +361,9 @@ func formatMention(screenName string, lookup map[string]mentionAccount, username
 
 	account, ok := lookup[statusMentionKey(username, domain)]
 	if !ok {
-		return stdhtml.EscapeString("@" + screenName)
+		b.WriteString("@")
+		writeEscapeString(b, screenName)
+		return
 	}
 
 	display := account.Username
@@ -367,10 +378,16 @@ func formatMention(screenName string, lookup map[string]mentionAccount, username
 
 	urlValue := strings.TrimSpace(account.URL)
 	if urlValue == "" {
-		return stdhtml.EscapeString("@" + display)
+		b.WriteString("@")
+		writeEscapeString(b, display)
+		return
 	}
 
-	return `<span class="h-card" translate="no"><a href="` + stdhtml.EscapeString(urlValue) + `" class="u-url mention">@<span>` + stdhtml.EscapeString(display) + `</span></a></span>`
+	b.WriteString(`<span class="h-card" translate="no"><a href="`)
+	writeEscapeString(b, urlValue)
+	b.WriteString(`" class="u-url mention">@<span>`)
+	writeEscapeString(b, display)
+	b.WriteString(`</span></a></span>`)
 }
 
 func isLocalMentionDomain(domain string, cfg *config.Config) bool {
@@ -386,11 +403,23 @@ func isLocalMentionDomain(domain string, cfg *config.Config) bool {
 }
 
 func formatHashtag(cfg *config.Config, tag string) string {
+	var b strings.Builder
+	writeHashtag(&b, cfg, tag)
+	return b.String()
+}
+
+func writeHashtag(b *strings.Builder, cfg *config.Config, tag string) {
 	urlValue := statusTagURL(cfg, tag)
 	if urlValue == "" {
-		return stdhtml.EscapeString("#" + tag)
+		b.WriteString("#")
+		writeEscapeString(b, tag)
+		return
 	}
-	return `<a href="` + stdhtml.EscapeString(urlValue) + `" class="mention hashtag" rel="tag">#<span>` + stdhtml.EscapeString(tag) + `</span></a>`
+	b.WriteString(`<a href="`)
+	writeEscapeString(b, urlValue)
+	b.WriteString(`" class="mention hashtag" rel="tag">#<span>`)
+	writeEscapeString(b, tag)
+	b.WriteString(`</span></a>`)
 }
 
 func statusTagURL(cfg *config.Config, tag string) string {
@@ -403,13 +432,18 @@ func statusTagURL(cfg *config.Config, tag string) string {
 }
 
 func shortenedLink(rawURL string, relMe bool) string {
+	var b strings.Builder
+	writeShortenedLink(&b, rawURL, relMe)
+	return b.String()
+}
+
+func writeShortenedLink(b *strings.Builder, rawURL string, relMe bool) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
-		return ""
+		return
 	}
-	if _, err := url.Parse(rawURL); err != nil {
-		return stdhtml.EscapeString(rawURL)
-	}
+	// Note: We skip url.Parse check here for performance.
+	// The caller should ensure the URL is reasonably valid (e.g. from regex).
 
 	prefix := statusURLPrefixExpr.FindString(rawURL)
 	rest := rawURL[len(prefix):]
@@ -437,11 +471,50 @@ func shortenedLink(rawURL string, relMe bool) string {
 		spanClass = "ellipsis"
 	}
 
-	return `<a href="` + stdhtml.EscapeString(rawURL) + `" target="_blank" rel="` + rel + `" translate="no">` +
-		`<span class="invisible">` + stdhtml.EscapeString(prefix) + `</span>` +
-		`<span class="` + spanClass + `">` + stdhtml.EscapeString(display) + `</span>` +
-		`<span class="invisible">` + stdhtml.EscapeString(suffix) + `</span>` +
-		`</a>`
+	b.WriteString(`<a href="`)
+	writeEscapeString(b, rawURL)
+	b.WriteString(`" target="_blank" rel="`)
+	b.WriteString(rel)
+	b.WriteString(`" translate="no">`)
+	b.WriteString(`<span class="invisible">`)
+	writeEscapeString(b, prefix)
+	b.WriteString(`</span>`)
+	b.WriteString(`<span class="`)
+	b.WriteString(spanClass)
+	b.WriteString(`">`)
+	writeEscapeString(b, display)
+	b.WriteString(`</span>`)
+	b.WriteString(`<span class="invisible">`)
+	writeEscapeString(b, suffix)
+	b.WriteString(`</span>`)
+	b.WriteString(`</a>`)
+}
+
+// writeEscapeString escapes special characters like html.EscapeString but writes to strings.Builder
+// to avoid intermediate allocations.
+func writeEscapeString(b *strings.Builder, s string) {
+	start := 0
+	for i := 0; i < len(s); i++ {
+		var escaped string
+		switch s[i] {
+		case '"':
+			escaped = "&#34;"
+		case '&':
+			escaped = "&amp;"
+		case '\'':
+			escaped = "&#39;"
+		case '<':
+			escaped = "&lt;"
+		case '>':
+			escaped = "&gt;"
+		default:
+			continue
+		}
+		b.WriteString(s[start:i])
+		b.WriteString(escaped)
+		start = i + 1
+	}
+	b.WriteString(s[start:])
 }
 
 func simpleFormatHTML(html string) string {
