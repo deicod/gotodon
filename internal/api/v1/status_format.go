@@ -60,10 +60,9 @@ type textEntity struct {
 }
 
 var (
-	statusURLRegex      = regexp.MustCompile(`(?i)\b(?:https?://|xmpp:)[^\s<]+`)
-	statusMentionRegex  = regexp.MustCompile(`(?i)@[a-z0-9_]+(?:[.-]+[a-z0-9_]+)*(?:@[a-z0-9_]+(?:[.-]+[a-z0-9_]+)*)?`)
-	statusHashtagRegex  = regexp.MustCompile(`(?i)[#\x{FF03}][\p{L}\p{N}_\x{00B7}\x{30FB}\x{200C}]+`)
-	statusURLPrefixExpr = regexp.MustCompile(`(?i)^(https?://(?:www\.)?|xmpp:)`)
+	statusURLRegex     = regexp.MustCompile(`(?i)\b(?:https?://|xmpp:)[^\s<]+`)
+	statusMentionRegex = regexp.MustCompile(`(?i)@[a-z0-9_]+(?:[.-]+[a-z0-9_]+)*(?:@[a-z0-9_]+(?:[.-]+[a-z0-9_]+)*)?`)
+	statusHashtagRegex = regexp.MustCompile(`(?i)[#\x{FF03}][\p{L}\p{N}_\x{00B7}\x{30FB}\x{200C}]+`)
 )
 
 func linkifyStatusText(cfg *config.Config, text string, opts statusContentOptions) string {
@@ -437,6 +436,25 @@ func shortenedLink(rawURL string, relMe bool) string {
 	return b.String()
 }
 
+func findURLPrefix(s string) string {
+	if len(s) >= 8 && strings.EqualFold(s[:8], "https://") {
+		if len(s) >= 12 && strings.EqualFold(s[:12], "https://www.") {
+			return s[:12]
+		}
+		return s[:8]
+	}
+	if len(s) >= 7 && strings.EqualFold(s[:7], "http://") {
+		if len(s) >= 11 && strings.EqualFold(s[:11], "http://www.") {
+			return s[:11]
+		}
+		return s[:7]
+	}
+	if len(s) >= 5 && strings.EqualFold(s[:5], "xmpp:") {
+		return s[:5]
+	}
+	return ""
+}
+
 func writeShortenedLink(b *strings.Builder, rawURL string, relMe bool) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
@@ -445,20 +463,39 @@ func writeShortenedLink(b *strings.Builder, rawURL string, relMe bool) {
 	// Note: We skip url.Parse check here for performance.
 	// The caller should ensure the URL is reasonably valid (e.g. from regex).
 
-	prefix := statusURLPrefixExpr.FindString(rawURL)
+	prefix := findURLPrefix(rawURL)
 	rest := rawURL[len(prefix):]
-	restRunes := []rune(rest)
-	cutoff := len(restRunes) > 30
-	displayLen := len(restRunes)
-	if displayLen > 30 {
-		displayLen = 30
+
+	// Find byte index for 30th rune and check for cutoff
+	displayByteLen := len(rest)
+	cutoff := false
+
+	// Iterate up to 30 runes to find truncation point
+	runeCount := 0
+	idx := 0
+	for i := 0; i < 30 && idx < len(rest); i++ {
+		_, size := utf8.DecodeRuneInString(rest[idx:])
+		idx += size
+		runeCount++
 	}
-	display := string(restRunes[:displayLen])
-	suffix := string(restRunes[displayLen:])
-	if cutoff && len([]rune(suffix)) == 1 {
-		display += suffix
-		suffix = ""
-		cutoff = false
+
+	// If we stopped before end of string, check remaining
+	if idx < len(rest) {
+		// Check if exactly 1 rune remains (edge case from original code)
+		remaining := rest[idx:]
+		_, size := utf8.DecodeRuneInString(remaining)
+		if size < len(remaining) {
+			// More than 1 rune remains, so cutoff
+			cutoff = true
+			displayByteLen = idx
+		}
+		// If exactly 1 rune remains, we don't cutoff and show it all
+	}
+
+	display := rest[:displayByteLen]
+	suffix := ""
+	if cutoff {
+		suffix = rest[displayByteLen:]
 	}
 
 	rel := "nofollow noopener"
