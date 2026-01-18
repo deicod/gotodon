@@ -790,10 +790,8 @@ func appendShortcodes(text string, out *[]string) {
 				if limit >= n {
 					break
 				}
-				// Skip the part we already scanned manually?
-				// Actually IndexByte scans from beginning of slice.
-				// If we use text[limit:], we scan from limit.
-				// This avoids rescanning `i...limit` which we know are not colons.
+				// Scan from limit onwards since i..limit-1 were already checked and contained no colons,
+				// so using text[limit:] avoids rescanning the verified non-colon range.
 				idx := strings.IndexByte(text[limit:], ':')
 				if idx < 0 {
 					break
