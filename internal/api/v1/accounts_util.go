@@ -757,37 +757,69 @@ var validShortcodeChars = [256]uint8{
 }
 
 func appendShortcodes(text string, out *[]string) {
-	if len(text) < 4 { // minimum :ab: is 4 chars
+	n := len(text)
+	if n < 4 { // minimum :ab: is 4 chars
 		return
 	}
 
-	n := len(text)
-	start := 0
+	// First search optimization: Use IndexByte unconditionally (fastest for no colons case)
+	i := strings.IndexByte(text, ':')
+	if i < 0 {
+		return
+	}
 
-	for start < n {
-		// Find first colon
-		i := strings.IndexByte(text[start:], ':')
-		if i < 0 {
-			break
+	for i < n {
+		// If we advanced past a colon manually, scan for next
+		if text[i] != ':' {
+			// Speculative manual scan for nearby colon (avoid slice alloc)
+			found := false
+			limit := i + 16
+			if limit > n {
+				limit = n
+			}
+			for k := i; k < limit; k++ {
+				if text[k] == ':' {
+					i = k
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				// Not found nearby, use SIMD scan for the rest
+				if limit >= n {
+					break
+				}
+				// Skip the part we already scanned manually?
+				// Actually IndexByte scans from beginning of slice.
+				// If we use text[limit:], we scan from limit.
+				// This avoids rescanning `i...limit` which we know are not colons.
+				idx := strings.IndexByte(text[limit:], ':')
+				if idx < 0 {
+					break
+				}
+				i = limit + idx
+			}
 		}
-		pos := start + i
 
 		// Check previous char boundary (must NOT be alphanumeric)
-		if pos > 0 && validShortcodeChars[text[pos-1]] == 1 {
-			start = pos + 1
+		// We know text[i] == ':'
+		if i > 0 && validShortcodeChars[text[i-1]] == 1 {
+			i++
 			continue
 		}
 
-		// Now scan for closing colon
-		end := -1
-
-		// Optimization: We can quickly scan ahead.
-		// A shortcode must be at least 2 chars long (plus colons = 4).
-		scanStart := pos + 1
-		if scanStart >= n {
+		// Scan for end colon
+		// Optimization: Shortcode must be at least 2 chars (e.g. :ab:)
+		scanStart := i + 1
+		if scanStart+2 > n {
 			break
 		}
 
+		end := -1
+		invalidCharPos := -1
+
+		// Manual inner scan is unavoidable as we must validate chars
 		for j := scanStart; j < n; j++ {
 			c := text[j]
 			if c == ':' {
@@ -796,40 +828,49 @@ func appendShortcodes(text string, out *[]string) {
 			}
 
 			if validShortcodeChars[c] == 0 {
-				// Invalid char found, this cannot be a shortcode.
-				// We can skip ahead to this position for the next search.
-				start = j
-				end = -2 // Mark as invalid
+				// Invalid char found, stop this scan
+				invalidCharPos = j
 				break
 			}
 		}
 
-		if end == -2 {
-			continue // start is already updated
+		if invalidCharPos != -1 {
+			// Found invalid char.
+			// text[invalidCharPos] is not a colon.
+			// We can jump to invalidCharPos.
+			i = invalidCharPos
+			continue
 		}
 
 		if end == -1 {
-			break // No closing colon found
+			break
 		}
 
-		// Found closing colon at 'end'.
-		// Check length.
-		codeLen := end - pos - 1
+		// Check length: (end - start - 1) >= 2
+		codeLen := end - i - 1
 		if codeLen < 2 {
-			start = end + 1
+			// Too short, treat 'end' colon as potential new start
+			// Since chars between i and end are valid shortcode chars (but too few),
+			// and end is a colon, 'end' is a candidate start.
+			i = end
 			continue
 		}
 
 		// Check next char boundary (must NOT be alphanumeric)
 		if end+1 < n && validShortcodeChars[text[end+1]] == 1 {
-			start = end + 1
+			// Boundary fail.
+			// 'end' cannot be a start because 'end+1' is alphanumeric.
+			// But wait, validShortcodeChars[text[pos-1]] logic requires pos-1 to be non-alphanumeric.
+			// Here pos=end. pos-1 is the last char of shortcode (valid).
+			// So 'end' CANNOT be a start.
+			i = end + 1
 			continue
 		}
 
 		// Match found!
-		shortcode := text[pos+1 : end]
+		shortcode := text[i+1 : end]
 
-		// Linear scan is usually faster than map for small N (< 20)
+		// Linear scan to deduplicate
 		exists := false
 		for _, s := range *out {
 			if s == shortcode {
@@ -842,8 +883,10 @@ func appendShortcodes(text string, out *[]string) {
 			*out = append(*out, shortcode)
 		}
 
-		// Advance start
-		start = end + 1
+		// Advance past this shortcode
+		// Next candidate must be after 'end'.
+		// 'end' was the closing colon. Can it be a start? No, it was consumed.
+		i = end + 1
 	}
 }
 

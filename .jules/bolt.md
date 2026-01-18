@@ -11,3 +11,7 @@
 ## 2026-01-24 - [Allocation Reduction in Hot Paths]
 **Learning:** Functions that return concatenated strings in hot paths (like `linkifyText`) cause massive GC pressure.
 **Action:** Refactor helper functions to accept `*strings.Builder` and write directly to it, avoiding intermediate string allocations. Pre-allocate builder capacity with `.Grow()`.
+
+## 2025-06-25 - [IndexByte Overhead in Tight Loops]
+**Learning:** Repeatedly calling `strings.IndexByte(text[i:], ':')` in a tight loop introduces significant slice header allocation overhead (~10-20ns per call). For loops parsing dense tokens (like shortcodes), a hybrid "speculative manual scan" for short distances avoids this overhead while preserving SIMD benefits for long gaps.
+**Action:** In text parsing loops, use `strings.IndexByte` for the initial jump, but for subsequent checks, try a short manual scan (limit ~16 chars) before falling back to `strings.IndexByte`.
