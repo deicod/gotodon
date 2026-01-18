@@ -880,7 +880,7 @@ func appendShortcodes(text string, out *[]string) {
 
 		// Advance past this shortcode
 		// Next candidate must be after 'end'.
-		// 'end' was the closing colon. Can it be a start? No, it was consumed.
+		// Advance past the closing colon to continue searching for the next shortcode.
 		i = end + 1
 	}
 }
