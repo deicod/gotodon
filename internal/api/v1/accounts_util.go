@@ -856,11 +856,8 @@ func appendShortcodes(text string, out *[]string) {
 
 		// Check next char boundary (must NOT be alphanumeric)
 		if end+1 < n && validShortcodeChars[text[end+1]] == 1 {
-			// Boundary fail.
-			// 'end' cannot be a start because 'end+1' is alphanumeric.
-			// But wait, validShortcodeChars[text[pos-1]] logic requires pos-1 to be non-alphanumeric.
-			// Here pos=end. pos-1 is the last char of shortcode (valid).
-			// So 'end' CANNOT be a start.
+			// Boundary check failed: the closing colon at 'end' cannot start a new shortcode
+			// because the following character is alphanumeric. Skip to the character after 'end'.
 			i = end + 1
 			continue
 		}
