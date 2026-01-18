@@ -812,7 +812,7 @@ func appendShortcodes(text string, out *[]string) {
 		// Scan for end colon
 		// Optimization: Shortcode must be at least 2 chars (e.g. :ab:)
 		scanStart := i + 1
-		if scanStart+2 > n {
+		if scanStart+1 >= n {
 			break
 		}
 
