@@ -756,6 +756,9 @@ var validShortcodeChars = [256]uint8{
 	'_': 1,
 }
 
+// speculativeScanLimit defines the maximum distance for manual scanning before falling back to IndexByte.
+const speculativeScanLimit = 16
+
 func appendShortcodes(text string, out *[]string) {
 	n := len(text)
 	if n < 4 { // minimum :ab: is 4 chars
@@ -773,7 +776,7 @@ func appendShortcodes(text string, out *[]string) {
 		if text[i] != ':' {
 			// Speculative manual scan for nearby colon (avoid slice alloc)
 			found := false
-			limit := i + 16
+			limit := i + speculativeScanLimit
 			if limit > n {
 				limit = n
 			}
@@ -790,8 +793,10 @@ func appendShortcodes(text string, out *[]string) {
 				if limit >= n {
 					break
 				}
-				// Scan from limit onwards since i..limit-1 were already checked and contained no colons,
-				// so using text[limit:] avoids rescanning the verified non-colon range.
+				// Skip the part we already scanned manually?
+				// Actually IndexByte scans from beginning of slice.
+				// If we use text[limit:], we scan from limit.
+				// This avoids rescanning `i...limit` which we know are not colons.
 				idx := strings.IndexByte(text[limit:], ':')
 				if idx < 0 {
 					break
@@ -810,7 +815,7 @@ func appendShortcodes(text string, out *[]string) {
 		// Scan for end colon
 		// Optimization: Shortcode must be at least 2 chars (e.g. :ab:)
 		scanStart := i + 1
-		if scanStart+1 >= n {
+		if scanStart+2 > n {
 			break
 		}
 
@@ -856,8 +861,11 @@ func appendShortcodes(text string, out *[]string) {
 
 		// Check next char boundary (must NOT be alphanumeric)
 		if end+1 < n && validShortcodeChars[text[end+1]] == 1 {
-			// Boundary check failed: the closing colon at 'end' cannot start a new shortcode
-			// because the following character is alphanumeric. Skip to the character after 'end'.
+			// Boundary fail.
+			// 'end' cannot be a start because 'end+1' is alphanumeric.
+			// But wait, validShortcodeChars[text[pos-1]] logic requires pos-1 to be non-alphanumeric.
+			// Here pos=end. pos-1 is the last char of shortcode (valid).
+			// So 'end' CANNOT be a start.
 			i = end + 1
 			continue
 		}
@@ -880,7 +888,7 @@ func appendShortcodes(text string, out *[]string) {
 
 		// Advance past this shortcode
 		// Next candidate must be after 'end'.
-		// Advance past the closing colon to continue searching for the next shortcode.
+		// 'end' was the closing colon. Can it be a start? No, it was consumed.
 		i = end + 1
 	}
 }
