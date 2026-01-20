@@ -12,6 +12,53 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const createOAuthAccessGrant = `-- name: CreateOAuthAccessGrant :one
+INSERT INTO oauth_access_grants (
+    token, expires_in, redirect_uri, scopes, application_id, resource_owner_id, code_challenge, code_challenge_method
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8
+) RETURNING id, token, expires_in, redirect_uri, created_at, revoked_at, scopes, application_id, resource_owner_id, code_challenge, code_challenge_method
+`
+
+type CreateOAuthAccessGrantParams struct {
+	Token               string      `db:"token" json:"token"`
+	ExpiresIn           int32       `db:"expires_in" json:"expires_in"`
+	RedirectUri         string      `db:"redirect_uri" json:"redirect_uri"`
+	Scopes              pgtype.Text `db:"scopes" json:"scopes"`
+	ApplicationID       int64       `db:"application_id" json:"application_id"`
+	ResourceOwnerID     int64       `db:"resource_owner_id" json:"resource_owner_id"`
+	CodeChallenge       pgtype.Text `db:"code_challenge" json:"code_challenge"`
+	CodeChallengeMethod pgtype.Text `db:"code_challenge_method" json:"code_challenge_method"`
+}
+
+func (q *Queries) CreateOAuthAccessGrant(ctx context.Context, arg CreateOAuthAccessGrantParams) (OauthAccessGrant, error) {
+	row := q.db.QueryRow(ctx, createOAuthAccessGrant,
+		arg.Token,
+		arg.ExpiresIn,
+		arg.RedirectUri,
+		arg.Scopes,
+		arg.ApplicationID,
+		arg.ResourceOwnerID,
+		arg.CodeChallenge,
+		arg.CodeChallengeMethod,
+	)
+	var i OauthAccessGrant
+	err := row.Scan(
+		&i.ID,
+		&i.Token,
+		&i.ExpiresIn,
+		&i.RedirectUri,
+		&i.CreatedAt,
+		&i.RevokedAt,
+		&i.Scopes,
+		&i.ApplicationID,
+		&i.ResourceOwnerID,
+		&i.CodeChallenge,
+		&i.CodeChallengeMethod,
+	)
+	return i, err
+}
+
 const createOAuthAccessToken = `-- name: CreateOAuthAccessToken :one
 INSERT INTO oauth_access_tokens (
     token, refresh_token, expires_in, scopes, application_id, resource_owner_id
@@ -113,6 +160,30 @@ DELETE FROM oauth_applications WHERE id = $1
 func (q *Queries) DeleteOAuthApplication(ctx context.Context, id int64) error {
 	_, err := q.db.Exec(ctx, deleteOAuthApplication, id)
 	return err
+}
+
+const getOAuthAccessGrantByToken = `-- name: GetOAuthAccessGrantByToken :one
+SELECT id, token, expires_in, redirect_uri, created_at, revoked_at, scopes, application_id, resource_owner_id, code_challenge, code_challenge_method FROM oauth_access_grants
+WHERE token = $1 AND revoked_at IS NULL
+`
+
+func (q *Queries) GetOAuthAccessGrantByToken(ctx context.Context, token string) (OauthAccessGrant, error) {
+	row := q.db.QueryRow(ctx, getOAuthAccessGrantByToken, token)
+	var i OauthAccessGrant
+	err := row.Scan(
+		&i.ID,
+		&i.Token,
+		&i.ExpiresIn,
+		&i.RedirectUri,
+		&i.CreatedAt,
+		&i.RevokedAt,
+		&i.Scopes,
+		&i.ApplicationID,
+		&i.ResourceOwnerID,
+		&i.CodeChallenge,
+		&i.CodeChallengeMethod,
+	)
+	return i, err
 }
 
 const getOAuthAccessToken = `-- name: GetOAuthAccessToken :one
@@ -314,6 +385,15 @@ func (q *Queries) ListUserOAuthTokens(ctx context.Context, resourceOwnerID pgtyp
 		return nil, err
 	}
 	return items, nil
+}
+
+const revokeOAuthAccessGrant = `-- name: RevokeOAuthAccessGrant :exec
+UPDATE oauth_access_grants SET revoked_at = now() WHERE token = $1
+`
+
+func (q *Queries) RevokeOAuthAccessGrant(ctx context.Context, token string) error {
+	_, err := q.db.Exec(ctx, revokeOAuthAccessGrant, token)
+	return err
 }
 
 const revokeOAuthAccessToken = `-- name: RevokeOAuthAccessToken :exec

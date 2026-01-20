@@ -1,0 +1,95 @@
+// Package oauth provides OAuth 2.0 endpoints for Mastodon-compatible authentication.
+package oauth
+
+import (
+	"context"
+	"net/netip"
+	"strings"
+
+	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/pkg/oauth"
+)
+
+type tokenValidatorQueries interface {
+	GetOAuthAccessToken(ctx context.Context, token string) (db.OauthAccessToken, error)
+	UpdateOAuthTokenLastUsed(ctx context.Context, arg db.UpdateOAuthTokenLastUsedParams) error
+	GetUserByID(ctx context.Context, id int64) (db.User, error)
+}
+
+// TokenValidator validates OAuth access tokens and records usage.
+type TokenValidator struct {
+	queries tokenValidatorQueries
+}
+
+// NewTokenValidator creates a validator backed by database queries.
+func NewTokenValidator(queries tokenValidatorQueries) *TokenValidator {
+	return &TokenValidator{queries: queries}
+}
+
+// ValidateToken verifies a token and returns identity context details.
+func (v *TokenValidator) ValidateToken(ctx context.Context, token string) (*middleware.TokenInfo, error) {
+	if v.queries == nil {
+		return nil, oauth.ErrInvalidToken
+	}
+
+	dbToken, err := v.queries.GetOAuthAccessToken(ctx, token)
+	if err != nil {
+		return nil, oauth.ErrInvalidToken
+	}
+
+	if dbToken.ExpiresIn.Valid && dbToken.CreatedAt.Valid {
+		expiresIn := int(dbToken.ExpiresIn.Int32)
+		if oauth.IsTokenExpired(dbToken.CreatedAt.Time, &expiresIn) {
+			return nil, oauth.ErrExpiredToken
+		}
+	}
+
+	info := &middleware.TokenInfo{
+		TokenID: dbToken.ID,
+		Scopes:  "",
+	}
+	if dbToken.ApplicationID.Valid {
+		info.AppID = dbToken.ApplicationID.Int64
+	}
+	if dbToken.Scopes.Valid {
+		info.Scopes = strings.TrimSpace(dbToken.Scopes.String)
+	}
+
+	if dbToken.ResourceOwnerID.Valid {
+		user, err := v.queries.GetUserByID(ctx, dbToken.ResourceOwnerID.Int64)
+		if err != nil || user.Disabled || !user.Approved || !user.ConfirmedAt.Valid {
+			return nil, oauth.ErrInvalidToken
+		}
+		userID := user.ID
+		accountID := user.AccountID
+		info.UserID = &userID
+		info.AccountID = &accountID
+	}
+
+	v.touchToken(ctx, dbToken.ID)
+	return info, nil
+}
+
+func (v *TokenValidator) touchToken(ctx context.Context, tokenID int64) {
+	if v.queries == nil {
+		return
+	}
+
+	ip := ""
+	if ctxIP, ok := ctx.Value(middleware.ContextKeyClientIP).(string); ok {
+		ip = strings.TrimSpace(ctxIP)
+	}
+
+	var ipAddr *netip.Addr
+	if ip != "" {
+		if addr, err := netip.ParseAddr(ip); err == nil {
+			ipAddr = &addr
+		}
+	}
+
+	_ = v.queries.UpdateOAuthTokenLastUsed(ctx, db.UpdateOAuthTokenLastUsedParams{
+		ID:         tokenID,
+		LastUsedIp: ipAddr,
+	})
+}

@@ -207,7 +207,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	pollsHandler := v1.NewPollsHandler(queries)
 	pollsHandler.RegisterRoutes(mux)
 
-	appsHandler := v1.NewAppsHandler(queries)
+	appsHandler := v1.NewAppsHandler(queries, cfg)
 	appsHandler.RegisterRoutes(mux)
 
 	notificationsHandler := v1.NewNotificationsHandler(queries, streamingHub, cfg, rdb)
@@ -345,7 +345,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	v2AdminAccountsHandler.RegisterRoutes(mux)
 
 	// Register OAuth handlers
-	oauthHandler := oauthapi.NewHandler(queries)
+	oauthHandler := oauthapi.NewHandler(queries, cfg)
 	oauthHandler.RegisterRoutes(mux)
 
 	oembedHandler := oembedapi.NewHandler(queries, cfg)
@@ -479,10 +479,6 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	v1ReportsHandler := v1.NewReportsHandler(queries)
 	mux.HandleFunc("POST /api/v1/reports", v1ReportsHandler.Create)
 
-	// Apps endpoint (for OAuth app registration)
-	v1AppsHandler := v1.NewAppsHandler(queries)
-	v1AppsHandler.RegisterRoutes(mux)
-
 	// Well-known endpoints
 	mux.HandleFunc("GET /.well-known/webfinger", func(w http.ResponseWriter, r *http.Request) {
 		resource := web.QueryParam(r, "resource")
@@ -578,9 +574,13 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	})
 
 	// Setup middleware chain
+	tokenValidator := oauthapi.NewTokenValidator(queries)
+
 	handler := middleware.Recover(logger)(
 		middleware.Logger(logger)(
-			middleware.CORS(mux),
+			middleware.CORS(
+				middleware.Authenticate(tokenValidator)(mux),
+			),
 		),
 	)
 

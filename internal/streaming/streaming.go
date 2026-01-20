@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/web"
 )
 
@@ -431,6 +432,16 @@ func writeStreamError(w http.ResponseWriter, err error) {
 	web.JSONError(w, status, message)
 }
 
+func accountIDFromContext(ctx context.Context) int64 {
+	if id, ok := middleware.GetAccountID(ctx); ok {
+		return id
+	}
+	if id, ok := ctx.Value("account_id").(int64); ok {
+		return id
+	}
+	return 0
+}
+
 // SSEHandler handles Server-Sent Events connections
 type SSEHandler struct {
 	hub *Hub
@@ -466,10 +477,7 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get account ID from context (if authenticated)
-	var accountID int64
-	if id, ok := r.Context().Value("account_id").(int64); ok {
-		accountID = id
-	}
+	accountID := accountIDFromContext(r.Context())
 
 	// Create subscriber
 	sub := NewSubscriber(fmt.Sprintf("sse-%d-%d", accountID, time.Now().UnixNano()), accountID)

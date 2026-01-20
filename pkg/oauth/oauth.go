@@ -39,10 +39,11 @@ const (
 // ValidScopes is the list of all valid Mastodon scopes
 var ValidScopes = map[string]bool{
 	// Base scopes
-	"read":   true,
-	"write":  true,
-	"follow": true,
-	"push":   true,
+	"read":    true,
+	"write":   true,
+	"follow":  true,
+	"push":    true,
+	"profile": true,
 
 	// Granular read scopes
 	"read:accounts":      true,
@@ -89,6 +90,71 @@ var ValidScopes = map[string]bool{
 	"admin:write:ip_blocks":              true,
 	"admin:write:email_domain_blocks":    true,
 	"admin:write:canonical_email_blocks": true,
+}
+
+var orderedScopes = []string{
+	"read",
+	"profile",
+	"write",
+	"write:accounts",
+	"write:blocks",
+	"write:bookmarks",
+	"write:conversations",
+	"write:favourites",
+	"write:filters",
+	"write:follows",
+	"write:lists",
+	"write:media",
+	"write:mutes",
+	"write:notifications",
+	"write:reports",
+	"write:statuses",
+	"read:accounts",
+	"read:blocks",
+	"read:bookmarks",
+	"read:favourites",
+	"read:filters",
+	"read:follows",
+	"read:lists",
+	"read:mutes",
+	"read:notifications",
+	"read:search",
+	"read:statuses",
+	"follow",
+	"push",
+	"admin:read",
+	"admin:read:accounts",
+	"admin:read:reports",
+	"admin:read:domain_allows",
+	"admin:read:domain_blocks",
+	"admin:read:ip_blocks",
+	"admin:read:email_domain_blocks",
+	"admin:read:canonical_email_blocks",
+	"admin:write",
+	"admin:write:accounts",
+	"admin:write:reports",
+	"admin:write:domain_allows",
+	"admin:write:domain_blocks",
+	"admin:write:ip_blocks",
+	"admin:write:email_domain_blocks",
+	"admin:write:canonical_email_blocks",
+}
+
+// SupportedScopes returns Mastodon-compatible scope ordering for metadata.
+func SupportedScopes() []string {
+	seen := make(map[string]struct{}, len(orderedScopes))
+	scopes := make([]string, 0, len(orderedScopes))
+	for _, scope := range orderedScopes {
+		if !ValidScopes[scope] {
+			continue
+		}
+		if _, ok := seen[scope]; ok {
+			continue
+		}
+		seen[scope] = struct{}{}
+		scopes = append(scopes, scope)
+	}
+	return scopes
 }
 
 // DefaultScopes is the default scope set when none specified

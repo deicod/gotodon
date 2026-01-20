@@ -1,10 +1,7 @@
 // Package activitypub provides ActivityPub protocol implementation.
 package activitypub
 
-import (
-	"encoding/json"
-	"strings"
-)
+import "strings"
 
 // Context constants for ActivityPub
 const (
@@ -165,6 +162,15 @@ type CollectionPage struct {
 	Prev   string `json:"prev,omitempty"`
 }
 
+// OrderedCollectionPage represents a page in an ordered collection.
+type OrderedCollectionPage struct {
+	Collection
+	OrderedItems []any  `json:"orderedItems,omitempty"`
+	PartOf       any    `json:"partOf,omitempty"`
+	Next         string `json:"next,omitempty"`
+	Prev         string `json:"prev,omitempty"`
+}
+
 // Public audience constant
 const PublicAudience = "https://www.w3.org/ns/activitystreams#Public"
 
@@ -224,14 +230,4 @@ func ExtractDomain(uri string) string {
 		return uri[:idx]
 	}
 	return uri
-}
-
-// MarshalJSON implements custom JSON marshaling
-func (o Object) MarshalJSON() ([]byte, error) {
-	type Alias Object
-	return json.Marshal(&struct {
-		Alias
-	}{
-		Alias: (Alias)(o),
-	})
 }

@@ -8,6 +8,9 @@ INSERT INTO users (
 -- name: GetUserByEmail :one
 SELECT * FROM users WHERE LOWER(email) = LOWER($1);
 
+-- name: GetUserByID :one
+SELECT * FROM users WHERE id = $1;
+
 -- name: GetUserByConfirmationToken :one
 SELECT * FROM users WHERE confirmation_token = $1;
 

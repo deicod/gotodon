@@ -137,6 +137,7 @@ type Querier interface {
 	ClearStatusTags(ctx context.Context, statusID int64) error
 	ClearStatusTrends(ctx context.Context) error
 	ClearTagTrends(ctx context.Context) error
+	CountAccountOutboxStatuses(ctx context.Context, accountID int64) (int64, error)
 	CountAccountPins(ctx context.Context, accountID int64) (int64, error)
 	CountAnnualReportsByAccount(ctx context.Context, accountID int64) (int64, error)
 	CountDomainAllows(ctx context.Context) (int64, error)
@@ -199,6 +200,7 @@ type Querier interface {
 	CreateNotificationPolicy(ctx context.Context, arg CreateNotificationPolicyParams) (NotificationPolicy, error)
 	CreateNotificationRequest(ctx context.Context, arg CreateNotificationRequestParams) (NotificationRequest, error)
 	CreateNotifications(ctx context.Context, arg CreateNotificationsParams) ([]Notification, error)
+	CreateOAuthAccessGrant(ctx context.Context, arg CreateOAuthAccessGrantParams) (OauthAccessGrant, error)
 	CreateOAuthAccessToken(ctx context.Context, arg CreateOAuthAccessTokenParams) (OauthAccessToken, error)
 	CreateOAuthApplication(ctx context.Context, arg CreateOAuthApplicationParams) (OauthApplication, error)
 	CreatePoll(ctx context.Context, arg CreatePollParams) (Poll, error)
@@ -294,6 +296,7 @@ type Querier interface {
 	GetAccountMigrationsByAccountID(ctx context.Context, accountID int64) ([]AccountMigration, error)
 	// Account Notes queries (private notes about other users)
 	GetAccountNote(ctx context.Context, arg GetAccountNoteParams) (AccountNote, error)
+	GetAccountOutboxStatuses(ctx context.Context, arg GetAccountOutboxStatusesParams) ([]Status, error)
 	GetAccountStats(ctx context.Context, accountID int64) (AccountStat, error)
 	GetAccountStatuses(ctx context.Context, arg GetAccountStatusesParams) ([]Status, error)
 	// Account Statuses Cleanup Policies
@@ -364,6 +367,7 @@ type Querier interface {
 	// Notification Requests queries
 	GetNotificationRequest(ctx context.Context, id int64) (NotificationRequest, error)
 	GetNotificationRequestByAccounts(ctx context.Context, arg GetNotificationRequestByAccountsParams) (NotificationRequest, error)
+	GetOAuthAccessGrantByToken(ctx context.Context, token string) (OauthAccessGrant, error)
 	GetOAuthAccessToken(ctx context.Context, token string) (OauthAccessToken, error)
 	GetOAuthAccessTokenByRefresh(ctx context.Context, refreshToken pgtype.Text) (OauthAccessToken, error)
 	GetOAuthApplication(ctx context.Context, id int64) (OauthApplication, error)
@@ -439,6 +443,7 @@ type Querier interface {
 	GetUserByAccountID(ctx context.Context, accountID int64) (User, error)
 	GetUserByConfirmationToken(ctx context.Context, confirmationToken pgtype.Text) (User, error)
 	GetUserByEmail(ctx context.Context, lower string) (User, error)
+	GetUserByID(ctx context.Context, id int64) (User, error)
 	GetUserByResetPasswordToken(ctx context.Context, resetPasswordToken pgtype.Text) (User, error)
 	GetUserRole(ctx context.Context, id int64) (UserRole, error)
 	GetVotes(ctx context.Context, arg GetVotesParams) ([]PollVote, error)
@@ -531,6 +536,7 @@ type Querier interface {
 	RemoveAnnouncementReaction(ctx context.Context, arg RemoveAnnouncementReactionParams) error
 	RemoveMentions(ctx context.Context, arg RemoveMentionsParams) error
 	RemoveStatusTags(ctx context.Context, arg RemoveStatusTagsParams) error
+	RevokeOAuthAccessGrant(ctx context.Context, token string) error
 	RevokeOAuthAccessToken(ctx context.Context, token string) error
 	RevokeOAuthAccessTokensByApplication(ctx context.Context, arg RevokeOAuthAccessTokensByApplicationParams) error
 	RevokeOAuthAccessTokensByUser(ctx context.Context, resourceOwnerID pgtype.Int8) error

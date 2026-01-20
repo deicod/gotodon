@@ -47,10 +47,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = conn.Close() }()
 
 	// Get account ID from context
-	var accountID int64
-	if id, ok := r.Context().Value("account_id").(int64); ok {
-		accountID = id
-	}
+	accountID := accountIDFromContext(r.Context())
 
 	// Create subscriber
 	sub := NewSubscriber(fmt.Sprintf("ws-%d-%d", accountID, time.Now().UnixNano()), accountID)

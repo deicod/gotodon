@@ -10,19 +10,18 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/pkg/activitypub"
 )
 
 type actorFetcher struct {
-	queries     *db.Queries
+	store       Store
 	localDomain string
 	httpClient  *http.Client
 }
 
-func newActorFetcher(queries *db.Queries, localDomain string) *actorFetcher {
+func newActorFetcher(store Store, localDomain string) *actorFetcher {
 	return &actorFetcher{
-		queries:     queries,
+		store:       store,
 		localDomain: localDomain,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
@@ -31,8 +30,8 @@ func newActorFetcher(queries *db.Queries, localDomain string) *actorFetcher {
 }
 
 func (f *actorFetcher) FetchActor(ctx context.Context, actorURI string) (*activitypub.Actor, error) {
-	if f.queries != nil {
-		account, err := f.queries.GetAccountByURI(ctx, actorURI)
+	if f.store != nil {
+		account, err := f.store.GetAccountByURI(ctx, actorURI)
 		if err == nil {
 			if account.PublicKey == "" {
 				if !f.isLocalActor(actorURI) {

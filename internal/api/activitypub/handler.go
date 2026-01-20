@@ -18,7 +18,7 @@ import (
 
 // FederationHandler handles ActivityPub federation endpoints
 type FederationHandler struct {
-	queries       *db.Queries
+	store         Store
 	domain        string
 	actorFetcher  activitypub.ActorFetcher
 	inboxHandlers map[string]InboxHandler
@@ -38,17 +38,17 @@ func (e *InboxError) Error() string {
 }
 
 // NewFederationHandler creates a new federation handler
-func NewFederationHandler(queries *db.Queries, domain string) *FederationHandler {
+func NewFederationHandler(store Store, domain string) *FederationHandler {
 	return &FederationHandler{
-		queries:       queries,
+		store:         store,
 		domain:        domain,
-		actorFetcher:  newActorFetcher(queries, domain),
+		actorFetcher:  newActorFetcher(store, domain),
 		inboxHandlers: make(map[string]InboxHandler),
 	}
 }
 
 func (h *FederationHandler) useDB() bool {
-	return h.queries != nil
+	return h.store != nil
 }
 
 // ActorFetcher exposes the resolver used for signature verification and inbox handlers.
@@ -83,7 +83,7 @@ func (h *FederationHandler) GetActor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	account, err := h.queries.GetAccountByUsername(r.Context(), username)
+	account, err := h.store.GetAccountByUsername(r.Context(), username)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Actor not found")
 		return
@@ -155,6 +155,8 @@ func (h *FederationHandler) mockActor(w http.ResponseWriter, username string) {
 		Outbox:            fmt.Sprintf("%s/outbox", actorURI),
 		Followers:         fmt.Sprintf("%s/followers", actorURI),
 		Following:         fmt.Sprintf("%s/following", actorURI),
+		Featured:          fmt.Sprintf("%s/collections/featured", actorURI),
+		FeaturedTags:      fmt.Sprintf("%s/collections/tags", actorURI),
 		Discoverable:      &discoverable,
 		Endpoints: &activitypub.Endpoints{
 			SharedInbox: fmt.Sprintf("https://%s/inbox", h.domain),
@@ -167,88 +169,17 @@ func (h *FederationHandler) mockActor(w http.ResponseWriter, username string) {
 
 // GetOutbox handles GET /users/:username/outbox
 func (h *FederationHandler) GetOutbox(w http.ResponseWriter, r *http.Request) {
-	username := web.Param(r, "username")
-	actorURI := fmt.Sprintf("https://%s/users/%s", h.domain, username)
-
-	// Return an empty ordered collection for now
-	collection := activitypub.OrderedCollection{
-		Collection: activitypub.Collection{
-			Object: activitypub.Object{
-				Context: activitypub.DefaultContext(),
-				ID:      fmt.Sprintf("%s/outbox", actorURI),
-				Type:    activitypub.TypeOrderedCollection,
-			},
-			TotalItems: 0,
-			First:      fmt.Sprintf("%s/outbox?page=true", actorURI),
-		},
-	}
-
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, collection)
+	h.writeOutbox(w, r)
 }
 
 // GetFollowers handles GET /users/:username/followers
 func (h *FederationHandler) GetFollowers(w http.ResponseWriter, r *http.Request) {
-	username := web.Param(r, "username")
-	actorURI := fmt.Sprintf("https://%s/users/%s", h.domain, username)
-
-	totalItems := 0
-	if h.useDB() {
-		account, err := h.queries.GetAccountByUsername(r.Context(), username)
-		if err == nil {
-			stats, err := h.queries.GetAccountStats(r.Context(), account.ID)
-			if err == nil {
-				totalItems = int(stats.FollowersCount)
-			}
-		}
-	}
-
-	collection := activitypub.OrderedCollection{
-		Collection: activitypub.Collection{
-			Object: activitypub.Object{
-				Context: activitypub.DefaultContext(),
-				ID:      fmt.Sprintf("%s/followers", actorURI),
-				Type:    activitypub.TypeOrderedCollection,
-			},
-			TotalItems: totalItems,
-			First:      fmt.Sprintf("%s/followers?page=true", actorURI),
-		},
-	}
-
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, collection)
+	h.writeFollowers(w, r)
 }
 
 // GetFollowing handles GET /users/:username/following
 func (h *FederationHandler) GetFollowing(w http.ResponseWriter, r *http.Request) {
-	username := web.Param(r, "username")
-	actorURI := fmt.Sprintf("https://%s/users/%s", h.domain, username)
-
-	totalItems := 0
-	if h.useDB() {
-		account, err := h.queries.GetAccountByUsername(r.Context(), username)
-		if err == nil {
-			stats, err := h.queries.GetAccountStats(r.Context(), account.ID)
-			if err == nil {
-				totalItems = int(stats.FollowingCount)
-			}
-		}
-	}
-
-	collection := activitypub.OrderedCollection{
-		Collection: activitypub.Collection{
-			Object: activitypub.Object{
-				Context: activitypub.DefaultContext(),
-				ID:      fmt.Sprintf("%s/following", actorURI),
-				Type:    activitypub.TypeOrderedCollection,
-			},
-			TotalItems: totalItems,
-			First:      fmt.Sprintf("%s/following?page=true", actorURI),
-		},
-	}
-
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, collection)
+	h.writeFollowing(w, r)
 }
 
 // PostInbox handles POST /users/:username/inbox and POST /inbox
@@ -292,11 +223,23 @@ func (h *FederationHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /users/{username}/outbox", h.GetOutbox)
 	mux.HandleFunc("GET /users/{username}/followers", h.GetFollowers)
 	mux.HandleFunc("GET /users/{username}/following", h.GetFollowing)
+	mux.HandleFunc("GET /users/{username}/collections/featured", h.GetFeatured)
+	mux.HandleFunc("GET /users/{username}/collections/tags", h.GetFeaturedTags)
 
 	// Inbox endpoints
 	inboxHandler := middleware.VerifyHTTPSignature(h.actorFetcher)(http.HandlerFunc(h.PostInbox))
 	mux.Handle("POST /inbox", inboxHandler)
 	mux.Handle("POST /users/{username}/inbox", inboxHandler)
+
+	// ActivityPub alias routes
+	mux.HandleFunc("GET /ap/users/{username}", h.GetActor)
+	mux.HandleFunc("GET /ap/users/{username}/outbox", h.GetOutbox)
+	mux.HandleFunc("GET /ap/users/{username}/followers", h.GetFollowers)
+	mux.HandleFunc("GET /ap/users/{username}/following", h.GetFollowing)
+	mux.HandleFunc("GET /ap/users/{username}/collections/featured", h.GetFeatured)
+	mux.HandleFunc("GET /ap/users/{username}/collections/tags", h.GetFeaturedTags)
+	mux.Handle("POST /ap/inbox", inboxHandler)
+	mux.Handle("POST /ap/users/{username}/inbox", inboxHandler)
 }
 
 func (h *FederationHandler) writeInboxError(w http.ResponseWriter, err error) {

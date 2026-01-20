@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/oauth"
@@ -18,15 +19,23 @@ import (
 // AppsHandler handles OAuth application registration
 type AppsHandler struct {
 	queries *db.Queries
+	cfg     *config.Config
 }
 
 // NewAppsHandler creates a new apps handler
-func NewAppsHandler(queries *db.Queries) *AppsHandler {
-	return &AppsHandler{queries: queries}
+func NewAppsHandler(queries *db.Queries, cfg *config.Config) *AppsHandler {
+	return &AppsHandler{queries: queries, cfg: cfg}
 }
 
 func (h *AppsHandler) useDB() bool {
 	return h.queries != nil
+}
+
+func (h *AppsHandler) vapidKey() string {
+	if h.cfg == nil {
+		return ""
+	}
+	return strings.TrimSpace(h.cfg.Secrets.VAPIDPublic)
 }
 
 // CreateAppRequest is the request body for POST /api/v1/apps
@@ -83,6 +92,7 @@ func (h *AppsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Scopes is not included in the list")
 		return
 	}
+	normalizedScopes := oauth.NormalizeScopes(scopes)
 
 	clientID, clientSecret, err := oauth.GenerateClientCredentials()
 	if err != nil {
@@ -108,7 +118,7 @@ func (h *AppsHandler) Create(w http.ResponseWriter, r *http.Request) {
 			Uid:          clientID,
 			Secret:       clientSecret,
 			RedirectUri:  req.RedirectURIs,
-			Scopes:       req.Scopes,
+			Scopes:       normalizedScopes,
 			Website:      websitePG,
 			OwnerType:    pgtype.Text{Valid: false},
 			OwnerID:      pgtype.Int8{Valid: false},
@@ -126,7 +136,7 @@ func (h *AppsHandler) Create(w http.ResponseWriter, r *http.Request) {
 			RedirectURI:  dbApp.RedirectUri,
 			ClientID:     dbApp.Uid,
 			ClientSecret: dbApp.Secret,
-			VapidKey:     "",
+			VapidKey:     h.vapidKey(),
 		})
 		return
 	}
@@ -138,7 +148,7 @@ func (h *AppsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		RedirectURI:  req.RedirectURIs,
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
-		VapidKey:     "",
+		VapidKey:     h.vapidKey(),
 	})
 }
 
@@ -158,7 +168,7 @@ func (h *AppsHandler) VerifyCredentials(w http.ResponseWriter, r *http.Request) 
 				web.JSON(w, http.StatusOK, map[string]interface{}{
 					"name":      app.Name,
 					"website":   website,
-					"vapid_key": "", // TODO: Implement VAPID key support
+					"vapid_key": h.vapidKey(),
 				})
 				return
 			}
@@ -168,7 +178,7 @@ func (h *AppsHandler) VerifyCredentials(w http.ResponseWriter, r *http.Request) 
 	web.JSON(w, http.StatusOK, map[string]interface{}{
 		"name":      "Test App",
 		"website":   nil,
-		"vapid_key": "",
+		"vapid_key": h.vapidKey(),
 	})
 }
 

@@ -67,3 +67,17 @@ FROM oauth_access_tokens t
 JOIN oauth_applications a ON t.application_id = a.id
 WHERE t.resource_owner_id = $1 AND t.revoked_at IS NULL
 ORDER BY t.last_used_at DESC NULLS LAST;
+
+-- name: CreateOAuthAccessGrant :one
+INSERT INTO oauth_access_grants (
+    token, expires_in, redirect_uri, scopes, application_id, resource_owner_id, code_challenge, code_challenge_method
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8
+) RETURNING *;
+
+-- name: GetOAuthAccessGrantByToken :one
+SELECT * FROM oauth_access_grants
+WHERE token = $1 AND revoked_at IS NULL;
+
+-- name: RevokeOAuthAccessGrant :exec
+UPDATE oauth_access_grants SET revoked_at = now() WHERE token = $1;

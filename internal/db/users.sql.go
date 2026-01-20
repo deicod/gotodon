@@ -260,6 +260,54 @@ func (q *Queries) GetUserByEmail(ctx context.Context, lower string) (User, error
 	return i, err
 }
 
+const getUserByID = `-- name: GetUserByID :one
+SELECT id, email, created_at, updated_at, encrypted_password, reset_password_token, reset_password_sent_at, sign_in_count, current_sign_in_at, last_sign_in_at, confirmation_token, confirmed_at, confirmation_sent_at, unconfirmed_email, locale, consumed_timestep, otp_required_for_login, last_emailed_at, otp_backup_codes, account_id, disabled, invite_id, chosen_languages, created_by_application_id, approved, sign_in_token, sign_in_token_sent_at, webauthn_id, sign_up_ip, skip_sign_in_token, role_id, settings, time_zone, otp_secret, age_verified_at, require_tos_interstitial FROM users WHERE id = $1
+`
+
+func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByID, id)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.EncryptedPassword,
+		&i.ResetPasswordToken,
+		&i.ResetPasswordSentAt,
+		&i.SignInCount,
+		&i.CurrentSignInAt,
+		&i.LastSignInAt,
+		&i.ConfirmationToken,
+		&i.ConfirmedAt,
+		&i.ConfirmationSentAt,
+		&i.UnconfirmedEmail,
+		&i.Locale,
+		&i.ConsumedTimestep,
+		&i.OtpRequiredForLogin,
+		&i.LastEmailedAt,
+		&i.OtpBackupCodes,
+		&i.AccountID,
+		&i.Disabled,
+		&i.InviteID,
+		&i.ChosenLanguages,
+		&i.CreatedByApplicationID,
+		&i.Approved,
+		&i.SignInToken,
+		&i.SignInTokenSentAt,
+		&i.WebauthnID,
+		&i.SignUpIp,
+		&i.SkipSignInToken,
+		&i.RoleID,
+		&i.Settings,
+		&i.TimeZone,
+		&i.OtpSecret,
+		&i.AgeVerifiedAt,
+		&i.RequireTosInterstitial,
+	)
+	return i, err
+}
+
 const getUserByResetPasswordToken = `-- name: GetUserByResetPasswordToken :one
 SELECT id, email, created_at, updated_at, encrypted_password, reset_password_token, reset_password_sent_at, sign_in_count, current_sign_in_at, last_sign_in_at, confirmation_token, confirmed_at, confirmation_sent_at, unconfirmed_email, locale, consumed_timestep, otp_required_for_login, last_emailed_at, otp_backup_codes, account_id, disabled, invite_id, chosen_languages, created_by_application_id, approved, sign_in_token, sign_in_token_sent_at, webauthn_id, sign_up_ip, skip_sign_in_token, role_id, settings, time_zone, otp_secret, age_verified_at, require_tos_interstitial FROM users WHERE reset_password_token = $1 AND reset_password_token IS NOT NULL
 `

@@ -11,6 +11,20 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countAccountOutboxStatuses = `-- name: CountAccountOutboxStatuses :one
+SELECT COUNT(*) FROM statuses
+WHERE account_id = $1
+  AND deleted_at IS NULL
+  AND visibility IN (0, 1)
+`
+
+func (q *Queries) CountAccountOutboxStatuses(ctx context.Context, accountID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countAccountOutboxStatuses, accountID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countStatusesInRange = `-- name: CountStatusesInRange :one
 SELECT COUNT(*) FROM statuses 
 WHERE created_at >= $1 AND created_at < $2 AND deleted_at IS NULL
@@ -163,6 +177,67 @@ WHERE id = $1
 func (q *Queries) DeleteStatus(ctx context.Context, id int64) error {
 	_, err := q.db.Exec(ctx, deleteStatus, id)
 	return err
+}
+
+const getAccountOutboxStatuses = `-- name: GetAccountOutboxStatuses :many
+SELECT id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at, quote_approval_policy FROM statuses
+WHERE account_id = $1
+  AND deleted_at IS NULL
+  AND visibility IN (0, 1)
+ORDER BY id DESC
+LIMIT $2 OFFSET $3
+`
+
+type GetAccountOutboxStatusesParams struct {
+	AccountID int64 `db:"account_id" json:"account_id"`
+	Limit     int32 `db:"limit" json:"limit"`
+	Offset    int32 `db:"offset" json:"offset"`
+}
+
+func (q *Queries) GetAccountOutboxStatuses(ctx context.Context, arg GetAccountOutboxStatusesParams) ([]Status, error) {
+	rows, err := q.db.Query(ctx, getAccountOutboxStatuses, arg.AccountID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Status{}
+	for rows.Next() {
+		var i Status
+		if err := rows.Scan(
+			&i.ID,
+			&i.Uri,
+			&i.Text,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.InReplyToID,
+			&i.ReblogOfID,
+			&i.Url,
+			&i.Sensitive,
+			&i.Visibility,
+			&i.SpoilerText,
+			&i.Reply,
+			&i.Language,
+			&i.ConversationID,
+			&i.Local,
+			&i.AccountID,
+			&i.ApplicationID,
+			&i.InReplyToAccountID,
+			&i.PollID,
+			&i.DeletedAt,
+			&i.EditedAt,
+			&i.Trendable,
+			&i.OrderedMediaAttachmentIds,
+			&i.FetchedRepliesAt,
+			&i.QuoteApprovalPolicy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getAccountStatuses = `-- name: GetAccountStatuses :many

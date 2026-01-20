@@ -3,6 +3,7 @@ package middleware
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"strings"
 
@@ -23,6 +24,8 @@ const (
 	ContextKeyScopes ContextKey = "scopes"
 	// ContextKeyAppID is the context key for the OAuth application ID
 	ContextKeyAppID ContextKey = "app_id"
+	// ContextKeyClientIP is the context key for the originating client IP
+	ContextKeyClientIP ContextKey = "client_ip"
 )
 
 // TokenValidator is the interface for validating OAuth tokens
@@ -60,6 +63,39 @@ func RequireAuth(validator TokenValidator) func(http.Handler) http.Handler {
 			ctx = context.WithValue(ctx, ContextKeyAppID, info.AppID)
 			ctx = context.WithValue(ctx, ContextKeyScopes, info.Scopes)
 
+			if info.UserID != nil {
+				ctx = context.WithValue(ctx, ContextKeyUserID, *info.UserID)
+			}
+			if info.AccountID != nil {
+				ctx = context.WithValue(ctx, ContextKeyAccountID, *info.AccountID)
+			}
+
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// Authenticate optionally authenticates when a bearer or access_token is present.
+// Invalid tokens will return 401 to match Mastodon behavior.
+func Authenticate(validator TokenValidator) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			token := extractBearerToken(r)
+			if token == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			ctx := context.WithValue(r.Context(), ContextKeyClientIP, clientIP(r))
+			info, err := validator.ValidateToken(ctx, token)
+			if err != nil {
+				web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+				return
+			}
+
+			ctx = context.WithValue(ctx, ContextKeyTokenID, info.TokenID)
+			ctx = context.WithValue(ctx, ContextKeyAppID, info.AppID)
+			ctx = context.WithValue(ctx, ContextKeyScopes, info.Scopes)
 			if info.UserID != nil {
 				ctx = context.WithValue(ctx, ContextKeyUserID, *info.UserID)
 			}
@@ -154,12 +190,42 @@ func GetAppID(ctx context.Context) (int64, bool) {
 func extractBearerToken(r *http.Request) string {
 	auth := r.Header.Get("Authorization")
 	if auth == "" {
-		return ""
+		return queryAccessToken(r)
 	}
 	if !strings.HasPrefix(auth, "Bearer ") {
-		return ""
+		return queryAccessToken(r)
 	}
 	return strings.TrimPrefix(auth, "Bearer ")
+}
+
+func queryAccessToken(r *http.Request) string {
+	if token := r.URL.Query().Get("access_token"); token != "" {
+		return token
+	}
+	if token := r.URL.Query().Get("bearer_token"); token != "" {
+		return token
+	}
+	return ""
+}
+
+func clientIP(r *http.Request) string {
+	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+		parts := strings.Split(forwarded, ",")
+		if len(parts) > 0 {
+			ip := strings.TrimSpace(parts[0])
+			if ip != "" {
+				return ip
+			}
+		}
+	}
+	if realIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); realIP != "" {
+		return realIP
+	}
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err == nil && host != "" {
+		return host
+	}
+	return strings.TrimSpace(r.RemoteAddr)
 }
 
 func hasScope(tokenScopes, required string) bool {

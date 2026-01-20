@@ -169,6 +169,20 @@ WHERE account_id = $1
 ORDER BY id DESC
 LIMIT $2 OFFSET $3;
 
+-- name: GetAccountOutboxStatuses :many
+SELECT * FROM statuses
+WHERE account_id = $1
+  AND deleted_at IS NULL
+  AND visibility IN (0, 1)
+ORDER BY id DESC
+LIMIT $2 OFFSET $3;
+
+-- name: CountAccountOutboxStatuses :one
+SELECT COUNT(*) FROM statuses
+WHERE account_id = $1
+  AND deleted_at IS NULL
+  AND visibility IN (0, 1);
+
 -- name: GetStatusAncestors :many
 WITH RECURSIVE ancestors AS (
   SELECT id, in_reply_to_id FROM statuses WHERE id = @status_id AND deleted_at IS NULL

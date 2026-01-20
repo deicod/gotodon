@@ -3,26 +3,57 @@ package oauth
 
 import (
 	"context"
-	"fmt"
+	"crypto/sha256"
+	"encoding/base64"
+	"errors"
+	"html/template"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/deicod/gotodon/internal/api/middleware"
+	apiv1 "github.com/deicod/gotodon/internal/api/v1"
+	"github.com/deicod/gotodon/internal/auth"
+	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/oauth"
 )
 
+const (
+	authorizationCodeTTL = 10 * time.Minute
+	pkceMethodS256       = "S256"
+)
+
+type oauthQuerier interface {
+	GetOAuthApplication(ctx context.Context, id int64) (db.OauthApplication, error)
+	GetOAuthApplicationByUID(ctx context.Context, uid string) (db.OauthApplication, error)
+	CreateOAuthAccessToken(ctx context.Context, arg db.CreateOAuthAccessTokenParams) (db.OauthAccessToken, error)
+	GetOAuthAccessToken(ctx context.Context, token string) (db.OauthAccessToken, error)
+	GetOAuthAccessTokenByRefresh(ctx context.Context, refresh pgtype.Text) (db.OauthAccessToken, error)
+	RevokeOAuthAccessToken(ctx context.Context, token string) error
+	CreateOAuthAccessGrant(ctx context.Context, arg db.CreateOAuthAccessGrantParams) (db.OauthAccessGrant, error)
+	GetOAuthAccessGrantByToken(ctx context.Context, token string) (db.OauthAccessGrant, error)
+	RevokeOAuthAccessGrant(ctx context.Context, token string) error
+	GetUserByEmail(ctx context.Context, email string) (db.User, error)
+	GetUserByID(ctx context.Context, id int64) (db.User, error)
+	GetAccountByID(ctx context.Context, id int64) (db.Account, error)
+	DeletePushSubscription(ctx context.Context, accessTokenID pgtype.Int8) error
+}
+
 // Handler handles OAuth endpoints
 type Handler struct {
-	queries *db.Queries
+	queries oauthQuerier
+	cfg     *config.Config
 }
 
 // NewHandler creates a new OAuth handler
-func NewHandler(queries *db.Queries) *Handler {
-	return &Handler{queries: queries}
+func NewHandler(queries oauthQuerier, cfg *config.Config) *Handler {
+	return &Handler{queries: queries, cfg: cfg}
 }
 
 // TokenRequest is the request body for POST /oauth/token
@@ -36,6 +67,7 @@ type TokenRequest struct {
 	Username     string `json:"username" form:"username"`
 	Password     string `json:"password" form:"password"`
 	RefreshToken string `json:"refresh_token" form:"refresh_token"`
+	CodeVerifier string `json:"code_verifier" form:"code_verifier"`
 }
 
 // TokenResponse is the response for POST /oauth/token
@@ -50,252 +82,262 @@ type TokenResponse struct {
 
 // AuthorizeRequest is the request for GET /oauth/authorize
 type AuthorizeRequest struct {
-	ResponseType string `query:"response_type"`
-	ClientID     string `query:"client_id"`
-	RedirectURI  string `query:"redirect_uri"`
-	Scope        string `query:"scope"`
-	State        string `query:"state"`
-	ForceLogin   bool   `query:"force_login"`
-	Lang         string `query:"lang"`
+	ResponseType        string `query:"response_type"`
+	ClientID            string `query:"client_id"`
+	RedirectURI         string `query:"redirect_uri"`
+	Scope               string `query:"scope"`
+	State               string `query:"state"`
+	ForceLogin          bool   `query:"force_login"`
+	Lang                string `query:"lang"`
+	CodeChallenge       string `query:"code_challenge"`
+	CodeChallengeMethod string `query:"code_challenge_method"`
 }
+
+type oauthMetadataResponse struct {
+	Issuer                            string   `json:"issuer"`
+	AuthorizationEndpoint             string   `json:"authorization_endpoint"`
+	TokenEndpoint                     string   `json:"token_endpoint"`
+	RevocationEndpoint                string   `json:"revocation_endpoint"`
+	UserinfoEndpoint                  string   `json:"userinfo_endpoint"`
+	ScopesSupported                   []string `json:"scopes_supported"`
+	ResponseTypesSupported            []string `json:"response_types_supported"`
+	ResponseModesSupported            []string `json:"response_modes_supported"`
+	GrantTypesSupported               []string `json:"grant_types_supported"`
+	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
+	CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported"`
+	ServiceDocumentation              string   `json:"service_documentation"`
+	AppRegistrationEndpoint           string   `json:"app_registration_endpoint"`
+}
+
+type authorizeTemplateData struct {
+	AppName             string
+	ClientID            string
+	RedirectURI         string
+	ResponseType        string
+	Scope               string
+	ScopeLabel          string
+	State               string
+	CodeChallenge       string
+	CodeChallengeMethod string
+}
+
+var authorizeTemplate = template.Must(template.New("authorize").Parse(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Authorize</title>
+</head>
+<body>
+  <h1>Authorization Required</h1>
+  <p>{{.AppName}} is requesting access with scopes: {{.ScopeLabel}}</p>
+  <form method="POST" action="/oauth/authorize">
+    <input type="hidden" name="client_id" value="{{.ClientID}}">
+    <input type="hidden" name="redirect_uri" value="{{.RedirectURI}}">
+    <input type="hidden" name="scope" value="{{.Scope}}">
+    <input type="hidden" name="state" value="{{.State}}">
+    <input type="hidden" name="response_type" value="{{.ResponseType}}">
+    <input type="hidden" name="code_challenge" value="{{.CodeChallenge}}">
+    <input type="hidden" name="code_challenge_method" value="{{.CodeChallengeMethod}}">
+    <div>
+      <label>Email <input type="email" name="email" required></label>
+    </div>
+    <div>
+      <label>Password <input type="password" name="password" required></label>
+    </div>
+    <div>
+      <button type="submit" name="approve" value="true">Authorize</button>
+      <button type="submit" name="approve" value="false">Deny</button>
+    </div>
+  </form>
+</body>
+</html>`))
 
 // Token handles POST /oauth/token
 func (h *Handler) Token(w http.ResponseWriter, r *http.Request) {
-	var req TokenRequest
-	if err := web.Bind(r, &req); err != nil {
-		web.JSON(w, http.StatusBadRequest, map[string]string{
-			"error":             "invalid_request",
-			"error_description": "Invalid request body",
-		})
+	req, err := bindTokenRequest(r)
+	if err != nil {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "Invalid request body")
 		return
 	}
-
-	ctx := context.Background()
 
 	switch req.GrantType {
 	case "authorization_code":
-		h.handleAuthorizationCode(w, r, ctx, req)
+		h.handleAuthorizationCode(w, r, req)
 	case "client_credentials":
-		h.handleClientCredentials(w, r, ctx, req)
+		h.handleClientCredentials(w, r, req)
 	case "password":
-		h.handlePassword(w, r, ctx, req)
+		h.handlePassword(w, r, req)
 	case "refresh_token":
-		h.handleRefreshToken(w, r, ctx, req)
+		h.handleRefreshToken(w, r, req)
 	default:
-		web.JSON(w, http.StatusBadRequest, map[string]string{
-			"error":             "unsupported_grant_type",
-			"error_description": "The grant type is not supported",
-		})
+		writeOAuthError(w, http.StatusBadRequest, "unsupported_grant_type", "The grant type is not supported")
 	}
 }
 
-func (h *Handler) handleClientCredentials(w http.ResponseWriter, r *http.Request, ctx context.Context, req TokenRequest) {
-	// Validate client
-	app, err := h.queries.GetOAuthApplicationByUID(ctx, req.ClientID)
-	if err != nil || app.Secret != req.ClientSecret {
-		web.JSON(w, http.StatusUnauthorized, map[string]string{
-			"error":             "invalid_client",
-			"error_description": "Invalid client credentials",
-		})
-		return
-	}
+func (h *Handler) handleClientCredentials(w http.ResponseWriter, r *http.Request, req TokenRequest) {
+	ctx := r.Context()
 
-	// Validate scopes
-	scopes := oauth.ParseScopes(req.Scope)
-	if err := oauth.ValidateScopes(scopes); err != nil {
-		web.JSON(w, http.StatusBadRequest, map[string]string{
-			"error":             "invalid_scope",
-			"error_description": "The requested scope is invalid",
-		})
-		return
-	}
-
-	// Generate token
-	token, err := oauth.GenerateToken(32)
+	app, err := h.validateClient(ctx, req.ClientID, req.ClientSecret)
 	if err != nil {
-		web.JSON(w, http.StatusInternalServerError, map[string]string{
-			"error":             "server_error",
-			"error_description": "Failed to generate token",
-		})
+		writeOAuthError(w, http.StatusUnauthorized, "invalid_client", "Invalid client credentials")
 		return
 	}
 
-	// Save token
-	_, err = h.queries.CreateOAuthAccessToken(ctx, db.CreateOAuthAccessTokenParams{
-		Token:         token,
-		Scopes:        pgtype.Text{String: oauth.NormalizeScopes(scopes), Valid: true},
-		ApplicationID: pgtype.Int8{Int64: app.ID, Valid: true},
-	})
+	scopes, normalized, err := normalizeScopes(req.Scope)
 	if err != nil {
-		web.JSON(w, http.StatusInternalServerError, map[string]string{
-			"error":             "server_error",
-			"error_description": "Failed to save token",
-		})
+		writeOAuthError(w, http.StatusBadRequest, "invalid_scope", "The requested scope is invalid")
+		return
+	}
+	if err := h.ensureAppScopes(app, scopes); err != nil {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_scope", "The requested scope is invalid")
 		return
 	}
 
-	web.JSON(w, http.StatusOK, TokenResponse{
-		AccessToken: token,
-		TokenType:   "Bearer",
-		Scope:       oauth.NormalizeScopes(scopes),
-		CreatedAt:   time.Now().Unix(),
-	})
+	resp, err := h.issueAccessToken(ctx, app, nil, normalized, false)
+	if err != nil {
+		writeOAuthError(w, http.StatusInternalServerError, "server_error", "Failed to generate token")
+		return
+	}
+
+	web.JSON(w, http.StatusOK, resp)
 }
 
-func (h *Handler) handleAuthorizationCode(w http.ResponseWriter, r *http.Request, ctx context.Context, req TokenRequest) {
-	// For now, return not implemented - requires session/login flow
-	web.JSON(w, http.StatusBadRequest, map[string]string{
-		"error":             "invalid_grant",
-		"error_description": "Authorization code flow requires user session",
-	})
+func (h *Handler) handleAuthorizationCode(w http.ResponseWriter, r *http.Request, req TokenRequest) {
+	if req.Code == "" {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "Missing authorization code")
+		return
+	}
+
+	ctx := r.Context()
+	app, err := h.validateClient(ctx, req.ClientID, req.ClientSecret)
+	if err != nil {
+		writeOAuthError(w, http.StatusUnauthorized, "invalid_client", "Invalid client credentials")
+		return
+	}
+
+	grant, err := h.queries.GetOAuthAccessGrantByToken(ctx, req.Code)
+	if err != nil {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "Invalid authorization code")
+		return
+	}
+	if grant.ApplicationID != app.ID {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "Invalid authorization code")
+		return
+	}
+	if grant.RedirectUri != "" && req.RedirectURI != "" && grant.RedirectUri != req.RedirectURI {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "Redirect URI mismatch")
+		return
+	}
+	if grant.CreatedAt.Valid {
+		expiresAt := grant.CreatedAt.Time.Add(time.Duration(grant.ExpiresIn) * time.Second)
+		if time.Now().After(expiresAt) {
+			writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "Authorization code expired")
+			return
+		}
+	}
+	if err := verifyPKCE(grant, req.CodeVerifier); err != nil {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "Invalid code verifier")
+		return
+	}
+
+	scope := strings.TrimSpace(grant.Scopes.String)
+	if scope == "" {
+		scope = oauth.DefaultScopes
+	}
+
+	resp, err := h.issueAccessToken(ctx, app, &grant.ResourceOwnerID, scope, true)
+	if err != nil {
+		writeOAuthError(w, http.StatusInternalServerError, "server_error", "Failed to generate token")
+		return
+	}
+
+	_ = h.queries.RevokeOAuthAccessGrant(ctx, grant.Token)
+	web.JSON(w, http.StatusOK, resp)
 }
 
-func (h *Handler) handlePassword(w http.ResponseWriter, r *http.Request, ctx context.Context, req TokenRequest) {
-	// Validate client
-	app, err := h.queries.GetOAuthApplicationByUID(ctx, req.ClientID)
-	if err != nil || app.Secret != req.ClientSecret {
-		web.JSON(w, http.StatusUnauthorized, map[string]string{
-			"error":             "invalid_client",
-			"error_description": "Invalid client credentials",
-		})
-		return
-	}
+func (h *Handler) handlePassword(w http.ResponseWriter, r *http.Request, req TokenRequest) {
+	ctx := r.Context()
 
-	// Lookup user
-	user, err := h.queries.GetUserByEmail(ctx, req.Username)
+	app, err := h.validateClient(ctx, req.ClientID, req.ClientSecret)
 	if err != nil {
-		web.JSON(w, http.StatusUnauthorized, map[string]string{
-			"error":             "invalid_grant",
-			"error_description": "Invalid credentials",
-		})
+		writeOAuthError(w, http.StatusUnauthorized, "invalid_client", "Invalid client credentials")
+		return
+	}
+	if strings.TrimSpace(req.Username) == "" || req.Password == "" {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "Missing credentials")
 		return
 	}
 
-	// Verify password (simplified - real implementation needs bcrypt)
-	if user.EncryptedPassword != req.Password {
-		web.JSON(w, http.StatusUnauthorized, map[string]string{
-			"error":             "invalid_grant",
-			"error_description": "Invalid credentials",
-		})
-		return
-	}
-
-	// Generate tokens
-	accessToken, err := oauth.GenerateToken(32)
+	user, err := h.authenticateUser(ctx, req.Username, req.Password)
 	if err != nil {
-		web.JSON(w, http.StatusInternalServerError, map[string]string{
-			"error": "server_error",
-		})
+		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "Invalid credentials")
 		return
 	}
 
-	refreshToken, err := oauth.GenerateToken(32)
+	scopes, normalized, err := normalizeScopes(req.Scope)
 	if err != nil {
-		web.JSON(w, http.StatusInternalServerError, map[string]string{
-			"error": "server_error",
-		})
+		writeOAuthError(w, http.StatusBadRequest, "invalid_scope", "The requested scope is invalid")
+		return
+	}
+	if err := h.ensureAppScopes(app, scopes); err != nil {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_scope", "The requested scope is invalid")
 		return
 	}
 
-	scopes := oauth.ParseScopes(req.Scope)
-	if err := oauth.ValidateScopes(scopes); err != nil {
-		web.JSON(w, http.StatusBadRequest, map[string]string{
-			"error": "invalid_scope",
-		})
-		return
-	}
-
-	// Save token
-	expiresIn := int32(7200) // 2 hours
-	_, err = h.queries.CreateOAuthAccessToken(ctx, db.CreateOAuthAccessTokenParams{
-		Token:           accessToken,
-		RefreshToken:    pgtype.Text{String: refreshToken, Valid: true},
-		ExpiresIn:       pgtype.Int4{Int32: expiresIn, Valid: true},
-		Scopes:          pgtype.Text{String: oauth.NormalizeScopes(scopes), Valid: true},
-		ApplicationID:   pgtype.Int8{Int64: app.ID, Valid: true},
-		ResourceOwnerID: pgtype.Int8{Int64: user.ID, Valid: true},
-	})
+	resp, err := h.issueAccessToken(ctx, app, &user.ID, normalized, true)
 	if err != nil {
-		web.JSON(w, http.StatusInternalServerError, map[string]string{
-			"error": "server_error",
-		})
+		writeOAuthError(w, http.StatusInternalServerError, "server_error", "Failed to generate token")
 		return
 	}
 
-	expiresInInt := int(expiresIn)
-	web.JSON(w, http.StatusOK, TokenResponse{
-		AccessToken:  accessToken,
-		TokenType:    "Bearer",
-		Scope:        oauth.NormalizeScopes(scopes),
-		CreatedAt:    time.Now().Unix(),
-		ExpiresIn:    &expiresInInt,
-		RefreshToken: refreshToken,
-	})
+	web.JSON(w, http.StatusOK, resp)
 }
 
-func (h *Handler) handleRefreshToken(w http.ResponseWriter, r *http.Request, ctx context.Context, req TokenRequest) {
-	// Lookup token
+func (h *Handler) handleRefreshToken(w http.ResponseWriter, r *http.Request, req TokenRequest) {
+	if req.RefreshToken == "" {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "Missing refresh token")
+		return
+	}
+
+	ctx := r.Context()
 	oldToken, err := h.queries.GetOAuthAccessTokenByRefresh(ctx, pgtype.Text{String: req.RefreshToken, Valid: true})
 	if err != nil {
-		web.JSON(w, http.StatusUnauthorized, map[string]string{
-			"error":             "invalid_grant",
-			"error_description": "Invalid refresh token",
-		})
+		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "Invalid refresh token")
 		return
 	}
 
-	// Revoke old token
-	if err := h.queries.RevokeOAuthAccessToken(ctx, oldToken.Token); err != nil {
-		fmt.Printf("Failed to revoke old token: %v\n", err)
-	}
-
-	// Generate new tokens
-	accessToken, err := oauth.GenerateToken(32)
+	app, err := h.resolveTokenApplication(ctx, req, oldToken)
 	if err != nil {
-		web.JSON(w, http.StatusInternalServerError, map[string]string{
-			"error": "server_error",
-		})
+		writeOAuthError(w, http.StatusUnauthorized, "invalid_client", "Invalid client credentials")
 		return
 	}
 
-	refreshToken, err := oauth.GenerateToken(32)
+	var ownerID *int64
+	if oldToken.ResourceOwnerID.Valid {
+		user, err := h.queries.GetUserByID(ctx, oldToken.ResourceOwnerID.Int64)
+		if err != nil || user.Disabled || !user.Approved || !user.ConfirmedAt.Valid {
+			writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "Invalid refresh token")
+			return
+		}
+		ownerID = &user.ID
+	}
+
+	scope := strings.TrimSpace(oldToken.Scopes.String)
+	if scope == "" {
+		scope = oauth.DefaultScopes
+	}
+
+	resp, err := h.issueAccessToken(ctx, app, ownerID, scope, true)
 	if err != nil {
-		web.JSON(w, http.StatusInternalServerError, map[string]string{
-			"error": "server_error",
-		})
+		writeOAuthError(w, http.StatusInternalServerError, "server_error", "Failed to generate token")
 		return
 	}
 
-	expiresIn := int32(7200)
-	_, err = h.queries.CreateOAuthAccessToken(ctx, db.CreateOAuthAccessTokenParams{
-		Token:           accessToken,
-		RefreshToken:    pgtype.Text{String: refreshToken, Valid: true},
-		ExpiresIn:       pgtype.Int4{Int32: expiresIn, Valid: true},
-		Scopes:          oldToken.Scopes,
-		ApplicationID:   oldToken.ApplicationID,
-		ResourceOwnerID: oldToken.ResourceOwnerID,
-	})
-	if err != nil {
-		web.JSON(w, http.StatusInternalServerError, map[string]string{
-			"error": "server_error",
-		})
-		return
+	_ = h.queries.RevokeOAuthAccessToken(ctx, oldToken.Token)
+	if oldToken.ID != 0 {
+		_ = h.queries.DeletePushSubscription(ctx, pgtype.Int8{Int64: oldToken.ID, Valid: true})
 	}
-
-	scopes := ""
-	if oldToken.Scopes.Valid {
-		scopes = oldToken.Scopes.String
-	}
-
-	expiresInInt := int(expiresIn)
-	web.JSON(w, http.StatusOK, TokenResponse{
-		AccessToken:  accessToken,
-		TokenType:    "Bearer",
-		Scope:        scopes,
-		CreatedAt:    time.Now().Unix(),
-		ExpiresIn:    &expiresInInt,
-		RefreshToken: refreshToken,
-	})
+	web.JSON(w, http.StatusOK, resp)
 }
 
 // Revoke handles POST /oauth/revoke
@@ -306,28 +348,39 @@ func (h *Handler) Revoke(w http.ResponseWriter, r *http.Request) {
 		ClientSecret string `json:"client_secret" form:"client_secret"`
 	}
 	if err := web.Bind(r, &req); err != nil {
-		web.JSON(w, http.StatusBadRequest, map[string]string{
-			"error": "invalid_request",
-		})
+		_ = r.ParseForm()
+		req.Token = r.FormValue("token")
+		req.ClientID = r.FormValue("client_id")
+		req.ClientSecret = r.FormValue("client_secret")
+	}
+
+	if req.Token == "" {
+		web.JSON(w, http.StatusOK, map[string]any{})
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	// Verify client if provided
 	if req.ClientID != "" {
 		app, err := h.queries.GetOAuthApplicationByUID(ctx, req.ClientID)
-		if err != nil || app.Secret != req.ClientSecret {
-			web.JSON(w, http.StatusUnauthorized, map[string]string{
-				"error": "invalid_client",
-			})
+		if err != nil || (app.Confidential && !auth.SecureCompare(req.ClientSecret, app.Secret)) {
+			writeOAuthError(w, http.StatusUnauthorized, "invalid_client", "Invalid client credentials")
 			return
 		}
 	}
 
-	// Revoke the token
-	if err := h.queries.RevokeOAuthAccessToken(ctx, req.Token); err != nil {
-		fmt.Printf("Failed to revoke token: %v\n", err)
+	// Try access token, then refresh token.
+	if token, err := h.queries.GetOAuthAccessToken(ctx, req.Token); err == nil {
+		_ = h.queries.RevokeOAuthAccessToken(ctx, token.Token)
+		if token.ID != 0 {
+			_ = h.queries.DeletePushSubscription(ctx, pgtype.Int8{Int64: token.ID, Valid: true})
+		}
+	} else if token, err := h.queries.GetOAuthAccessTokenByRefresh(ctx, pgtype.Text{String: req.Token, Valid: true}); err == nil {
+		_ = h.queries.RevokeOAuthAccessToken(ctx, token.Token)
+		if token.ID != 0 {
+			_ = h.queries.DeletePushSubscription(ctx, pgtype.Int8{Int64: token.ID, Valid: true})
+		}
 	}
 
 	web.JSON(w, http.StatusOK, map[string]any{})
@@ -335,127 +388,207 @@ func (h *Handler) Revoke(w http.ResponseWriter, r *http.Request) {
 
 // Authorize handles GET /oauth/authorize
 func (h *Handler) Authorize(w http.ResponseWriter, r *http.Request) {
-	var req AuthorizeRequest
-	req.ResponseType = web.QueryParam(r, "response_type")
-	req.ClientID = web.QueryParam(r, "client_id")
-	req.RedirectURI = web.QueryParam(r, "redirect_uri")
-	req.Scope = web.QueryParam(r, "scope")
-	req.State = web.QueryParam(r, "state")
+	req := AuthorizeRequest{
+		ResponseType:        web.QueryParam(r, "response_type"),
+		ClientID:            web.QueryParam(r, "client_id"),
+		RedirectURI:         web.QueryParam(r, "redirect_uri"),
+		Scope:               web.QueryParam(r, "scope"),
+		State:               web.QueryParam(r, "state"),
+		CodeChallenge:       web.QueryParam(r, "code_challenge"),
+		CodeChallengeMethod: web.QueryParam(r, "code_challenge_method"),
+	}
 
-	// c.Bind mostly works for JSON/Form. For query params in struct, web.Bind might not support it directly if designed for Body.
-	// `web.Bind` implemented before uses JSON/Form.
-	// For GET, we parse query params manually as above.
-
-	ctx := context.Background()
-
-	// Validate client
-	_, err := h.queries.GetOAuthApplicationByUID(ctx, req.ClientID)
+	ctx := r.Context()
+	app, err := h.queries.GetOAuthApplicationByUID(ctx, req.ClientID)
 	if err != nil {
-		web.JSON(w, http.StatusBadRequest, map[string]string{
-			"error":             "invalid_client",
-			"error_description": "Unknown application",
-		})
+		writeOAuthError(w, http.StatusBadRequest, "invalid_client", "Unknown application")
 		return
 	}
 
-	// For now, return a simple HTML form (real implementation needs session handling)
-	html := `<!DOCTYPE html>
-<html>
-<head><title>Authorize</title></head>
-<body>
-<h1>Authorization Required</h1>
-<p>Application is requesting access to your account.</p>
-<form method="POST" action="/oauth/authorize">
-  <input type="hidden" name="client_id" value="` + req.ClientID + `">
-  <input type="hidden" name="redirect_uri" value="` + req.RedirectURI + `">
-  <input type="hidden" name="scope" value="` + req.Scope + `">
-  <input type="hidden" name="state" value="` + req.State + `">
-  <input type="hidden" name="response_type" value="` + req.ResponseType + `">
-  <input type="email" name="email" placeholder="Email" required>
-  <input type="password" name="password" placeholder="Password" required>
-  <button type="submit">Authorize</button>
-</form>
-</body>
-</html>`
+	redirectURI, err := selectRedirectURI(app.RedirectUri, req.RedirectURI)
+	if err != nil {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "Invalid redirect URI")
+		return
+	}
+
+	if req.ResponseType != "code" {
+		redirectWithError(w, r, redirectURI, "unsupported_response_type", "Unsupported response type", req.State)
+		return
+	}
+
+	scopes, normalized, err := normalizeScopes(req.Scope)
+	if err != nil {
+		redirectWithError(w, r, redirectURI, "invalid_scope", "The requested scope is invalid", req.State)
+		return
+	}
+	if err := h.ensureAppScopes(app, scopes); err != nil {
+		redirectWithError(w, r, redirectURI, "invalid_scope", "The requested scope is invalid", req.State)
+		return
+	}
+
+	if err := validateCodeChallenge(req.CodeChallenge, req.CodeChallengeMethod); err != nil {
+		redirectWithError(w, r, redirectURI, "invalid_request", "Unsupported code challenge method", req.State)
+		return
+	}
+
+	data := authorizeTemplateData{
+		AppName:             app.Name,
+		ClientID:            req.ClientID,
+		RedirectURI:         redirectURI,
+		ResponseType:        req.ResponseType,
+		Scope:               normalized,
+		ScopeLabel:          normalized,
+		State:               req.State,
+		CodeChallenge:       req.CodeChallenge,
+		CodeChallengeMethod: normalizedCodeChallengeMethod(req.CodeChallengeMethod),
+	}
 
 	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(html))
+	_ = authorizeTemplate.Execute(w, data)
 }
 
 // AuthorizePost handles POST /oauth/authorize
 func (h *Handler) AuthorizePost(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
 	clientID := r.FormValue("client_id")
 	redirectURI := r.FormValue("redirect_uri")
 	scope := r.FormValue("scope")
 	state := r.FormValue("state")
+	responseType := r.FormValue("response_type")
 	email := r.FormValue("email")
 	password := r.FormValue("password")
+	approve := r.FormValue("approve")
+	codeChallenge := r.FormValue("code_challenge")
+	codeChallengeMethod := r.FormValue("code_challenge_method")
 
-	ctx := context.Background()
-
-	// Validate client
+	ctx := r.Context()
 	app, err := h.queries.GetOAuthApplicationByUID(ctx, clientID)
 	if err != nil {
-		web.JSON(w, http.StatusBadRequest, map[string]string{
-			"error": "invalid_client",
-		})
+		writeOAuthError(w, http.StatusBadRequest, "invalid_client", "Unknown application")
 		return
 	}
 
-	// Authenticate user
-	user, err := h.queries.GetUserByEmail(ctx, email)
+	redirectURI, err = selectRedirectURI(app.RedirectUri, redirectURI)
 	if err != nil {
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte("Invalid credentials"))
+		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "Invalid redirect URI")
 		return
 	}
 
-	// Verify password (simplified)
-	if user.EncryptedPassword != password {
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte("Invalid credentials"))
+	if responseType != "code" {
+		redirectWithError(w, r, redirectURI, "unsupported_response_type", "Unsupported response type", state)
 		return
 	}
 
-	// Generate authorization code
+	scopes, normalized, err := normalizeScopes(scope)
+	if err != nil {
+		redirectWithError(w, r, redirectURI, "invalid_scope", "The requested scope is invalid", state)
+		return
+	}
+	if err := h.ensureAppScopes(app, scopes); err != nil {
+		redirectWithError(w, r, redirectURI, "invalid_scope", "The requested scope is invalid", state)
+		return
+	}
+
+	if err := validateCodeChallenge(codeChallenge, codeChallengeMethod); err != nil {
+		redirectWithError(w, r, redirectURI, "invalid_request", "Unsupported code challenge method", state)
+		return
+	}
+
+	if approve != "true" {
+		redirectWithError(w, r, redirectURI, "access_denied", "Authorization denied", state)
+		return
+	}
+
+	user, err := h.authenticateUser(ctx, email, password)
+	if err != nil {
+		writeOAuthError(w, http.StatusUnauthorized, "invalid_grant", "Invalid credentials")
+		return
+	}
+
 	code, err := oauth.GenerateToken(32)
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte("Server error"))
+		writeOAuthError(w, http.StatusInternalServerError, "server_error", "Failed to generate authorization code")
 		return
 	}
 
-	// Store the code temporarily (in production, use a proper store)
-	// For now, generate a token directly
-	accessToken, err := oauth.GenerateToken(32)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte("Server error"))
-		return
+	expiresIn := int32(authorizationCodeTTL.Seconds())
+	scopeValue := pgtype.Text{String: normalized, Valid: true}
+	codeChallengeValue := pgtype.Text{Valid: false}
+	codeChallengeMethodValue := pgtype.Text{Valid: false}
+	if strings.TrimSpace(codeChallenge) != "" {
+		codeChallengeValue = pgtype.Text{String: codeChallenge, Valid: true}
+		codeChallengeMethodValue = pgtype.Text{String: normalizedCodeChallengeMethod(codeChallengeMethod), Valid: true}
 	}
 
-	scopes := oauth.ParseScopes(scope)
-	_, err = h.queries.CreateOAuthAccessToken(ctx, db.CreateOAuthAccessTokenParams{
-		Token:           accessToken,
-		Scopes:          pgtype.Text{String: oauth.NormalizeScopes(scopes), Valid: true},
-		ApplicationID:   pgtype.Int8{Int64: app.ID, Valid: true},
-		ResourceOwnerID: pgtype.Int8{Int64: user.ID, Valid: true},
+	_, err = h.queries.CreateOAuthAccessGrant(ctx, db.CreateOAuthAccessGrantParams{
+		Token:               code,
+		ExpiresIn:           expiresIn,
+		RedirectUri:         redirectURI,
+		Scopes:              scopeValue,
+		ApplicationID:       app.ID,
+		ResourceOwnerID:     user.ID,
+		CodeChallenge:       codeChallengeValue,
+		CodeChallengeMethod: codeChallengeMethodValue,
 	})
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte("Server error"))
+		writeOAuthError(w, http.StatusInternalServerError, "server_error", "Failed to store authorization code")
 		return
 	}
 
-	// Redirect with code (in production, this would be a proper code exchange)
-	_ = code
-	redirect := redirectURI + "?code=" + accessToken
-	if state != "" {
-		redirect += "&state=" + state
+	redirectWithCode(w, r, redirectURI, code, state)
+}
+
+// Userinfo handles GET/POST /oauth/userinfo
+func (h *Handler) Userinfo(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+	scopes := middleware.GetScopes(r.Context())
+	if scopes == "" || !oauth.HasScope(scopes, "profile") {
+		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
+		return
 	}
 
-	http.Redirect(w, r, redirect, http.StatusFound)
+	ctx := r.Context()
+	dbAcc, err := h.queries.GetAccountByID(ctx, accountID)
+	if err != nil {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	acc := apiv1.SerializeAccount(h.cfg, dbAcc)
+	web.JSON(w, http.StatusOK, map[string]any{
+		"iss":                h.issuer(),
+		"sub":                acc.URI,
+		"name":               acc.DisplayName,
+		"preferred_username": acc.Username,
+		"profile":            acc.URL,
+		"picture":            acc.Avatar,
+	})
+}
+
+// Metadata handles GET /.well-known/oauth-authorization-server
+func (h *Handler) Metadata(w http.ResponseWriter, r *http.Request) {
+	base := h.baseURL()
+	resp := oauthMetadataResponse{
+		Issuer:                            h.issuer(),
+		AuthorizationEndpoint:             base + "/oauth/authorize",
+		TokenEndpoint:                     base + "/oauth/token",
+		RevocationEndpoint:                base + "/oauth/revoke",
+		UserinfoEndpoint:                  base + "/oauth/userinfo",
+		ScopesSupported:                   oauth.SupportedScopes(),
+		ResponseTypesSupported:            []string{"code"},
+		ResponseModesSupported:            []string{"query"},
+		GrantTypesSupported:               []string{"authorization_code", "client_credentials", "refresh_token"},
+		TokenEndpointAuthMethodsSupported: []string{"client_secret_basic", "client_secret_post"},
+		CodeChallengeMethodsSupported:     []string{pkceMethodS256},
+		ServiceDocumentation:              "https://docs.joinmastodon.org/",
+		AppRegistrationEndpoint:           base + "/api/v1/apps",
+	}
+	web.JSON(w, http.StatusOK, resp)
 }
 
 // VerifyCredentials validates the current token and returns app info
@@ -471,7 +604,7 @@ func (h *Handler) VerifyCredentials(w http.ResponseWriter, r *http.Request) {
 		token = token[7:]
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	dbToken, err := h.queries.GetOAuthAccessToken(ctx, token)
 	if err != nil {
@@ -514,5 +647,338 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /oauth/revoke", h.Revoke)
 	mux.HandleFunc("GET /oauth/authorize", h.Authorize)
 	mux.HandleFunc("POST /oauth/authorize", h.AuthorizePost)
+	mux.HandleFunc("GET /oauth/userinfo", h.Userinfo)
+	mux.HandleFunc("POST /oauth/userinfo", h.Userinfo)
+	mux.HandleFunc("GET /.well-known/oauth-authorization-server", h.Metadata)
 	// VerifyCredentials is usually unused in standard OAuth flow but kept for API
+}
+
+func bindTokenRequest(r *http.Request) (TokenRequest, error) {
+	var req TokenRequest
+	contentType := strings.ToLower(r.Header.Get("Content-Type"))
+
+	if strings.HasPrefix(contentType, "application/json") {
+		if err := web.Bind(r, &req); err != nil {
+			return req, err
+		}
+	} else {
+		if err := r.ParseForm(); err != nil {
+			return req, err
+		}
+		req.GrantType = r.FormValue("grant_type")
+		req.Code = r.FormValue("code")
+		req.ClientID = r.FormValue("client_id")
+		req.ClientSecret = r.FormValue("client_secret")
+		req.RedirectURI = r.FormValue("redirect_uri")
+		req.Scope = r.FormValue("scope")
+		req.Username = r.FormValue("username")
+		req.Password = r.FormValue("password")
+		req.RefreshToken = r.FormValue("refresh_token")
+		req.CodeVerifier = r.FormValue("code_verifier")
+	}
+
+	if req.ClientID == "" || req.ClientSecret == "" {
+		if id, secret, ok := r.BasicAuth(); ok {
+			if req.ClientID == "" {
+				req.ClientID = id
+			}
+			if req.ClientSecret == "" {
+				req.ClientSecret = secret
+			}
+		}
+	}
+
+	return req, nil
+}
+
+func (h *Handler) validateClient(ctx context.Context, clientID, clientSecret string) (db.OauthApplication, error) {
+	if strings.TrimSpace(clientID) == "" {
+		return db.OauthApplication{}, errors.New("missing client_id")
+	}
+
+	app, err := h.queries.GetOAuthApplicationByUID(ctx, clientID)
+	if err != nil {
+		return db.OauthApplication{}, err
+	}
+	if app.Confidential && !auth.SecureCompare(clientSecret, app.Secret) {
+		return db.OauthApplication{}, errors.New("invalid client_secret")
+	}
+	return app, nil
+}
+
+func (h *Handler) ensureAppScopes(app db.OauthApplication, scopes []string) error {
+	appScopes := strings.TrimSpace(app.Scopes)
+	if appScopes == "" {
+		return nil
+	}
+	for _, scope := range scopes {
+		if !oauth.HasScope(appScopes, scope) {
+			return oauth.ErrInvalidScope
+		}
+	}
+	return nil
+}
+
+func normalizeScopes(scopeStr string) ([]string, string, error) {
+	scopes := oauth.ParseScopes(scopeStr)
+	if err := oauth.ValidateScopes(scopes); err != nil {
+		return nil, "", err
+	}
+	return scopes, oauth.NormalizeScopes(scopes), nil
+}
+
+func (h *Handler) authenticateUser(ctx context.Context, email, password string) (db.User, error) {
+	user, err := h.queries.GetUserByEmail(ctx, email)
+	if err != nil {
+		return db.User{}, err
+	}
+	if user.Disabled || !user.Approved || !user.ConfirmedAt.Valid {
+		return db.User{}, errors.New("user not eligible")
+	}
+	if !auth.CheckPassword(password, user.EncryptedPassword) {
+		return db.User{}, errors.New("invalid password")
+	}
+	return user, nil
+}
+
+func (h *Handler) issueAccessToken(ctx context.Context, app db.OauthApplication, ownerID *int64, scopes string, withRefresh bool) (TokenResponse, error) {
+	accessToken, err := oauth.GenerateToken(32)
+	if err != nil {
+		return TokenResponse{}, err
+	}
+
+	var refreshToken pgtype.Text
+	var refreshTokenValue string
+	if withRefresh {
+		refreshTokenValue, err = oauth.GenerateToken(32)
+		if err != nil {
+			return TokenResponse{}, err
+		}
+		refreshToken = pgtype.Text{String: refreshTokenValue, Valid: true}
+	}
+
+	var resourceOwner pgtype.Int8
+	if ownerID != nil {
+		resourceOwner = pgtype.Int8{Int64: *ownerID, Valid: true}
+	}
+
+	scopeValue := pgtype.Text{String: scopes, Valid: true}
+	expiresIn := pgtype.Int4{Valid: false}
+
+	_, err = h.queries.CreateOAuthAccessToken(ctx, db.CreateOAuthAccessTokenParams{
+		Token:           accessToken,
+		RefreshToken:    refreshToken,
+		ExpiresIn:       expiresIn,
+		Scopes:          scopeValue,
+		ApplicationID:   pgtype.Int8{Int64: app.ID, Valid: true},
+		ResourceOwnerID: resourceOwner,
+	})
+	if err != nil {
+		return TokenResponse{}, err
+	}
+
+	resp := TokenResponse{
+		AccessToken: accessToken,
+		TokenType:   "Bearer",
+		Scope:       scopes,
+		CreatedAt:   time.Now().Unix(),
+	}
+	if refreshToken.Valid {
+		resp.RefreshToken = refreshTokenValue
+	}
+	return resp, nil
+}
+
+func (h *Handler) resolveTokenApplication(ctx context.Context, req TokenRequest, token db.OauthAccessToken) (db.OauthApplication, error) {
+	if req.ClientID != "" {
+		app, err := h.validateClient(ctx, req.ClientID, req.ClientSecret)
+		if err != nil {
+			return db.OauthApplication{}, err
+		}
+		if !token.ApplicationID.Valid || token.ApplicationID.Int64 != app.ID {
+			return db.OauthApplication{}, errors.New("client mismatch")
+		}
+		return app, nil
+	}
+
+	if !token.ApplicationID.Valid {
+		return db.OauthApplication{}, errors.New("missing client")
+	}
+
+	app, err := h.queries.GetOAuthApplication(ctx, token.ApplicationID.Int64)
+	if err != nil {
+		return db.OauthApplication{}, err
+	}
+	if app.Confidential {
+		return db.OauthApplication{}, errors.New("client credentials required")
+	}
+	return app, nil
+}
+
+func selectRedirectURI(registered, requested string) (string, error) {
+	allowed := splitRedirectURIs(registered)
+	if len(allowed) == 0 {
+		return "", errors.New("no redirect URIs registered")
+	}
+
+	if strings.TrimSpace(requested) == "" {
+		if len(allowed) == 1 {
+			return allowed[0], nil
+		}
+		return "", errors.New("redirect_uri required")
+	}
+
+	for _, uri := range allowed {
+		if uri == requested {
+			return uri, nil
+		}
+	}
+	return "", errors.New("redirect_uri mismatch")
+}
+
+func splitRedirectURIs(raw string) []string {
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		switch r {
+		case '\n', '\r', '\t', ' ':
+			return true
+		default:
+			return false
+		}
+	})
+	uris := make([]string, 0, len(fields))
+	for _, field := range fields {
+		trimmed := strings.TrimSpace(field)
+		if trimmed != "" {
+			uris = append(uris, trimmed)
+		}
+	}
+	return uris
+}
+
+func redirectWithCode(w http.ResponseWriter, r *http.Request, redirectURI, code, state string) {
+	redirectWithQuery(w, r, redirectURI, map[string]string{
+		"code":  code,
+		"state": state,
+	})
+}
+
+func redirectWithError(w http.ResponseWriter, r *http.Request, redirectURI, code, description, state string) {
+	values := map[string]string{
+		"error":             code,
+		"error_description": description,
+		"state":             state,
+	}
+	redirectWithQuery(w, r, redirectURI, values)
+}
+
+func redirectWithQuery(w http.ResponseWriter, r *http.Request, redirectURI string, values map[string]string) {
+	target, err := url.Parse(redirectURI)
+	if err != nil {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "Invalid redirect URI")
+		return
+	}
+	q := target.Query()
+	for key, value := range values {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		q.Set(key, value)
+	}
+	target.RawQuery = q.Encode()
+	http.Redirect(w, r, target.String(), http.StatusFound)
+}
+
+func writeOAuthError(w http.ResponseWriter, status int, code, description string) {
+	resp := map[string]string{
+		"error": code,
+	}
+	if strings.TrimSpace(description) != "" {
+		resp["error_description"] = description
+	}
+	web.JSON(w, status, resp)
+}
+
+func validateCodeChallenge(challenge, method string) error {
+	if strings.TrimSpace(challenge) == "" {
+		return nil
+	}
+	if strings.TrimSpace(method) == "" {
+		return errors.New("code_challenge_method required")
+	}
+	if normalizedCodeChallengeMethod(method) != pkceMethodS256 {
+		return errors.New("unsupported code_challenge_method")
+	}
+	return nil
+}
+
+func normalizedCodeChallengeMethod(method string) string {
+	return strings.TrimSpace(method)
+}
+
+func verifyPKCE(grant db.OauthAccessGrant, codeVerifier string) error {
+	if !grant.CodeChallenge.Valid || strings.TrimSpace(grant.CodeChallenge.String) == "" {
+		return nil
+	}
+
+	if !validCodeVerifier(codeVerifier) {
+		return errors.New("invalid code verifier")
+	}
+
+	method := normalizedCodeChallengeMethod(grant.CodeChallengeMethod.String)
+	if method != pkceMethodS256 {
+		return errors.New("unsupported code challenge method")
+	}
+
+	hash := sha256.Sum256([]byte(codeVerifier))
+	expected := base64.RawURLEncoding.EncodeToString(hash[:])
+	if !auth.SecureCompare(expected, grant.CodeChallenge.String) {
+		return errors.New("invalid code verifier")
+	}
+	return nil
+}
+
+func validCodeVerifier(codeVerifier string) bool {
+	if len(codeVerifier) < 43 || len(codeVerifier) > 128 {
+		return false
+	}
+	for _, r := range codeVerifier {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '-' || r == '.' || r == '_' || r == '~':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func (h *Handler) issuer() string {
+	domain := h.publicDomain()
+	if domain == "" {
+		return ""
+	}
+	return "https://" + domain + "/"
+}
+
+func (h *Handler) baseURL() string {
+	domain := h.publicDomain()
+	if domain == "" {
+		return ""
+	}
+	return "https://" + domain
+}
+
+func (h *Handler) publicDomain() string {
+	if h.cfg == nil {
+		return "localhost:3000"
+	}
+	if strings.TrimSpace(h.cfg.Instance.WebDomain) != "" {
+		return h.cfg.Instance.WebDomain
+	}
+	if strings.TrimSpace(h.cfg.Instance.LocalDomain) != "" {
+		return h.cfg.Instance.LocalDomain
+	}
+	return "localhost:3000"
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -1326,20 +1327,10 @@ func (h *FiltersHandler) DeleteStatus(w http.ResponseWriter, r *http.Request) {
 func (h *FiltersHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v2/filters", h.List)
 	mux.HandleFunc("POST /api/v2/filters", h.Create)
-	mux.HandleFunc("GET /api/v2/filters/{id}", h.Get)
-	mux.HandleFunc("PUT /api/v2/filters/{id}", h.Update)
-	mux.HandleFunc("DELETE /api/v2/filters/{id}", h.Delete)
-	mux.HandleFunc("GET /api/v2/filters/{filter_id}/keywords", h.ListKeywords)
-	mux.HandleFunc("GET /api/v2/filters/{filter_id}/keywords/{id}", h.GetKeyword)
-	mux.HandleFunc("POST /api/v2/filters/{filter_id}/keywords", h.CreateKeyword)
-	mux.HandleFunc("DELETE /api/v2/filters/{filter_id}/keywords/{id}", h.DeleteKeyword)
-	mux.HandleFunc("GET /api/v2/filters/keywords/{id}", h.GetKeywordByID)
-	mux.HandleFunc("PUT /api/v2/filters/keywords/{id}", h.UpdateKeywordByID)
-	mux.HandleFunc("DELETE /api/v2/filters/keywords/{id}", h.DeleteKeywordByID)
-	mux.HandleFunc("GET /api/v2/filters/{filter_id}/statuses", h.ListStatuses)
-	mux.HandleFunc("POST /api/v2/filters/{filter_id}/statuses", h.CreateStatus)
-	mux.HandleFunc("GET /api/v2/filters/statuses/{id}", h.GetStatus)
-	mux.HandleFunc("DELETE /api/v2/filters/statuses/{id}", h.DeleteStatus)
+	mux.HandleFunc("GET /api/v2/filters/", h.dispatchGet)
+	mux.HandleFunc("POST /api/v2/filters/", h.dispatchPost)
+	mux.HandleFunc("PUT /api/v2/filters/", h.dispatchPut)
+	mux.HandleFunc("DELETE /api/v2/filters/", h.dispatchDelete)
 }
 
 func (h *FiltersHandler) publishFiltersChanged(ctx context.Context, accountID int64) {
@@ -1347,4 +1338,148 @@ func (h *FiltersHandler) publishFiltersChanged(ctx context.Context, accountID in
 		return
 	}
 	_ = h.publisher.PublishEventToRedis(ctx, streaming.EventFiltersChanged, "", []string{streaming.UserStreamKey(accountID)})
+}
+
+func (h *FiltersHandler) dispatchGet(w http.ResponseWriter, r *http.Request) {
+	segments := filterSubpathSegments(r.URL.Path)
+	if segments == nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+	if len(segments) == 0 {
+		h.List(w, r)
+		return
+	}
+
+	switch segments[0] {
+	case "keywords":
+		if len(segments) == 2 {
+			r.SetPathValue("id", segments[1])
+			h.GetKeywordByID(w, r)
+			return
+		}
+	case "statuses":
+		if len(segments) == 2 {
+			r.SetPathValue("id", segments[1])
+			h.GetStatus(w, r)
+			return
+		}
+	default:
+		if len(segments) == 1 {
+			r.SetPathValue("id", segments[0])
+			h.Get(w, r)
+			return
+		}
+		if len(segments) == 2 {
+			if segments[1] == "keywords" {
+				r.SetPathValue("filter_id", segments[0])
+				h.ListKeywords(w, r)
+				return
+			}
+			if segments[1] == "statuses" {
+				r.SetPathValue("filter_id", segments[0])
+				h.ListStatuses(w, r)
+				return
+			}
+		}
+		if len(segments) == 3 && segments[1] == "keywords" {
+			r.SetPathValue("filter_id", segments[0])
+			r.SetPathValue("id", segments[2])
+			h.GetKeyword(w, r)
+			return
+		}
+	}
+
+	web.JSONError(w, http.StatusNotFound, "Record not found")
+}
+
+func (h *FiltersHandler) dispatchPost(w http.ResponseWriter, r *http.Request) {
+	segments := filterSubpathSegments(r.URL.Path)
+	if segments == nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+	if len(segments) == 0 {
+		h.Create(w, r)
+		return
+	}
+	if len(segments) == 2 && segments[1] == "keywords" {
+		r.SetPathValue("filter_id", segments[0])
+		h.CreateKeyword(w, r)
+		return
+	}
+	if len(segments) == 2 && segments[1] == "statuses" {
+		r.SetPathValue("filter_id", segments[0])
+		h.CreateStatus(w, r)
+		return
+	}
+
+	web.JSONError(w, http.StatusNotFound, "Record not found")
+}
+
+func (h *FiltersHandler) dispatchPut(w http.ResponseWriter, r *http.Request) {
+	segments := filterSubpathSegments(r.URL.Path)
+	if segments == nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+	if len(segments) == 1 {
+		r.SetPathValue("id", segments[0])
+		h.Update(w, r)
+		return
+	}
+	if len(segments) == 2 && segments[0] == "keywords" {
+		r.SetPathValue("id", segments[1])
+		h.UpdateKeywordByID(w, r)
+		return
+	}
+
+	web.JSONError(w, http.StatusNotFound, "Record not found")
+}
+
+func (h *FiltersHandler) dispatchDelete(w http.ResponseWriter, r *http.Request) {
+	segments := filterSubpathSegments(r.URL.Path)
+	if segments == nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+	if len(segments) == 1 {
+		r.SetPathValue("id", segments[0])
+		h.Delete(w, r)
+		return
+	}
+	if len(segments) == 2 && segments[0] == "keywords" {
+		r.SetPathValue("id", segments[1])
+		h.DeleteKeywordByID(w, r)
+		return
+	}
+	if len(segments) == 2 && segments[0] == "statuses" {
+		r.SetPathValue("id", segments[1])
+		h.DeleteStatus(w, r)
+		return
+	}
+	if len(segments) == 3 && segments[1] == "keywords" {
+		r.SetPathValue("filter_id", segments[0])
+		r.SetPathValue("id", segments[2])
+		h.DeleteKeyword(w, r)
+		return
+	}
+
+	web.JSONError(w, http.StatusNotFound, "Record not found")
+}
+
+func filterSubpathSegments(fullPath string) []string {
+	const prefix = "/api/v2/filters/"
+	if fullPath == "/api/v2/filters" {
+		return []string{}
+	}
+	if !strings.HasPrefix(fullPath, prefix) {
+		return nil
+	}
+	rest := strings.TrimPrefix(fullPath, prefix)
+	rest = strings.Trim(rest, "/")
+	if rest == "" {
+		return []string{}
+	}
+	return strings.Split(rest, "/")
 }
