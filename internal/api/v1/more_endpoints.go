@@ -2,6 +2,7 @@
 package v1
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,7 +11,9 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -19,6 +22,7 @@ import (
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/federation"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 // FollowRequestsHandler handles follow request endpoints
@@ -458,6 +462,39 @@ func (h *ScheduledStatusesHandler) useDB() bool {
 	return h.queries != nil
 }
 
+func (h *ScheduledStatusesHandler) validateScheduledStatusLimits(ctx context.Context, accountID int64, scheduledAt time.Time) error {
+	if !h.useDB() || h.queries == nil {
+		return statusCreateError{Status: http.StatusInternalServerError, Message: "Database queries not available"}
+	}
+	if scheduledAt.Before(time.Now().UTC()) {
+		return nil
+	}
+	total, err := h.queries.CountScheduledStatusesByAccount(ctx, accountID)
+	if err != nil {
+		return statusCreateError{Status: http.StatusInternalServerError, Message: "Failed to check scheduled status limits"}
+	}
+	if total >= scheduledStatusTotalLimit {
+		return statusCreateError{
+			Status:  http.StatusUnprocessableEntity,
+			Message: fmt.Sprintf("Validation failed: You can only have %d scheduled statuses", scheduledStatusTotalLimit),
+		}
+	}
+	daily, err := h.queries.CountScheduledStatusesByAccountAndDate(ctx, db.CountScheduledStatusesByAccountAndDateParams{
+		AccountID: accountID,
+		Column2:   pgtype.Date{Time: scheduledAt, Valid: true},
+	})
+	if err != nil {
+		return statusCreateError{Status: http.StatusInternalServerError, Message: "Failed to check scheduled status limits"}
+	}
+	if daily >= scheduledStatusDailyLimit {
+		return statusCreateError{
+			Status:  http.StatusUnprocessableEntity,
+			Message: fmt.Sprintf("Validation failed: You can only have %d scheduled statuses per day", scheduledStatusDailyLimit),
+		}
+	}
+	return nil
+}
+
 // List handles GET /api/v1/scheduled_statuses
 func (h *ScheduledStatusesHandler) List(w http.ResponseWriter, r *http.Request) {
 	accountID, ok := middleware.GetAccountID(r.Context())
@@ -534,13 +571,88 @@ func (h *ScheduledStatusesHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 // Update handles PUT /api/v1/scheduled_statuses/:id
 func (h *ScheduledStatusesHandler) Update(w http.ResponseWriter, r *http.Request) {
-	_, ok := middleware.GetAccountID(r.Context())
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
 		return
 	}
 
-	web.JSONError(w, http.StatusNotFound, "Record not found")
+	scopes := middleware.GetScopes(r.Context())
+	if !oauth.HasScope(scopes, "write:statuses") {
+		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
+		return
+	}
+
+	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	if !h.useDB() {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	ctx := r.Context()
+	if _, err := h.queries.GetScheduledStatus(ctx, db.GetScheduledStatusParams{
+		ID:        id,
+		AccountID: accountID,
+	}); err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	var req struct {
+		ScheduledAt *string `json:"scheduled_at" form:"scheduled_at"`
+	}
+	if err := web.Bind(r, &req); err != nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request")
+		return
+	}
+
+	parsedScheduledAt, err := parseScheduledAt(req.ScheduledAt)
+	if err != nil || parsedScheduledAt == nil {
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Scheduled at is invalid")
+		return
+	}
+
+	now := time.Now().UTC()
+	if !parsedScheduledAt.After(now) {
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Scheduled status must be in the future")
+		return
+	}
+	if !parsedScheduledAt.After(now.Add(scheduledStatusMinOffset)) {
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Scheduled status must be at least 5 minutes in the future")
+		return
+	}
+
+	if err := h.validateScheduledStatusLimits(ctx, accountID, *parsedScheduledAt); err != nil {
+		var createErr statusCreateError
+		if errors.As(err, &createErr) {
+			web.JSONError(w, createErr.Status, createErr.Message)
+			return
+		}
+		web.JSONError(w, http.StatusInternalServerError, "Failed to update scheduled status")
+		return
+	}
+
+	updated, err := h.queries.UpdateScheduledStatus(ctx, db.UpdateScheduledStatusParams{
+		ID:          id,
+		AccountID:   accountID,
+		ScheduledAt: pgtype.Timestamptz{Time: *parsedScheduledAt, Valid: true},
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+		web.JSONError(w, http.StatusInternalServerError, "Failed to update scheduled status")
+		return
+	}
+
+	mediaMap := scheduledStatusMediaAttachments(ctx, h.queries, []int64{updated.ID})
+	web.JSON(w, http.StatusOK, serializeScheduledStatus(updated, mediaMap[updated.ID]))
 }
 
 // Delete handles DELETE /api/v1/scheduled_statuses/:id
