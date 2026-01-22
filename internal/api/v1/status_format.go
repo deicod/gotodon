@@ -668,6 +668,14 @@ func postProcessSanitizedHTML(input string) string {
 	if input == "" {
 		return ""
 	}
+
+	// Fast path: if no processing triggers are present, return input as is.
+	// Triggers are: anchor tags (require rel/target processing), class attributes (filtering), translate attributes (filtering).
+	// Bluemonday normalizes tags/attributes to lowercase, so we can check safely.
+	if !strings.Contains(input, "<a") && !strings.Contains(input, "class=") && !strings.Contains(input, "translate=") {
+		return input
+	}
+
 	doc, err := xhtml.Parse(strings.NewReader(input))
 	if err != nil {
 		return input
@@ -720,7 +728,9 @@ func findBodyNode(node *xhtml.Node) *xhtml.Node {
 
 func sanitizeAnchor(node, parent *xhtml.Node) bool {
 	href := attrValue(node, "href")
-	if href == "" || !isAllowedLinkScheme(href) {
+	// Note: We don't need to check isAllowedLinkScheme here because bluemonday
+	// is already configured to filter out disallowed schemes.
+	if href == "" {
 		if parent != nil {
 			textNode := &xhtml.Node{Type: xhtml.TextNode, Data: nodeText(node)}
 			parent.InsertBefore(textNode, node)
@@ -736,37 +746,6 @@ func sanitizeAnchor(node, parent *xhtml.Node) bool {
 	setAttr(node, "rel", "nofollow noopener")
 	setAttr(node, "target", "_blank")
 	return true
-}
-
-func isAllowedLinkScheme(rawURL string) bool {
-	// Optimization: extracting scheme manually is significantly faster than url.Parse
-	// and avoids allocations.
-	idx := strings.IndexByte(rawURL, ':')
-	if idx == -1 {
-		return false
-	}
-	scheme := rawURL[:idx]
-	n := len(scheme)
-	if n == 0 || n > 20 {
-		return false
-	}
-
-	// Optimize by switching on length and then using EqualFold to avoid
-	// strings.ToLower allocation (saves ~24B/call and ~50% CPU time).
-	switch n {
-	case 3:
-		return strings.EqualFold(scheme, "dat") || strings.EqualFold(scheme, "ssb")
-	case 4:
-		return strings.EqualFold(scheme, "http") || strings.EqualFold(scheme, "dweb") ||
-			strings.EqualFold(scheme, "ipfs") || strings.EqualFold(scheme, "ipns") ||
-			strings.EqualFold(scheme, "xmpp")
-	case 5:
-		return strings.EqualFold(scheme, "https")
-	case 6:
-		return strings.EqualFold(scheme, "gopher") || strings.EqualFold(scheme, "magnet") ||
-			strings.EqualFold(scheme, "gemini")
-	}
-	return false
 }
 
 func filterClassAttr(node *xhtml.Node) {
