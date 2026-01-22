@@ -126,3 +126,16 @@ func TestFormatStatusContent_RemoteSanitizes(t *testing.T) {
 		t.Fatalf("expected link text to remain, got %q", got)
 	}
 }
+
+func TestFormatStatusContent_RemoteSanitizes_FastPath(t *testing.T) {
+	// This test exercises the fast path (no links/classes/translate).
+	status := db.Status{
+		Text:  `<p>Hello world</p>`,
+		Local: pgtype.Bool{Bool: false, Valid: true},
+	}
+	got := formatStatusContent(nil, status, statusContentOptions{})
+	want := `<p>Hello world</p>`
+	if got != want {
+		t.Fatalf("formatStatusContent = %q, want %q", got, want)
+	}
+}
