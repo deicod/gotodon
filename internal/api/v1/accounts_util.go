@@ -486,8 +486,7 @@ func formatAccountNote(cfg *config.Config, dbAcc db.Account, author Account, men
 		return sanitizeStatusHTML(note)
 	}
 	opts := statusContentOptions{author: &author, mentions: mentions}
-	html := linkifyTextWithOptions(cfg, note, opts, false, false)
-	return simpleFormatHTML(html)
+	return linkifyAndFormatText(cfg, note, opts)
 }
 
 func buildCredentialAccount(ctx context.Context, q accountCredentialQueries, cfg *config.Config, dbAcc db.Account) CredentialAccount {

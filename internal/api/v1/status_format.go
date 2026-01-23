@@ -38,10 +38,7 @@ func formatStatusText(cfg *config.Config, local bool, text string, opts statusCo
 	if !local {
 		return sanitizeStatusHTML(text)
 	}
-	html := linkifyStatusText(cfg, text, opts)
-	html = simpleFormatHTML(html)
-	html = addQuoteFallback(html, opts.quote)
-	return html
+	return linkifyAndFormatText(cfg, text, opts)
 }
 
 type entityKind int
@@ -65,12 +62,147 @@ var (
 	statusHashtagRegex = regexp.MustCompile(`(?i)[#\x{FF03}][\p{L}\p{N}_\x{00B7}\x{30FB}\x{200C}]+`)
 )
 
-func linkifyStatusText(cfg *config.Config, text string, opts statusContentOptions) string {
-	return linkifyTextWithOptions(cfg, text, opts, false, false)
-}
-
 func linkifyAccountFieldText(cfg *config.Config, text string, opts statusContentOptions) string {
 	return linkifyTextWithOptions(cfg, text, opts, true, true)
+}
+
+func linkifyAndFormatText(cfg *config.Config, text string, opts statusContentOptions) string {
+	if text == "" {
+		return ""
+	}
+
+	// Calculate quote fallback
+	quoteFallback := ""
+	if opts.quote != nil {
+		quoteURL := ""
+		if opts.quote.URL != nil && strings.TrimSpace(*opts.quote.URL) != "" {
+			quoteURL = strings.TrimSpace(*opts.quote.URL)
+		} else if strings.TrimSpace(opts.quote.URI) != "" {
+			quoteURL = strings.TrimSpace(opts.quote.URI)
+		}
+
+		// If quoteURL is present in text, we don't need fallback
+		if quoteURL != "" && !strings.Contains(text, quoteURL) {
+			quoteFallback = `<p class="quote-inline">RE: ` + shortenedLink(quoteURL, false) + `</p>`
+		}
+	}
+
+	entities := extractTextEntities(text)
+
+	hasMentions := false
+	for _, e := range entities {
+		if e.kind == entityMention {
+			hasMentions = true
+			break
+		}
+	}
+
+	var mentionLookup map[string]mentionAccount
+	var usernameDomains map[string]map[string]struct{}
+	if hasMentions {
+		mentionLookup, usernameDomains = buildMentionLookup(opts.author, opts.mentions, cfg)
+	}
+
+	var b strings.Builder
+	// Estimate growth: text + 20% + entities * 40 + quote fallback + tags
+	b.Grow(len(text) + len(text)/5 + len(entities)*40 + len(quoteFallback) + 16)
+
+	b.WriteString(quoteFallback)
+	b.WriteString("<p>")
+
+	last := 0
+	for _, entity := range entities {
+		if entity.start > last {
+			// Process text gap for newlines and escaping
+			writeFormattedText(&b, text[last:entity.start])
+		}
+
+		// Process entity
+		switch entity.kind {
+		case entityURL:
+			writeShortenedLink(&b, entity.value, false)
+		case entityMention:
+			writeMention(&b, entity.value, mentionLookup, usernameDomains, cfg, false)
+		case entityHashtag:
+			writeHashtag(&b, cfg, entity.value)
+		}
+		last = entity.end
+	}
+	if last < len(text) {
+		writeFormattedText(&b, text[last:])
+	}
+
+	b.WriteString("</p>")
+	return b.String()
+}
+
+func writeFormattedText(b *strings.Builder, s string) {
+	start := 0
+	n := len(s)
+	i := 0
+	for i < n {
+		c := s[i]
+		switch c {
+		case '\r', '\n':
+			if i > start {
+				b.WriteString(s[start:i])
+			}
+
+			// Handle newlines
+			newlines := 0
+			j := i
+			for j < n {
+				c2 := s[j]
+				if c2 == '\r' {
+					newlines++
+					j++
+					if j < n && s[j] == '\n' {
+						j++
+					}
+				} else if c2 == '\n' {
+					newlines++
+					j++
+				} else {
+					break
+				}
+			}
+
+			if newlines >= 2 {
+				b.WriteString("</p><p>")
+			} else {
+				b.WriteString("<br />")
+			}
+
+			start = j
+			i = j
+			continue // Skip i++
+
+		case '"':
+			b.WriteString(s[start:i])
+			b.WriteString("&#34;")
+			start = i + 1
+		case '&':
+			b.WriteString(s[start:i])
+			b.WriteString("&amp;")
+			start = i + 1
+		case '\'':
+			b.WriteString(s[start:i])
+			b.WriteString("&#39;")
+			start = i + 1
+		case '<':
+			b.WriteString(s[start:i])
+			b.WriteString("&lt;")
+			start = i + 1
+		case '>':
+			b.WriteString(s[start:i])
+			b.WriteString("&gt;")
+			start = i + 1
+		}
+		i++
+	}
+	if start < n {
+		b.WriteString(s[start:])
+	}
 }
 
 func linkifyTextWithOptions(cfg *config.Config, text string, opts statusContentOptions, withRelMe, withDomains bool) string {
@@ -552,85 +684,6 @@ func writeEscapeString(b *strings.Builder, s string) {
 		start = i + 1
 	}
 	b.WriteString(s[start:])
-}
-
-func simpleFormatHTML(html string) string {
-	if html == "" {
-		return ""
-	}
-
-	var b strings.Builder
-	// Estimate growth: original length + roughly 5% overhead for tags
-	b.Grow(len(html) + len(html)/20 + 16)
-
-	b.WriteString("<p>")
-
-	n := len(html)
-	start := 0
-	i := 0
-
-	for i < n {
-		c := html[i]
-		if c == '\r' || c == '\n' {
-			if i > start {
-				b.WriteString(html[start:i])
-			}
-
-			newlines := 0
-			j := i
-			for j < n {
-				c2 := html[j]
-				if c2 == '\r' {
-					newlines++
-					j++
-					if j < n && html[j] == '\n' {
-						j++
-					}
-				} else if c2 == '\n' {
-					newlines++
-					j++
-				} else {
-					break
-				}
-			}
-
-			if newlines >= 2 {
-				b.WriteString("</p><p>")
-			} else {
-				b.WriteString("<br />")
-			}
-
-			start = j
-			i = j
-		} else {
-			i++
-		}
-	}
-
-	if start < n {
-		b.WriteString(html[start:])
-	}
-
-	b.WriteString("</p>")
-
-	return b.String()
-}
-
-func addQuoteFallback(html string, quote *Status) string {
-	if quote == nil {
-		return html
-	}
-	quoteURL := ""
-	if quote.URL != nil && strings.TrimSpace(*quote.URL) != "" {
-		quoteURL = strings.TrimSpace(*quote.URL)
-	} else if strings.TrimSpace(quote.URI) != "" {
-		quoteURL = strings.TrimSpace(quote.URI)
-	}
-	if quoteURL == "" || strings.Contains(html, quoteURL) {
-		return html
-	}
-	fallback := `<p class="quote-inline">RE: ` + shortenedLink(quoteURL, false) + `</p>`
-	return fallback + html
 }
 
 var (
