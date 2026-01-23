@@ -16,6 +16,15 @@ LIMIT $2 OFFSET $3;
 -- name: GetConversation :one
 SELECT * FROM conversations WHERE id = $1;
 
+-- name: GetConversationsByIDs :many
+SELECT * FROM conversations WHERE id = ANY(@ids::bigint[]);
+
+-- name: GetConversationByParentAccountAndStatus :one
+SELECT * FROM conversations
+WHERE parent_account_id = $1
+  AND parent_status_id = $2
+  AND uri IS NULL;
+
 -- name: GetConversationByParentStatusID :one
 SELECT * FROM conversations WHERE parent_status_id = $1;
 

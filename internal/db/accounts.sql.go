@@ -1125,20 +1125,22 @@ UPDATE accounts SET
     indexable = COALESCE($6, indexable),
     hide_collections = COALESCE($7, hide_collections),
     fields = COALESCE($8, fields),
-    url = COALESCE($9, url),
-    public_key = COALESCE($10, public_key),
-    actor_type = COALESCE($11, actor_type),
-    inbox_url = COALESCE($12, inbox_url),
-    outbox_url = COALESCE($13, outbox_url),
-    shared_inbox_url = COALESCE($14, shared_inbox_url),
-    followers_url = COALESCE($15, followers_url),
-    following_url = COALESCE($16, following_url),
-    featured_collection_url = COALESCE($17, featured_collection_url),
-    avatar_remote_url = COALESCE($18, avatar_remote_url),
-    header_remote_url = COALESCE($19, header_remote_url),
-    avatar_file_name = COALESCE($20, avatar_file_name),
-    header_file_name = COALESCE($21, header_file_name),
-    last_webfingered_at = COALESCE($22, last_webfingered_at),
+    uri = COALESCE($9, uri),
+    url = COALESCE($10, url),
+    private_key = COALESCE($11, private_key),
+    public_key = COALESCE($12, public_key),
+    actor_type = COALESCE($13, actor_type),
+    inbox_url = COALESCE($14, inbox_url),
+    outbox_url = COALESCE($15, outbox_url),
+    shared_inbox_url = COALESCE($16, shared_inbox_url),
+    followers_url = COALESCE($17, followers_url),
+    following_url = COALESCE($18, following_url),
+    featured_collection_url = COALESCE($19, featured_collection_url),
+    avatar_remote_url = COALESCE($20, avatar_remote_url),
+    header_remote_url = COALESCE($21, header_remote_url),
+    avatar_file_name = COALESCE($22, avatar_file_name),
+    header_file_name = COALESCE($23, header_file_name),
+    last_webfingered_at = COALESCE($24, last_webfingered_at),
     updated_at = now()
 WHERE id = $1
 RETURNING id, username, domain, private_key, public_key, created_at, updated_at, note, display_name, uri, url, avatar_file_name, avatar_content_type, avatar_file_size, avatar_updated_at, header_file_name, header_content_type, header_file_size, header_updated_at, avatar_remote_url, locked, header_remote_url, last_webfingered_at, inbox_url, outbox_url, shared_inbox_url, followers_url, following_url, protocol, memorial, moved_to_account_id, featured_collection_url, fields, actor_type, discoverable, also_known_as, silenced_at, suspended_at, hide_collections, avatar_storage_schema_version, header_storage_schema_version, suspension_origin, sensitized_at, trendable, reviewed_at, requested_review_at, indexable, attribution_domains, id_scheme
@@ -1153,7 +1155,9 @@ type UpdateAccountParams struct {
 	Indexable             pgtype.Bool        `db:"indexable" json:"indexable"`
 	HideCollections       pgtype.Bool        `db:"hide_collections" json:"hide_collections"`
 	Fields                []byte             `db:"fields" json:"fields"`
+	Uri                   pgtype.Text        `db:"uri" json:"uri"`
 	Url                   pgtype.Text        `db:"url" json:"url"`
+	PrivateKey            pgtype.Text        `db:"private_key" json:"private_key"`
 	PublicKey             pgtype.Text        `db:"public_key" json:"public_key"`
 	ActorType             pgtype.Text        `db:"actor_type" json:"actor_type"`
 	InboxUrl              pgtype.Text        `db:"inbox_url" json:"inbox_url"`
@@ -1179,7 +1183,9 @@ func (q *Queries) UpdateAccount(ctx context.Context, arg UpdateAccountParams) (A
 		arg.Indexable,
 		arg.HideCollections,
 		arg.Fields,
+		arg.Uri,
 		arg.Url,
+		arg.PrivateKey,
 		arg.PublicKey,
 		arg.ActorType,
 		arg.InboxUrl,

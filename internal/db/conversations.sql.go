@@ -213,6 +213,32 @@ func (q *Queries) GetConversation(ctx context.Context, id int64) (Conversation, 
 	return i, err
 }
 
+const getConversationByParentAccountAndStatus = `-- name: GetConversationByParentAccountAndStatus :one
+SELECT id, uri, created_at, updated_at, parent_status_id, parent_account_id FROM conversations
+WHERE parent_account_id = $1
+  AND parent_status_id = $2
+  AND uri IS NULL
+`
+
+type GetConversationByParentAccountAndStatusParams struct {
+	ParentAccountID pgtype.Int8 `db:"parent_account_id" json:"parent_account_id"`
+	ParentStatusID  pgtype.Int8 `db:"parent_status_id" json:"parent_status_id"`
+}
+
+func (q *Queries) GetConversationByParentAccountAndStatus(ctx context.Context, arg GetConversationByParentAccountAndStatusParams) (Conversation, error) {
+	row := q.db.QueryRow(ctx, getConversationByParentAccountAndStatus, arg.ParentAccountID, arg.ParentStatusID)
+	var i Conversation
+	err := row.Scan(
+		&i.ID,
+		&i.Uri,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ParentStatusID,
+		&i.ParentAccountID,
+	)
+	return i, err
+}
+
 const getConversationByParentStatusID = `-- name: GetConversationByParentStatusID :one
 SELECT id, uri, created_at, updated_at, parent_status_id, parent_account_id FROM conversations WHERE parent_status_id = $1
 `
@@ -229,6 +255,37 @@ func (q *Queries) GetConversationByParentStatusID(ctx context.Context, parentSta
 		&i.ParentAccountID,
 	)
 	return i, err
+}
+
+const getConversationsByIDs = `-- name: GetConversationsByIDs :many
+SELECT id, uri, created_at, updated_at, parent_status_id, parent_account_id FROM conversations WHERE id = ANY($1::bigint[])
+`
+
+func (q *Queries) GetConversationsByIDs(ctx context.Context, ids []int64) ([]Conversation, error) {
+	rows, err := q.db.Query(ctx, getConversationsByIDs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Conversation{}
+	for rows.Next() {
+		var i Conversation
+		if err := rows.Scan(
+			&i.ID,
+			&i.Uri,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ParentStatusID,
+			&i.ParentAccountID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listAccountConversations = `-- name: ListAccountConversations :many

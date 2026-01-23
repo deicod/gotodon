@@ -1437,6 +1437,41 @@ func (q *Queries) ListFollowRequests(ctx context.Context, arg ListFollowRequests
 	return items, nil
 }
 
+const listFollowerURIsByPrefix = `-- name: ListFollowerURIsByPrefix :many
+SELECT a.uri FROM accounts a
+JOIN follows f ON f.account_id = a.id
+WHERE f.target_account_id = $1
+  AND a.suspended_at IS NULL
+  AND a.uri IS NOT NULL
+  AND ($2::text IS NULL OR a.uri LIKE $2::text || '%')
+ORDER BY f.id DESC
+`
+
+type ListFollowerURIsByPrefixParams struct {
+	TargetAccountID int64       `db:"target_account_id" json:"target_account_id"`
+	Prefix          pgtype.Text `db:"prefix" json:"prefix"`
+}
+
+func (q *Queries) ListFollowerURIsByPrefix(ctx context.Context, arg ListFollowerURIsByPrefixParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listFollowerURIsByPrefix, arg.TargetAccountID, arg.Prefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var uri string
+		if err := rows.Scan(&uri); err != nil {
+			return nil, err
+		}
+		items = append(items, uri)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMutes = `-- name: ListMutes :many
 SELECT a.id, a.username, a.domain, a.private_key, a.public_key, a.created_at, a.updated_at, a.note, a.display_name, a.uri, a.url, a.avatar_file_name, a.avatar_content_type, a.avatar_file_size, a.avatar_updated_at, a.header_file_name, a.header_content_type, a.header_file_size, a.header_updated_at, a.avatar_remote_url, a.locked, a.header_remote_url, a.last_webfingered_at, a.inbox_url, a.outbox_url, a.shared_inbox_url, a.followers_url, a.following_url, a.protocol, a.memorial, a.moved_to_account_id, a.featured_collection_url, a.fields, a.actor_type, a.discoverable, a.also_known_as, a.silenced_at, a.suspended_at, a.hide_collections, a.avatar_storage_schema_version, a.header_storage_schema_version, a.suspension_origin, a.sensitized_at, a.trendable, a.reviewed_at, a.requested_review_at, a.indexable, a.attribution_domains, a.id_scheme FROM accounts a
 JOIN mutes m ON m.target_account_id = a.id

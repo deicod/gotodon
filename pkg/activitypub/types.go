@@ -62,16 +62,20 @@ type Object struct {
 	Published    string      `json:"published,omitempty"`
 	Updated      string      `json:"updated,omitempty"`
 	URL          any         `json:"url,omitempty"`
+	ContextURI   any         `json:"context,omitempty"`
 	AttributedTo any         `json:"attributedTo,omitempty"`
 	To           []string    `json:"to,omitempty"`
 	Cc           []string    `json:"cc,omitempty"`
 	Bto          []string    `json:"bto,omitempty"`
 	Bcc          []string    `json:"bcc,omitempty"`
 	InReplyTo    any         `json:"inReplyTo,omitempty"`
+	Conversation any         `json:"conversation,omitempty"`
 	Tag          []Tag       `json:"tag,omitempty"`
 	Attachment   []any       `json:"attachment,omitempty"`
 	Sensitive    bool        `json:"sensitive,omitempty"`
 	Replies      *Collection `json:"replies,omitempty"`
+	Likes        *Collection `json:"likes,omitempty"`
+	Shares       *Collection `json:"shares,omitempty"`
 }
 
 // Activity represents an ActivityPub activity
@@ -204,6 +208,20 @@ func MastodonContextFull() []any {
 			"PropertyValue":             "schema:PropertyValue",
 			"value":                     "schema:value",
 			"attributionDomains":        map[string]string{"@id": "toot:attributionDomains", "@type": "@id"},
+		},
+	}
+}
+
+// QuoteAuthorizationContext returns the ActivityPub context for quote authorizations.
+func QuoteAuthorizationContext() []any {
+	return []any{
+		ActivityStreamsContext,
+		SecurityContext,
+		map[string]any{
+			"gts":                "https://gotosocial.org/ns#",
+			"quoteAuthorization": map[string]string{"@id": "https://w3id.org/fep/044f#quoteAuthorization", "@type": "@id"},
+			"interactingObject":  map[string]string{"@id": "gts:interactingObject"},
+			"interactionTarget":  map[string]string{"@id": "gts:interactionTarget"},
 		},
 	}
 }

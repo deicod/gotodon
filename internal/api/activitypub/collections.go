@@ -30,33 +30,39 @@ const (
 )
 
 func (h *FederationHandler) writeOutbox(w http.ResponseWriter, r *http.Request) {
-	username := web.Param(r, "username")
+	username := accountParam(r)
 	actorURI := h.actorURIFromUsername(username)
 
-	isPage, limit, offset := parsePageRequest(r)
+	pageRequested, limit, maxID, minID, sinceID := parseOutboxRequest(r)
 	if !h.useDB() {
-		if isPage {
-			h.renderEmptyOrderedPage(w, fmt.Sprintf("%s/outbox", actorURI), limit, offset)
+		if pageRequested {
+			h.renderEmptyOutboxPage(w, fmt.Sprintf("%s/outbox", actorURI), limit, maxID, minID, sinceID)
 			return
 		}
-		h.renderEmptyOrderedCollection(w, fmt.Sprintf("%s/outbox", actorURI))
+		h.renderEmptyOutboxCollection(w, fmt.Sprintf("%s/outbox", actorURI), limit)
 		return
 	}
 
-	account, err := h.store.GetAccountByUsername(r.Context(), username)
+	account, err := h.loadAccountFromRequest(r.Context(), r)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Actor not found")
 		return
 	}
 	actorURI = actorURIForAccount(h.domain, account)
+	h.writeOutboxForAccount(w, r, account, actorURI, pageRequested, limit, maxID, minID, sinceID)
+}
+
+func (h *FederationHandler) writeOutboxForAccount(w http.ResponseWriter, r *http.Request, account db.Account, actorURI string, pageRequested bool, limit int, maxID, minID, sinceID int64) {
 	base := fmt.Sprintf("%s/outbox", actorURI)
 
-	if !isPage {
+	if !pageRequested {
 		total, err := h.store.CountAccountOutboxStatuses(r.Context(), account.ID)
 		if err != nil {
 			web.JSONError(w, http.StatusInternalServerError, "Failed to load outbox")
 			return
 		}
+		first := outboxPageURL(base, limit, 0, 0, 0)
+		last := outboxLastURL(base, limit)
 		collection := activitypub.OrderedCollection{
 			Collection: activitypub.Collection{
 				Object: activitypub.Object{
@@ -65,7 +71,8 @@ func (h *FederationHandler) writeOutbox(w http.ResponseWriter, r *http.Request) 
 					Type:    activitypub.TypeOrderedCollection,
 				},
 				TotalItems: int(total),
-				First:      collectionPageURL(base, limit, 0),
+				First:      first,
+				Last:       last,
 			},
 		}
 		w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
@@ -76,7 +83,9 @@ func (h *FederationHandler) writeOutbox(w http.ResponseWriter, r *http.Request) 
 	statuses, err := h.store.GetAccountOutboxStatuses(r.Context(), db.GetAccountOutboxStatusesParams{
 		AccountID: account.ID,
 		Limit:     int32(limit),
-		Offset:    int32(offset),
+		MaxID:     optionalID(maxID),
+		MinID:     optionalID(minID),
+		SinceID:   optionalID(sinceID),
 	})
 	if err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Failed to load outbox")
@@ -95,20 +104,25 @@ func (h *FederationHandler) writeOutbox(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	total, err := h.store.CountAccountOutboxStatuses(r.Context(), account.ID)
-	if err != nil {
-		total = int64(len(statuses))
+	var next string
+	var prev string
+	if len(statuses) == limit {
+		lastID := statuses[len(statuses)-1].ID
+		next = outboxPageURL(base, limit, lastID, 0, 0)
 	}
-	next, prev := collectionLinks(base, limit, offset, total)
+	if len(statuses) > 0 {
+		firstID := statuses[0].ID
+		prev = outboxPageURL(base, limit, 0, firstID, 0)
+	}
 
 	page := activitypub.OrderedCollectionPage{
 		Collection: activitypub.Collection{
 			Object: activitypub.Object{
 				Context: activitypub.DefaultContext(),
-				ID:      collectionPageURL(base, limit, offset),
+				ID:      outboxPageURL(base, limit, maxID, minID, sinceID),
 				Type:    activitypub.TypeOrderedCollectionPage,
 			},
-			TotalItems: int(total),
+			TotalItems: len(statuses),
 		},
 		OrderedItems: activities,
 		PartOf:       base,
@@ -129,7 +143,7 @@ func (h *FederationHandler) writeFollowing(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *FederationHandler) writeFollowCollection(w http.ResponseWriter, r *http.Request, kind string) {
-	username := web.Param(r, "username")
+	username := accountParam(r)
 	actorURI := h.actorURIFromUsername(username)
 	base := fmt.Sprintf("%s/%s", actorURI, kind)
 
@@ -143,7 +157,7 @@ func (h *FederationHandler) writeFollowCollection(w http.ResponseWriter, r *http
 		return
 	}
 
-	account, err := h.store.GetAccountByUsername(r.Context(), username)
+	account, err := h.loadAccountFromRequest(r.Context(), r)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Actor not found")
 		return
@@ -238,31 +252,22 @@ func (h *FederationHandler) writeFollowCollection(w http.ResponseWriter, r *http
 
 // GetFeatured handles GET /users/:username/collections/featured.
 func (h *FederationHandler) GetFeatured(w http.ResponseWriter, r *http.Request) {
-	username := web.Param(r, "username")
+	username := accountParam(r)
 	actorURI := h.actorURIFromUsername(username)
 	base := fmt.Sprintf("%s/collections/featured", actorURI)
 
-	isPage, limit, offset := parsePageRequest(r)
 	if !h.useDB() {
-		if isPage {
-			h.renderEmptyOrderedPage(w, base, limit, offset)
-			return
-		}
-		h.renderEmptyOrderedCollection(w, base)
+		h.renderEmptyOrderedItemsCollection(w, base)
 		return
 	}
 
-	account, err := h.store.GetAccountByUsername(r.Context(), username)
+	account, err := h.loadAccountFromRequest(r.Context(), r)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Actor not found")
 		return
 	}
 	if account.HideCollections.Valid && account.HideCollections.Bool {
-		if isPage {
-			h.renderEmptyOrderedPage(w, base, limit, offset)
-			return
-		}
-		h.renderEmptyOrderedCollection(w, base)
+		h.renderEmptyOrderedItemsCollection(w, base)
 		return
 	}
 
@@ -276,83 +281,51 @@ func (h *FederationHandler) GetFeatured(w http.ResponseWriter, r *http.Request) 
 	}
 	statuses = filterPublicStatuses(statuses)
 
-	total := len(statuses)
-	if !isPage {
-		collection := activitypub.OrderedCollection{
-			Collection: activitypub.Collection{
-				Object: activitypub.Object{
-					Context: activitypub.DefaultContext(),
-					ID:      base,
-					Type:    activitypub.TypeOrderedCollection,
-				},
-				TotalItems: total,
-				First:      collectionPageURL(base, limit, 0),
-			},
-		}
-		w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-		web.JSON(w, http.StatusOK, collection)
-		return
-	}
-
-	pageStatuses := sliceStatuses(statuses, limit, offset)
-	ctx, err := h.buildStatusContext(r.Context(), pageStatuses)
+	ctx, err := h.buildStatusContext(r.Context(), statuses)
 	if err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Failed to render collection")
 		return
 	}
-	notes, err := ctx.notesForStatuses(account, pageStatuses)
+	notes, err := ctx.notesForStatuses(account, statuses)
 	if err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Failed to render collection")
 		return
 	}
-	next, prev := collectionLinks(base, limit, offset, int64(total))
 
-	page := activitypub.OrderedCollectionPage{
+	collection := activitypub.OrderedCollection{
 		Collection: activitypub.Collection{
 			Object: activitypub.Object{
 				Context: activitypub.DefaultContext(),
-				ID:      collectionPageURL(base, limit, offset),
-				Type:    activitypub.TypeOrderedCollectionPage,
+				ID:      base,
+				Type:    activitypub.TypeOrderedCollection,
 			},
-			TotalItems: total,
+			TotalItems: len(notes),
 		},
 		OrderedItems: notes,
-		PartOf:       base,
-		Next:         next,
-		Prev:         prev,
 	}
 
 	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, page)
+	web.JSON(w, http.StatusOK, collection)
 }
 
 // GetFeaturedTags handles GET /users/:username/collections/tags.
 func (h *FederationHandler) GetFeaturedTags(w http.ResponseWriter, r *http.Request) {
-	username := web.Param(r, "username")
+	username := accountParam(r)
 	actorURI := h.actorURIFromUsername(username)
 	base := fmt.Sprintf("%s/collections/tags", actorURI)
 
-	isPage, limit, offset := parsePageRequest(r)
 	if !h.useDB() {
-		if isPage {
-			h.renderEmptyOrderedPage(w, base, limit, offset)
-			return
-		}
-		h.renderEmptyOrderedCollection(w, base)
+		h.renderEmptyCollection(w, base)
 		return
 	}
 
-	account, err := h.store.GetAccountByUsername(r.Context(), username)
+	account, err := h.loadAccountFromRequest(r.Context(), r)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Actor not found")
 		return
 	}
 	if account.HideCollections.Valid && account.HideCollections.Bool {
-		if isPage {
-			h.renderEmptyOrderedPage(w, base, limit, offset)
-			return
-		}
-		h.renderEmptyOrderedCollection(w, base)
+		h.renderEmptyCollection(w, base)
 		return
 	}
 
@@ -365,25 +338,6 @@ func (h *FederationHandler) GetFeaturedTags(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	total := len(tags)
-	if !isPage {
-		collection := activitypub.OrderedCollection{
-			Collection: activitypub.Collection{
-				Object: activitypub.Object{
-					Context: activitypub.DefaultContext(),
-					ID:      base,
-					Type:    activitypub.TypeOrderedCollection,
-				},
-				TotalItems: total,
-				First:      collectionPageURL(base, limit, 0),
-			},
-		}
-		w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-		web.JSON(w, http.StatusOK, collection)
-		return
-	}
-
-	tags = sliceFeaturedTags(tags, limit, offset)
 	items := make([]any, 0, len(tags))
 	for _, tag := range tags {
 		name := strings.TrimSpace(tag.Name)
@@ -397,24 +351,50 @@ func (h *FederationHandler) GetFeaturedTags(w http.ResponseWriter, r *http.Reque
 		})
 	}
 
-	next, prev := collectionLinks(base, limit, offset, int64(total))
-	page := activitypub.OrderedCollectionPage{
-		Collection: activitypub.Collection{
-			Object: activitypub.Object{
-				Context: activitypub.DefaultContext(),
-				ID:      collectionPageURL(base, limit, offset),
-				Type:    activitypub.TypeOrderedCollectionPage,
-			},
-			TotalItems: total,
+	collection := activitypub.Collection{
+		Object: activitypub.Object{
+			Context: activitypub.DefaultContext(),
+			ID:      base,
+			Type:    activitypub.TypeCollection,
 		},
-		OrderedItems: items,
-		PartOf:       base,
-		Next:         next,
-		Prev:         prev,
+		TotalItems: len(items),
+		Items:      items,
 	}
 
 	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, page)
+	web.JSON(w, http.StatusOK, collection)
+}
+
+func (h *FederationHandler) renderEmptyOrderedItemsCollection(w http.ResponseWriter, base string) {
+	collection := activitypub.OrderedCollection{
+		Collection: activitypub.Collection{
+			Object: activitypub.Object{
+				Context: activitypub.DefaultContext(),
+				ID:      base,
+				Type:    activitypub.TypeOrderedCollection,
+			},
+			TotalItems: 0,
+		},
+		OrderedItems: []any{},
+	}
+
+	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
+	web.JSON(w, http.StatusOK, collection)
+}
+
+func (h *FederationHandler) renderEmptyCollection(w http.ResponseWriter, base string) {
+	collection := activitypub.Collection{
+		Object: activitypub.Object{
+			Context: activitypub.DefaultContext(),
+			ID:      base,
+			Type:    activitypub.TypeCollection,
+		},
+		TotalItems: 0,
+		Items:      []any{},
+	}
+
+	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
+	web.JSON(w, http.StatusOK, collection)
 }
 
 func (h *FederationHandler) renderEmptyOrderedCollection(w http.ResponseWriter, base string) {
@@ -450,6 +430,42 @@ func (h *FederationHandler) renderEmptyOrderedPage(w http.ResponseWriter, base s
 		OrderedItems: []any{},
 		PartOf:       base,
 	}
+	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
+	web.JSON(w, http.StatusOK, page)
+}
+
+func (h *FederationHandler) renderEmptyOutboxCollection(w http.ResponseWriter, base string, limit int) {
+	collection := activitypub.OrderedCollection{
+		Collection: activitypub.Collection{
+			Object: activitypub.Object{
+				Context: activitypub.DefaultContext(),
+				ID:      base,
+				Type:    activitypub.TypeOrderedCollection,
+			},
+			TotalItems: 0,
+			First:      outboxPageURL(base, limit, 0, 0, 0),
+			Last:       outboxLastURL(base, limit),
+		},
+	}
+
+	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
+	web.JSON(w, http.StatusOK, collection)
+}
+
+func (h *FederationHandler) renderEmptyOutboxPage(w http.ResponseWriter, base string, limit int, maxID, minID, sinceID int64) {
+	page := activitypub.OrderedCollectionPage{
+		Collection: activitypub.Collection{
+			Object: activitypub.Object{
+				Context: activitypub.DefaultContext(),
+				ID:      outboxPageURL(base, limit, maxID, minID, sinceID),
+				Type:    activitypub.TypeOrderedCollectionPage,
+			},
+			TotalItems: 0,
+		},
+		OrderedItems: []any{},
+		PartOf:       base,
+	}
+
 	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
 	web.JSON(w, http.StatusOK, page)
 }
@@ -493,6 +509,18 @@ func parsePageRequest(r *http.Request) (bool, int, int) {
 	return true, limit, offset
 }
 
+func parseOutboxRequest(r *http.Request) (bool, int, int64, int64, int64) {
+	pageRequested := truthyParam(web.QueryParam(r, "page"))
+	if !pageRequested {
+		return false, 0, 0, 0, 0
+	}
+	limit := parseCollectionLimit(web.QueryParam(r, "limit"))
+	maxID := parseCollectionID(web.QueryParam(r, "max_id"))
+	minID := parseCollectionID(web.QueryParam(r, "min_id"))
+	sinceID := parseCollectionID(web.QueryParam(r, "since_id"))
+	return true, limit, maxID, minID, sinceID
+}
+
 func parseCollectionLimit(raw string) int {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -520,6 +548,25 @@ func parseCollectionOffset(raw string) int {
 	return value
 }
 
+func parseCollectionID(raw string) int64 {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value < 0 {
+		return 0
+	}
+	return value
+}
+
+func optionalID(value int64) pgtype.Int8 {
+	if value <= 0 {
+		return pgtype.Int8{Valid: false}
+	}
+	return pgtype.Int8{Int64: value, Valid: true}
+}
+
 func collectionPageURL(base string, limit, offset int) string {
 	values := url.Values{}
 	values.Set("page", "true")
@@ -530,6 +577,63 @@ func collectionPageURL(base string, limit, offset int) string {
 		values.Set("offset", strconv.Itoa(offset))
 	}
 	return base + "?" + values.Encode()
+}
+
+func outboxPageURL(base string, limit int, maxID, minID, sinceID int64) string {
+	values := url.Values{}
+	values.Set("page", "true")
+	if limit > 0 && limit != defaultCollectionLimit {
+		values.Set("limit", strconv.Itoa(limit))
+	}
+	if maxID > 0 {
+		values.Set("max_id", strconv.FormatInt(maxID, 10))
+	}
+	if minID > 0 {
+		values.Set("min_id", strconv.FormatInt(minID, 10))
+	}
+	if sinceID > 0 {
+		values.Set("since_id", strconv.FormatInt(sinceID, 10))
+	}
+	return base + "?" + values.Encode()
+}
+
+func outboxLastURL(base string, limit int) string {
+	values := url.Values{}
+	values.Set("page", "true")
+	values.Set("min_id", "0")
+	if limit > 0 && limit != defaultCollectionLimit {
+		values.Set("limit", strconv.Itoa(limit))
+	}
+	return base + "?" + values.Encode()
+}
+
+func statusRepliesURLLocal(domain, username string, statusID int64, page bool, minID int64, onlyOtherAccounts bool) string {
+	if domain == "" || username == "" {
+		return ""
+	}
+	base := fmt.Sprintf("https://%s/users/%s/statuses/%d/replies", domain, username, statusID)
+	params := url.Values{}
+	if page {
+		params.Set("page", "true")
+	}
+	if minID > 0 {
+		params.Set("min_id", strconv.FormatInt(minID, 10))
+	}
+	if onlyOtherAccounts {
+		params.Set("only_other_accounts", "true")
+	}
+	encoded := params.Encode()
+	if encoded == "" {
+		return base
+	}
+	return base + "?" + encoded
+}
+
+func statusCounterURLLocal(domain, username string, statusID int64, kind string) string {
+	if domain == "" || username == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://%s/users/%s/statuses/%d/%s", domain, username, statusID, kind)
 }
 
 func collectionLinks(base string, limit, offset int, total int64) (string, string) {
@@ -593,22 +697,30 @@ func filterPublicStatuses(statuses []db.Status) []db.Status {
 }
 
 type statusContext struct {
+	ctx                 context.Context
+	store               Store
 	localDomain         string
 	mentionsByStatus    map[int64][]db.Account
 	tagsByStatus        map[int64][]db.GetTagsByStatusIDsRow
 	attachmentsByStatus map[int64][]db.MediaAttachment
 	relatedStatuses     map[int64]db.Status
 	relatedAccounts     map[int64]db.Account
+	statsByStatus       map[int64]db.StatusStat
+	conversationsByID   map[int64]db.Conversation
 }
 
 func (h *FederationHandler) buildStatusContext(ctx context.Context, statuses []db.Status) (*statusContext, error) {
 	context := &statusContext{
+		ctx:                 ctx,
+		store:               h.store,
 		localDomain:         h.domain,
 		mentionsByStatus:    make(map[int64][]db.Account),
 		tagsByStatus:        make(map[int64][]db.GetTagsByStatusIDsRow),
 		attachmentsByStatus: make(map[int64][]db.MediaAttachment),
 		relatedStatuses:     make(map[int64]db.Status),
 		relatedAccounts:     make(map[int64]db.Account),
+		statsByStatus:       make(map[int64]db.StatusStat),
+		conversationsByID:   make(map[int64]db.Conversation),
 	}
 
 	if h.store == nil || len(statuses) == 0 {
@@ -616,6 +728,25 @@ func (h *FederationHandler) buildStatusContext(ctx context.Context, statuses []d
 	}
 
 	statusIDs := uniqueStatusIDs(statuses)
+	conversationIDs := uniqueConversationIDs(statuses)
+	if h.store != nil && len(statusIDs) > 0 {
+		stats, err := h.store.GetStatusStatsByIDs(ctx, statusIDs)
+		if err != nil {
+			return nil, err
+		}
+		for _, stat := range stats {
+			context.statsByStatus[stat.StatusID] = stat
+		}
+	}
+	if h.store != nil && len(conversationIDs) > 0 {
+		conversations, err := h.store.GetConversationsByIDs(ctx, conversationIDs)
+		if err != nil {
+			return nil, err
+		}
+		for _, conversation := range conversations {
+			context.conversationsByID[conversation.ID] = conversation
+		}
+	}
 	mentions, err := h.store.GetMentionsByStatusIDs(ctx, statusIDs)
 	if err != nil {
 		return nil, err
@@ -734,6 +865,22 @@ func uniqueRelatedStatusIDs(statuses []db.Status) []int64 {
 				ids = append(ids, status.ReblogOfID.Int64)
 			}
 		}
+	}
+	return ids
+}
+
+func uniqueConversationIDs(statuses []db.Status) []int64 {
+	ids := make([]int64, 0, len(statuses))
+	seen := make(map[int64]struct{})
+	for _, status := range statuses {
+		if !status.ConversationID.Valid || status.ConversationID.Int64 <= 0 {
+			continue
+		}
+		if _, ok := seen[status.ConversationID.Int64]; ok {
+			continue
+		}
+		seen[status.ConversationID.Int64] = struct{}{}
+		ids = append(ids, status.ConversationID.Int64)
 	}
 	return ids
 }
@@ -899,7 +1046,147 @@ func (c *statusContext) noteForStatus(author db.Account, status db.Status) (acti
 		note.Attachment = buildAttachments(c.localDomain, attachments)
 	}
 
+	if c.isLocalStatus(status) {
+		note.Replies = c.repliesCollection(author, status)
+		note.Likes = c.likesCollection(author, status)
+		note.Shares = c.sharesCollection(author, status)
+	}
+
+	if conversation, ok := c.conversationsByID[status.ConversationID.Int64]; ok {
+		conversationURI := conversationURI(c.localDomain, conversation)
+		if conversationURI != "" {
+			note.Conversation = conversationURI
+		}
+		contextURI := contextURI(c.localDomain, conversation)
+		if contextURI != "" {
+			note.ContextURI = contextURI
+		}
+	}
+
 	return note, nil
+}
+
+func (c *statusContext) repliesCollection(author db.Account, status db.Status) *activitypub.Collection {
+	if c.store == nil || c.ctx == nil || author.Username == "" {
+		return nil
+	}
+	baseURL := statusRepliesURLLocal(c.localDomain, author.Username, status.ID, false, 0, false)
+	pageURL := statusRepliesURLLocal(c.localDomain, author.Username, status.ID, true, 0, false)
+	if baseURL == "" || pageURL == "" {
+		return nil
+	}
+
+	params := db.ListStatusRepliesParams{
+		StatusID:  pgtype.Int8{Int64: status.ID, Valid: true},
+		AccountID: pgtype.Int8{Int64: author.ID, Valid: true},
+		Limit:     5,
+	}
+	replies, err := c.store.ListStatusReplies(c.ctx, params)
+	if err != nil {
+		replies = nil
+	}
+	items := make([]any, 0, len(replies))
+	for _, reply := range replies {
+		uri := replyItemURI(c.localDomain, reply, author, true)
+		if uri == "" {
+			continue
+		}
+		items = append(items, uri)
+	}
+
+	next := ""
+	if len(replies) > 0 {
+		next = statusRepliesURLLocal(c.localDomain, author.Username, status.ID, true, replies[len(replies)-1].ID, false)
+	} else {
+		next = statusRepliesURLLocal(c.localDomain, author.Username, status.ID, true, 0, true)
+	}
+
+	firstPage := activitypub.CollectionPage{
+		Collection: activitypub.Collection{
+			Object: activitypub.Object{
+				Context: activitypub.DefaultContext(),
+				ID:      pageURL,
+				Type:    activitypub.TypeCollectionPage,
+			},
+			Items: items,
+		},
+		PartOf: baseURL,
+		Next:   next,
+	}
+
+	return &activitypub.Collection{
+		Object: activitypub.Object{
+			Context: activitypub.DefaultContext(),
+			ID:      baseURL,
+			Type:    activitypub.TypeCollection,
+		},
+		First: firstPage,
+	}
+}
+
+func (c *statusContext) likesCollection(author db.Account, status db.Status) *activitypub.Collection {
+	if author.Username == "" {
+		return nil
+	}
+	collectionID := statusCounterURLLocal(c.localDomain, author.Username, status.ID, "likes")
+	if collectionID == "" {
+		return nil
+	}
+	count := 0
+	if stat, ok := c.statsByStatus[status.ID]; ok {
+		count = int(stat.FavouritesCount)
+	}
+	return &activitypub.Collection{
+		Object: activitypub.Object{
+			Context: activitypub.DefaultContext(),
+			ID:      collectionID,
+			Type:    activitypub.TypeCollection,
+		},
+		TotalItems: count,
+	}
+}
+
+func (c *statusContext) sharesCollection(author db.Account, status db.Status) *activitypub.Collection {
+	if author.Username == "" {
+		return nil
+	}
+	collectionID := statusCounterURLLocal(c.localDomain, author.Username, status.ID, "shares")
+	if collectionID == "" {
+		return nil
+	}
+	count := 0
+	if stat, ok := c.statsByStatus[status.ID]; ok {
+		count = int(stat.ReblogsCount)
+	}
+	return &activitypub.Collection{
+		Object: activitypub.Object{
+			Context: activitypub.DefaultContext(),
+			ID:      collectionID,
+			Type:    activitypub.TypeCollection,
+		},
+		TotalItems: count,
+	}
+}
+
+func (c *statusContext) isLocalStatus(status db.Status) bool {
+	return status.Local.Valid && status.Local.Bool
+}
+
+func conversationURI(domain string, conversation db.Conversation) string {
+	if conversation.Uri.Valid && strings.TrimSpace(conversation.Uri.String) != "" {
+		return conversation.Uri.String
+	}
+	return contextURI(domain, conversation)
+}
+
+func contextURI(domain string, conversation db.Conversation) string {
+	if domain == "" {
+		return ""
+	}
+	if !conversation.ParentAccountID.Valid || !conversation.ParentStatusID.Valid {
+		return ""
+	}
+	return fmt.Sprintf("https://%s/contexts/%d-%d", domain, conversation.ParentAccountID.Int64, conversation.ParentStatusID.Int64)
 }
 
 func statusURI(localDomain string, author db.Account, status db.Status) string {

@@ -20,6 +20,15 @@ WHERE account_id = $1
 -- name: GetStatusesByIDs :many
 SELECT * FROM statuses WHERE id = ANY(@ids::bigint[]) AND deleted_at IS NULL;
 
+-- name: ListConversationStatuses :many
+SELECT * FROM statuses
+WHERE conversation_id = sqlc.arg('conversation_id')
+  AND visibility IN (0, 1)
+  AND deleted_at IS NULL
+  AND (CASE WHEN sqlc.arg('min_id')::bigint > 0 THEN id > sqlc.arg('min_id') ELSE TRUE END)
+ORDER BY id
+LIMIT sqlc.arg('limit');
+
 -- name: CreateStatus :one
 INSERT INTO statuses (
     uri, text, account_id, in_reply_to_id, in_reply_to_account_id,
@@ -171,11 +180,14 @@ LIMIT $2 OFFSET $3;
 
 -- name: GetAccountOutboxStatuses :many
 SELECT * FROM statuses
-WHERE account_id = $1
+WHERE account_id = sqlc.arg('account_id')
   AND deleted_at IS NULL
   AND visibility IN (0, 1)
+  AND (sqlc.narg('max_id')::bigint IS NULL OR id < sqlc.narg('max_id')::bigint)
+  AND (sqlc.narg('since_id')::bigint IS NULL OR id > sqlc.narg('since_id')::bigint)
+  AND (sqlc.narg('min_id')::bigint IS NULL OR id > sqlc.narg('min_id')::bigint)
 ORDER BY id DESC
-LIMIT $2 OFFSET $3;
+LIMIT sqlc.arg('limit');
 
 -- name: CountAccountOutboxStatuses :one
 SELECT COUNT(*) FROM statuses
@@ -195,6 +207,17 @@ SELECT s.* FROM statuses s JOIN ancestors a ON s.id = a.id WHERE s.id != @status
 SELECT * FROM statuses
 WHERE in_reply_to_id = @status_id AND deleted_at IS NULL
 ORDER BY id;
+
+-- name: ListStatusReplies :many
+SELECT * FROM statuses
+WHERE in_reply_to_id = sqlc.arg('status_id')
+  AND deleted_at IS NULL
+  AND visibility IN (0, 1)
+  AND (sqlc.narg('min_id')::bigint IS NULL OR id > sqlc.narg('min_id')::bigint)
+  AND (sqlc.narg('account_id')::bigint IS NULL OR account_id = sqlc.narg('account_id')::bigint)
+  AND (sqlc.narg('exclude_account_id')::bigint IS NULL OR account_id != sqlc.narg('exclude_account_id')::bigint)
+ORDER BY id
+LIMIT sqlc.arg('limit');
 
 -- name: GetHashtagTimeline :many
 SELECT s.* FROM statuses s

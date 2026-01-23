@@ -184,18 +184,29 @@ SELECT id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url,
 WHERE account_id = $1
   AND deleted_at IS NULL
   AND visibility IN (0, 1)
+  AND ($2::bigint IS NULL OR id < $2::bigint)
+  AND ($3::bigint IS NULL OR id > $3::bigint)
+  AND ($4::bigint IS NULL OR id > $4::bigint)
 ORDER BY id DESC
-LIMIT $2 OFFSET $3
+LIMIT $5
 `
 
 type GetAccountOutboxStatusesParams struct {
-	AccountID int64 `db:"account_id" json:"account_id"`
-	Limit     int32 `db:"limit" json:"limit"`
-	Offset    int32 `db:"offset" json:"offset"`
+	AccountID int64       `db:"account_id" json:"account_id"`
+	MaxID     pgtype.Int8 `db:"max_id" json:"max_id"`
+	SinceID   pgtype.Int8 `db:"since_id" json:"since_id"`
+	MinID     pgtype.Int8 `db:"min_id" json:"min_id"`
+	Limit     int32       `db:"limit" json:"limit"`
 }
 
 func (q *Queries) GetAccountOutboxStatuses(ctx context.Context, arg GetAccountOutboxStatusesParams) ([]Status, error) {
-	rows, err := q.db.Query(ctx, getAccountOutboxStatuses, arg.AccountID, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, getAccountOutboxStatuses,
+		arg.AccountID,
+		arg.MaxID,
+		arg.SinceID,
+		arg.MinID,
+		arg.Limit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1095,6 +1106,68 @@ func (q *Queries) IncrementStatusReplies(ctx context.Context, statusID int64) er
 	return err
 }
 
+const listConversationStatuses = `-- name: ListConversationStatuses :many
+SELECT id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at, quote_approval_policy FROM statuses
+WHERE conversation_id = $1
+  AND visibility IN (0, 1)
+  AND deleted_at IS NULL
+  AND (CASE WHEN $2::bigint > 0 THEN id > $2 ELSE TRUE END)
+ORDER BY id
+LIMIT $3
+`
+
+type ListConversationStatusesParams struct {
+	ConversationID pgtype.Int8 `db:"conversation_id" json:"conversation_id"`
+	MinID          int64       `db:"min_id" json:"min_id"`
+	Limit          int32       `db:"limit" json:"limit"`
+}
+
+func (q *Queries) ListConversationStatuses(ctx context.Context, arg ListConversationStatusesParams) ([]Status, error) {
+	rows, err := q.db.Query(ctx, listConversationStatuses, arg.ConversationID, arg.MinID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Status{}
+	for rows.Next() {
+		var i Status
+		if err := rows.Scan(
+			&i.ID,
+			&i.Uri,
+			&i.Text,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.InReplyToID,
+			&i.ReblogOfID,
+			&i.Url,
+			&i.Sensitive,
+			&i.Visibility,
+			&i.SpoilerText,
+			&i.Reply,
+			&i.Language,
+			&i.ConversationID,
+			&i.Local,
+			&i.AccountID,
+			&i.ApplicationID,
+			&i.InReplyToAccountID,
+			&i.PollID,
+			&i.DeletedAt,
+			&i.EditedAt,
+			&i.Trendable,
+			&i.OrderedMediaAttachmentIds,
+			&i.FetchedRepliesAt,
+			&i.QuoteApprovalPolicy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPinnedStatusIDs = `-- name: ListPinnedStatusIDs :many
 SELECT status_id FROM status_pins
 WHERE account_id = $1
@@ -1152,6 +1225,78 @@ func (q *Queries) ListRebloggedStatusIDs(ctx context.Context, arg ListRebloggedS
 			return nil, err
 		}
 		items = append(items, status_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStatusReplies = `-- name: ListStatusReplies :many
+SELECT id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at, quote_approval_policy FROM statuses
+WHERE in_reply_to_id = $1
+  AND deleted_at IS NULL
+  AND visibility IN (0, 1)
+  AND ($2::bigint IS NULL OR id > $2::bigint)
+  AND ($3::bigint IS NULL OR account_id = $3::bigint)
+  AND ($4::bigint IS NULL OR account_id != $4::bigint)
+ORDER BY id
+LIMIT $5
+`
+
+type ListStatusRepliesParams struct {
+	StatusID         pgtype.Int8 `db:"status_id" json:"status_id"`
+	MinID            pgtype.Int8 `db:"min_id" json:"min_id"`
+	AccountID        pgtype.Int8 `db:"account_id" json:"account_id"`
+	ExcludeAccountID pgtype.Int8 `db:"exclude_account_id" json:"exclude_account_id"`
+	Limit            int32       `db:"limit" json:"limit"`
+}
+
+func (q *Queries) ListStatusReplies(ctx context.Context, arg ListStatusRepliesParams) ([]Status, error) {
+	rows, err := q.db.Query(ctx, listStatusReplies,
+		arg.StatusID,
+		arg.MinID,
+		arg.AccountID,
+		arg.ExcludeAccountID,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Status{}
+	for rows.Next() {
+		var i Status
+		if err := rows.Scan(
+			&i.ID,
+			&i.Uri,
+			&i.Text,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.InReplyToID,
+			&i.ReblogOfID,
+			&i.Url,
+			&i.Sensitive,
+			&i.Visibility,
+			&i.SpoilerText,
+			&i.Reply,
+			&i.Language,
+			&i.ConversationID,
+			&i.Local,
+			&i.AccountID,
+			&i.ApplicationID,
+			&i.InReplyToAccountID,
+			&i.PollID,
+			&i.DeletedAt,
+			&i.EditedAt,
+			&i.Trendable,
+			&i.OrderedMediaAttachmentIds,
+			&i.FetchedRepliesAt,
+			&i.QuoteApprovalPolicy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

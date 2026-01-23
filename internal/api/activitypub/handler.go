@@ -8,7 +8,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
@@ -31,6 +35,11 @@ type InboxHandler func(ctx context.Context, activity *activitypub.Activity) erro
 type InboxError struct {
 	Status  int
 	Message string
+}
+
+type instanceActorWriter interface {
+	CreateAccount(ctx context.Context, arg db.CreateAccountParams) (db.Account, error)
+	UpdateAccount(ctx context.Context, arg db.UpdateAccountParams) (db.Account, error)
 }
 
 func (e *InboxError) Error() string {
@@ -66,15 +75,20 @@ func (h *FederationHandler) RegisterInboxHandler(activityType string, handler In
 
 // GetActor handles GET /users/:username - returns the actor profile
 func (h *FederationHandler) GetActor(w http.ResponseWriter, r *http.Request) {
-	username := web.Param(r, "username")
+	username := accountParam(r)
 
-	// Check Accept header for ActivityPub
-	accept := r.Header.Get("Accept")
-	if accept != activitypub.ActivityPubContentType &&
-		accept != activitypub.ActivityPubLDContentType &&
-		accept != "application/activity+json" {
-		// Redirect to web profile for non-AP requests
-		http.Redirect(w, r, fmt.Sprintf("https://%s/@%s", h.domain, username), http.StatusFound)
+	if !isActivityPubRequest(r) {
+		if h.useDB() {
+			if account, err := h.loadAccountFromRequest(r.Context(), r); err == nil && account.Username != "" {
+				http.Redirect(w, r, fmt.Sprintf("https://%s/@%s", h.domain, account.Username), http.StatusFound)
+				return
+			}
+		}
+		if username != "" {
+			http.Redirect(w, r, fmt.Sprintf("https://%s/@%s", h.domain, username), http.StatusFound)
+			return
+		}
+		web.JSONError(w, http.StatusNotFound, "Actor not found")
 		return
 	}
 
@@ -83,7 +97,7 @@ func (h *FederationHandler) GetActor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	account, err := h.store.GetAccountByUsername(r.Context(), username)
+	account, err := h.loadAccountFromRequest(r.Context(), r)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Actor not found")
 		return
@@ -182,6 +196,66 @@ func (h *FederationHandler) GetFollowing(w http.ResponseWriter, r *http.Request)
 	h.writeFollowing(w, r)
 }
 
+// GetInstanceActor handles GET /actor
+func (h *FederationHandler) GetInstanceActor(w http.ResponseWriter, r *http.Request) {
+	if !isActivityPubRequest(r) {
+		redirectURL := h.instanceActorURL()
+		if redirectURL == "" {
+			redirectURL = "/"
+		}
+		http.Redirect(w, r, redirectURL, http.StatusFound)
+		return
+	}
+
+	if !h.useDB() {
+		h.mockInstanceActor(w)
+		return
+	}
+
+	account, err := h.instanceActorAccount(r.Context())
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			web.JSONError(w, http.StatusNotFound, "Actor not found")
+			return
+		}
+		web.JSONError(w, http.StatusInternalServerError, "Failed to load actor")
+		return
+	}
+
+	h.renderInstanceActor(w, account)
+}
+
+// GetInstanceOutbox handles GET /actor/outbox
+func (h *FederationHandler) GetInstanceOutbox(w http.ResponseWriter, r *http.Request) {
+	actorURI := h.instanceActorURI()
+	if actorURI == "" {
+		web.JSONError(w, http.StatusNotFound, "Actor not found")
+		return
+	}
+
+	pageRequested, limit, maxID, minID, sinceID := parseOutboxRequest(r)
+	if !h.useDB() {
+		if pageRequested {
+			h.renderEmptyOutboxPage(w, fmt.Sprintf("%s/outbox", actorURI), limit, maxID, minID, sinceID)
+			return
+		}
+		h.renderEmptyOutboxCollection(w, fmt.Sprintf("%s/outbox", actorURI), limit)
+		return
+	}
+
+	account, err := h.instanceActorAccount(r.Context())
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			web.JSONError(w, http.StatusNotFound, "Actor not found")
+			return
+		}
+		web.JSONError(w, http.StatusInternalServerError, "Failed to load outbox")
+		return
+	}
+
+	h.writeOutboxForAccount(w, r, account, actorURI, pageRequested, limit, maxID, minID, sinceID)
+}
+
 // PostInbox handles POST /users/:username/inbox and POST /inbox
 func (h *FederationHandler) PostInbox(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
@@ -221,25 +295,68 @@ func (h *FederationHandler) RegisterRoutes(mux *http.ServeMux) {
 	// Actor endpoints
 	mux.HandleFunc("GET /users/{username}", h.GetActor)
 	mux.HandleFunc("GET /users/{username}/outbox", h.GetOutbox)
+	mux.HandleFunc("GET /users/{username}/statuses/{statusID}", h.GetStatus)
+	mux.HandleFunc("GET /users/{username}/statuses/{statusID}/activity", h.GetStatusActivity)
+	mux.HandleFunc("GET /users/{username}/statuses/{statusID}/replies", h.GetStatusReplies)
+	mux.HandleFunc("GET /users/{username}/statuses/{statusID}/likes", h.GetStatusLikes)
+	mux.HandleFunc("GET /users/{username}/statuses/{statusID}/shares", h.GetStatusShares)
 	mux.HandleFunc("GET /users/{username}/followers", h.GetFollowers)
 	mux.HandleFunc("GET /users/{username}/following", h.GetFollowing)
+	mux.HandleFunc("GET /users/{username}/followers_synchronization", h.GetFollowersSynchronization)
+	mux.HandleFunc("GET /users/{username}/quote_authorizations/{id}", h.GetQuoteAuthorization)
 	mux.HandleFunc("GET /users/{username}/collections/featured", h.GetFeatured)
 	mux.HandleFunc("GET /users/{username}/collections/tags", h.GetFeaturedTags)
+	mux.HandleFunc("GET /actor", h.GetInstanceActor)
+	mux.HandleFunc("GET /actor/outbox", h.GetInstanceOutbox)
+	mux.HandleFunc("GET /contexts/{id}", h.GetContext)
+	mux.HandleFunc("GET /contexts/{id}/items", h.GetContextItems)
 
 	// Inbox endpoints
 	inboxHandler := middleware.VerifyHTTPSignature(h.actorFetcher)(http.HandlerFunc(h.PostInbox))
 	mux.Handle("POST /inbox", inboxHandler)
 	mux.Handle("POST /users/{username}/inbox", inboxHandler)
+	mux.Handle("POST /actor/inbox", inboxHandler)
 
 	// ActivityPub alias routes
-	mux.HandleFunc("GET /ap/users/{username}", h.GetActor)
-	mux.HandleFunc("GET /ap/users/{username}/outbox", h.GetOutbox)
-	mux.HandleFunc("GET /ap/users/{username}/followers", h.GetFollowers)
-	mux.HandleFunc("GET /ap/users/{username}/following", h.GetFollowing)
-	mux.HandleFunc("GET /ap/users/{username}/collections/featured", h.GetFeatured)
-	mux.HandleFunc("GET /ap/users/{username}/collections/tags", h.GetFeaturedTags)
+	mux.HandleFunc("GET /ap/users/{id}", h.GetActor)
+	mux.HandleFunc("GET /ap/users/{id}/outbox", h.GetOutbox)
+	mux.HandleFunc("GET /ap/users/{id}/statuses/{statusID}", h.GetStatus)
+	mux.HandleFunc("GET /ap/users/{id}/statuses/{statusID}/activity", h.GetStatusActivity)
+	mux.HandleFunc("GET /ap/users/{id}/statuses/{statusID}/replies", h.GetStatusReplies)
+	mux.HandleFunc("GET /ap/users/{id}/statuses/{statusID}/likes", h.GetStatusLikes)
+	mux.HandleFunc("GET /ap/users/{id}/statuses/{statusID}/shares", h.GetStatusShares)
+	mux.HandleFunc("GET /ap/users/{id}/followers", h.GetFollowers)
+	mux.HandleFunc("GET /ap/users/{id}/following", h.GetFollowing)
+	mux.HandleFunc("GET /ap/users/{id}/followers_synchronization", h.GetFollowersSynchronization)
+	mux.HandleFunc("GET /ap/users/{id}/quote_authorizations/{quoteID}", h.GetQuoteAuthorization)
+	mux.HandleFunc("GET /ap/users/{id}/collections/featured", h.GetFeatured)
+	mux.HandleFunc("GET /ap/users/{id}/collections/tags", h.GetFeaturedTags)
 	mux.Handle("POST /ap/inbox", inboxHandler)
 	mux.Handle("POST /ap/users/{username}/inbox", inboxHandler)
+}
+
+func (h *FederationHandler) loadAccountFromRequest(ctx context.Context, r *http.Request) (db.Account, error) {
+	if h.store == nil {
+		return db.Account{}, pgx.ErrNoRows
+	}
+	if username := web.Param(r, "username"); username != "" {
+		return h.store.GetAccountByUsername(ctx, username)
+	}
+	if idParam := web.Param(r, "id"); idParam != "" {
+		id, err := strconv.ParseInt(idParam, 10, 64)
+		if err == nil && id > 0 {
+			return h.store.GetAccountByID(ctx, id)
+		}
+		return h.store.GetAccountByUsername(ctx, idParam)
+	}
+	return db.Account{}, pgx.ErrNoRows
+}
+
+func accountParam(r *http.Request) string {
+	if username := web.Param(r, "username"); username != "" {
+		return username
+	}
+	return web.Param(r, "id")
 }
 
 func (h *FederationHandler) writeInboxError(w http.ResponseWriter, err error) {
@@ -279,6 +396,258 @@ func parseInboxActivity(body []byte) (*activitypub.Activity, error) {
 	}
 
 	return &activity, nil
+}
+
+func isActivityPubRequest(r *http.Request) bool {
+	accept := r.Header.Get("Accept")
+	return accept == activitypub.ActivityPubContentType ||
+		accept == activitypub.ActivityPubLDContentType ||
+		accept == "application/activity+json"
+}
+
+func (h *FederationHandler) instanceActorAccount(ctx context.Context) (db.Account, error) {
+	if h == nil || h.store == nil {
+		return db.Account{}, pgx.ErrNoRows
+	}
+
+	actorURI := h.instanceActorURI()
+	if actorURI == "" {
+		return db.Account{}, errors.New("instance actor domain missing")
+	}
+
+	account, err := h.store.GetAccountByURI(ctx, actorURI)
+	if err == nil {
+		return h.ensureInstanceActor(ctx, account)
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return db.Account{}, err
+	}
+
+	account, err = h.store.GetAccountByUsername(ctx, h.domain)
+	if err == nil {
+		return h.ensureInstanceActor(ctx, account)
+	}
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return db.Account{}, err
+	}
+
+	return h.createInstanceActor(ctx, actorURI)
+}
+
+func (h *FederationHandler) ensureInstanceActor(ctx context.Context, account db.Account) (db.Account, error) {
+	writer, ok := h.store.(instanceActorWriter)
+	if !ok {
+		return account, nil
+	}
+
+	actorURI := h.instanceActorURI()
+	if actorURI == "" {
+		return account, errors.New("instance actor domain missing")
+	}
+	actorURL := h.instanceActorURL()
+
+	params := db.UpdateAccountParams{ID: account.ID}
+	needsUpdate := false
+
+	if account.Uri != actorURI {
+		params.Uri = pgtype.Text{String: actorURI, Valid: true}
+		needsUpdate = true
+	}
+	if actorURL != "" && (!account.Url.Valid || account.Url.String != actorURL) {
+		params.Url = pgtype.Text{String: actorURL, Valid: true}
+		needsUpdate = true
+	}
+	if !account.ActorType.Valid || !strings.EqualFold(account.ActorType.String, activitypub.TypeApplication) {
+		params.ActorType = pgtype.Text{String: activitypub.TypeApplication, Valid: true}
+		needsUpdate = true
+	}
+	if !account.Locked {
+		params.Locked = pgtype.Bool{Bool: true, Valid: true}
+		needsUpdate = true
+	}
+	if !account.Discoverable.Valid || account.Discoverable.Bool {
+		params.Discoverable = pgtype.Bool{Bool: false, Valid: true}
+		needsUpdate = true
+	}
+	if account.Indexable {
+		params.Indexable = pgtype.Bool{Bool: false, Valid: true}
+		needsUpdate = true
+	}
+
+	inboxURL := actorURI + "/inbox"
+	if account.InboxUrl != inboxURL {
+		params.InboxUrl = pgtype.Text{String: inboxURL, Valid: true}
+		needsUpdate = true
+	}
+	outboxURL := actorURI + "/outbox"
+	if account.OutboxUrl != outboxURL {
+		params.OutboxUrl = pgtype.Text{String: outboxURL, Valid: true}
+		needsUpdate = true
+	}
+	if h.domain != "" {
+		sharedInboxURL := fmt.Sprintf("https://%s/inbox", h.domain)
+		if account.SharedInboxUrl != sharedInboxURL {
+			params.SharedInboxUrl = pgtype.Text{String: sharedInboxURL, Valid: true}
+			needsUpdate = true
+		}
+	}
+
+	if !account.PrivateKey.Valid || account.PrivateKey.String == "" || account.PublicKey == "" {
+		privateKey, publicKey, err := activitypub.GenerateKeyPair()
+		if err != nil {
+			return db.Account{}, err
+		}
+		publicKeyPEM, err := activitypub.EncodePublicKey(publicKey)
+		if err != nil {
+			return db.Account{}, err
+		}
+		params.PrivateKey = pgtype.Text{String: activitypub.EncodePrivateKey(privateKey), Valid: true}
+		params.PublicKey = pgtype.Text{String: publicKeyPEM, Valid: true}
+		needsUpdate = true
+	}
+
+	if !needsUpdate {
+		return account, nil
+	}
+
+	updated, err := writer.UpdateAccount(ctx, params)
+	if err != nil {
+		return db.Account{}, err
+	}
+	return updated, nil
+}
+
+func (h *FederationHandler) createInstanceActor(ctx context.Context, actorURI string) (db.Account, error) {
+	writer, ok := h.store.(instanceActorWriter)
+	if !ok {
+		return db.Account{}, pgx.ErrNoRows
+	}
+	if actorURI == "" {
+		return db.Account{}, errors.New("instance actor domain missing")
+	}
+
+	privateKey, publicKey, err := activitypub.GenerateKeyPair()
+	if err != nil {
+		return db.Account{}, err
+	}
+	publicKeyPEM, err := activitypub.EncodePublicKey(publicKey)
+	if err != nil {
+		return db.Account{}, err
+	}
+
+	actorURL := h.instanceActorURL()
+	urlValue := pgtype.Text{Valid: false}
+	if actorURL != "" {
+		urlValue = pgtype.Text{String: actorURL, Valid: true}
+	}
+
+	account, err := writer.CreateAccount(ctx, db.CreateAccountParams{
+		Username:     h.domain,
+		Domain:       pgtype.Text{Valid: false},
+		PrivateKey:   pgtype.Text{String: activitypub.EncodePrivateKey(privateKey), Valid: true},
+		PublicKey:    publicKeyPEM,
+		DisplayName:  h.domain,
+		Note:         "",
+		Uri:          actorURI,
+		Url:          urlValue,
+		Locked:       true,
+		Discoverable: pgtype.Bool{Bool: false, Valid: true},
+		Indexable:    false,
+		ActorType:    pgtype.Text{String: activitypub.TypeApplication, Valid: true},
+		Protocol:     0,
+	})
+	if err != nil {
+		if existing, fetchErr := h.store.GetAccountByURI(ctx, actorURI); fetchErr == nil {
+			return existing, nil
+		}
+		return db.Account{}, err
+	}
+
+	return h.ensureInstanceActor(ctx, account)
+}
+
+func (h *FederationHandler) renderInstanceActor(w http.ResponseWriter, account db.Account) {
+	actorURI := h.instanceActorURI()
+	if actorURI == "" {
+		web.JSONError(w, http.StatusNotFound, "Actor not found")
+		return
+	}
+
+	preferredUsername := account.Username
+	if preferredUsername == "" {
+		preferredUsername = h.domain
+	}
+
+	actorType := activitypub.TypeApplication
+	if account.ActorType.Valid && strings.TrimSpace(account.ActorType.String) != "" {
+		actorType = account.ActorType.String
+	}
+
+	actor := activitypub.Actor{
+		Object: activitypub.Object{
+			Context: activitypub.MastodonContextFull(),
+			ID:      actorURI,
+			Type:    actorType,
+			URL:     h.instanceActorURL(),
+		},
+		PreferredUsername:         preferredUsername,
+		Inbox:                     actorURI + "/inbox",
+		Outbox:                    actorURI + "/outbox",
+		ManuallyApprovesFollowers: true,
+		Endpoints: &activitypub.Endpoints{
+			SharedInbox: fmt.Sprintf("https://%s/inbox", h.domain),
+		},
+	}
+
+	if account.PublicKey != "" {
+		actor.PublicKey = &activitypub.PublicKey{
+			ID:           fmt.Sprintf("%s#main-key", actorURI),
+			Owner:        actorURI,
+			PublicKeyPem: account.PublicKey,
+		}
+	}
+	if account.CreatedAt.Valid {
+		actor.Published = account.CreatedAt.Time.Format("2006-01-02T15:04:05Z")
+	}
+
+	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
+	web.JSON(w, http.StatusOK, actor)
+}
+
+func (h *FederationHandler) mockInstanceActor(w http.ResponseWriter) {
+	actorURI := h.instanceActorURI()
+	actor := activitypub.Actor{
+		Object: activitypub.Object{
+			Context: activitypub.MastodonContextFull(),
+			ID:      actorURI,
+			Type:    activitypub.TypeApplication,
+			URL:     h.instanceActorURL(),
+		},
+		PreferredUsername:         h.domain,
+		Inbox:                     actorURI + "/inbox",
+		Outbox:                    actorURI + "/outbox",
+		ManuallyApprovesFollowers: true,
+		Endpoints: &activitypub.Endpoints{
+			SharedInbox: fmt.Sprintf("https://%s/inbox", h.domain),
+		},
+	}
+
+	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
+	web.JSON(w, http.StatusOK, actor)
+}
+
+func (h *FederationHandler) instanceActorURI() string {
+	if h.domain == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://%s/actor", h.domain)
+}
+
+func (h *FederationHandler) instanceActorURL() string {
+	if h.domain == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://%s/about/more?instance_actor=true", h.domain)
 }
 
 func extractActivityType(raw map[string]any) (string, error) {

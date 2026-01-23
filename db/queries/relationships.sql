@@ -17,6 +17,15 @@ WHERE f.target_account_id = $1 AND a.suspended_at IS NULL
 ORDER BY f.id DESC
 LIMIT $2 OFFSET $3;
 
+-- name: ListFollowerURIsByPrefix :many
+SELECT a.uri FROM accounts a
+JOIN follows f ON f.account_id = a.id
+WHERE f.target_account_id = $1
+  AND a.suspended_at IS NULL
+  AND a.uri IS NOT NULL
+  AND (sqlc.narg('prefix')::text IS NULL OR a.uri LIKE sqlc.narg('prefix')::text || '%')
+ORDER BY f.id DESC;
+
 -- name: GetFollowing :many
 SELECT a.* FROM accounts a
 JOIN follows f ON f.target_account_id = a.id

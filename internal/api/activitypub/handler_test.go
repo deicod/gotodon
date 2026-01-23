@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -32,34 +33,53 @@ func (s stubActorFetcher) FetchActor(ctx context.Context, actorURI string) (*act
 }
 
 type stubActivityPubStore struct {
-	accountsByUsername    map[string]db.Account
-	accountsByID          map[int64]db.Account
-	accountsByURI         map[string]db.Account
-	statusesByAccount     map[int64][]db.Status
-	statusesByID          map[int64]db.Status
-	mentionsByStatus      map[int64][]db.Mention
-	tagsByStatus          map[int64][]db.GetTagsByStatusIDsRow
-	attachmentsByStatus   map[int64][]db.MediaAttachment
-	followersByAccount    map[int64][]db.Account
-	followingByAccount    map[int64][]db.Account
-	pinnedByAccount       map[int64][]db.Status
-	featuredTagsByAccount map[int64][]db.FeaturedTag
+	accountsByUsername     map[string]db.Account
+	accountsByID           map[int64]db.Account
+	accountsByURI          map[string]db.Account
+	conversationsByParent  map[string]db.Conversation
+	statusesByConversation map[int64][]db.Status
+	statusesByAccount      map[int64][]db.Status
+	statusesByID           map[int64]db.Status
+	statusStatsByID        map[int64]db.StatusStat
+	followerURIsByAccount  map[int64][]string
+	quotesByID             map[int64]db.Quote
+	conversationsByID      map[int64]db.Conversation
+	mentionsByStatus       map[int64][]db.Mention
+	tagsByStatus           map[int64][]db.GetTagsByStatusIDsRow
+	attachmentsByStatus    map[int64][]db.MediaAttachment
+	followersByAccount     map[int64][]db.Account
+	followingByAccount     map[int64][]db.Account
+	pinnedByAccount        map[int64][]db.Status
+	featuredTagsByAccount  map[int64][]db.FeaturedTag
+}
+
+func conversationKey(accountID pgtype.Int8, statusID pgtype.Int8) string {
+	if !accountID.Valid || !statusID.Valid {
+		return ""
+	}
+	return fmt.Sprintf("%d-%d", accountID.Int64, statusID.Int64)
 }
 
 func newStubActivityPubStore() *stubActivityPubStore {
 	return &stubActivityPubStore{
-		accountsByUsername:    map[string]db.Account{},
-		accountsByID:          map[int64]db.Account{},
-		accountsByURI:         map[string]db.Account{},
-		statusesByAccount:     map[int64][]db.Status{},
-		statusesByID:          map[int64]db.Status{},
-		mentionsByStatus:      map[int64][]db.Mention{},
-		tagsByStatus:          map[int64][]db.GetTagsByStatusIDsRow{},
-		attachmentsByStatus:   map[int64][]db.MediaAttachment{},
-		followersByAccount:    map[int64][]db.Account{},
-		followingByAccount:    map[int64][]db.Account{},
-		pinnedByAccount:       map[int64][]db.Status{},
-		featuredTagsByAccount: map[int64][]db.FeaturedTag{},
+		accountsByUsername:     map[string]db.Account{},
+		accountsByID:           map[int64]db.Account{},
+		accountsByURI:          map[string]db.Account{},
+		conversationsByParent:  map[string]db.Conversation{},
+		statusesByConversation: map[int64][]db.Status{},
+		statusesByAccount:      map[int64][]db.Status{},
+		statusesByID:           map[int64]db.Status{},
+		statusStatsByID:        map[int64]db.StatusStat{},
+		followerURIsByAccount:  map[int64][]string{},
+		quotesByID:             map[int64]db.Quote{},
+		conversationsByID:      map[int64]db.Conversation{},
+		mentionsByStatus:       map[int64][]db.Mention{},
+		tagsByStatus:           map[int64][]db.GetTagsByStatusIDsRow{},
+		attachmentsByStatus:    map[int64][]db.MediaAttachment{},
+		followersByAccount:     map[int64][]db.Account{},
+		followingByAccount:     map[int64][]db.Account{},
+		pinnedByAccount:        map[int64][]db.Status{},
+		featuredTagsByAccount:  map[int64][]db.FeaturedTag{},
 	}
 }
 
@@ -74,6 +94,17 @@ func (s *stubActivityPubStore) addAccount(account db.Account) {
 func (s *stubActivityPubStore) addStatus(status db.Status) {
 	s.statusesByID[status.ID] = status
 	s.statusesByAccount[status.AccountID] = append(s.statusesByAccount[status.AccountID], status)
+	if status.ConversationID.Valid {
+		s.statusesByConversation[status.ConversationID.Int64] = append(s.statusesByConversation[status.ConversationID.Int64], status)
+	}
+}
+
+func (s *stubActivityPubStore) addConversation(conversation db.Conversation) {
+	key := conversationKey(conversation.ParentAccountID, conversation.ParentStatusID)
+	if key == "" {
+		return
+	}
+	s.conversationsByParent[key] = conversation
 }
 
 func (s *stubActivityPubStore) addPinnedStatus(accountID int64, status db.Status) {
@@ -108,6 +139,59 @@ func (s *stubActivityPubStore) GetAccountByID(ctx context.Context, id int64) (db
 	return account, nil
 }
 
+func (s *stubActivityPubStore) GetConversationByParentAccountAndStatus(ctx context.Context, arg db.GetConversationByParentAccountAndStatusParams) (db.Conversation, error) {
+	key := conversationKey(arg.ParentAccountID, arg.ParentStatusID)
+	conversation, ok := s.conversationsByParent[key]
+	if !ok {
+		return db.Conversation{}, pgx.ErrNoRows
+	}
+	return conversation, nil
+}
+
+func (s *stubActivityPubStore) GetConversationsByIDs(ctx context.Context, ids []int64) ([]db.Conversation, error) {
+	conversations := make([]db.Conversation, 0, len(ids))
+	for _, id := range ids {
+		if conversation, ok := s.conversationsByID[id]; ok {
+			conversations = append(conversations, conversation)
+		}
+	}
+	return conversations, nil
+}
+
+func (s *stubActivityPubStore) GetStatusByID(ctx context.Context, id int64) (db.Status, error) {
+	status, ok := s.statusesByID[id]
+	if !ok {
+		return db.Status{}, pgx.ErrNoRows
+	}
+	return status, nil
+}
+
+func (s *stubActivityPubStore) GetStatusStats(ctx context.Context, statusID int64) (db.StatusStat, error) {
+	stat, ok := s.statusStatsByID[statusID]
+	if !ok {
+		return db.StatusStat{}, pgx.ErrNoRows
+	}
+	return stat, nil
+}
+
+func (s *stubActivityPubStore) GetStatusStatsByIDs(ctx context.Context, statusIds []int64) ([]db.StatusStat, error) {
+	stats := make([]db.StatusStat, 0, len(statusIds))
+	for _, id := range statusIds {
+		if stat, ok := s.statusStatsByID[id]; ok {
+			stats = append(stats, stat)
+		}
+	}
+	return stats, nil
+}
+
+func (s *stubActivityPubStore) GetQuote(ctx context.Context, id int64) (db.Quote, error) {
+	quote, ok := s.quotesByID[id]
+	if !ok {
+		return db.Quote{}, pgx.ErrNoRows
+	}
+	return quote, nil
+}
+
 func (s *stubActivityPubStore) GetAccountsByIDs(ctx context.Context, ids []int64) ([]db.Account, error) {
 	accounts := make([]db.Account, 0, len(ids))
 	for _, id := range ids {
@@ -126,27 +210,28 @@ func (s *stubActivityPubStore) GetAccountOutboxStatuses(ctx context.Context, arg
 
 	filtered := make([]db.Status, 0, len(statuses))
 	for _, status := range statuses {
-		if status.Visibility == 0 || status.Visibility == 1 {
-			filtered = append(filtered, status)
+		if status.Visibility != 0 && status.Visibility != 1 {
+			continue
 		}
-	}
-
-	start := int(arg.Offset)
-	if start < 0 {
-		start = 0
-	}
-	if start >= len(filtered) {
-		return []db.Status{}, nil
+		if arg.MaxID.Valid && status.ID >= arg.MaxID.Int64 {
+			continue
+		}
+		if arg.MinID.Valid && status.ID <= arg.MinID.Int64 {
+			continue
+		}
+		if arg.SinceID.Valid && status.ID <= arg.SinceID.Int64 {
+			continue
+		}
+		filtered = append(filtered, status)
 	}
 	limit := int(arg.Limit)
 	if limit <= 0 {
 		limit = len(filtered)
 	}
-	end := start + limit
-	if end > len(filtered) {
-		end = len(filtered)
+	if limit > len(filtered) {
+		limit = len(filtered)
 	}
-	return filtered[start:end], nil
+	return filtered[:limit], nil
 }
 
 func (s *stubActivityPubStore) CountAccountOutboxStatuses(ctx context.Context, accountID int64) (int64, error) {
@@ -167,6 +252,63 @@ func (s *stubActivityPubStore) GetStatusesByIDs(ctx context.Context, ids []int64
 		}
 	}
 	return statuses, nil
+}
+
+func (s *stubActivityPubStore) ListConversationStatuses(ctx context.Context, arg db.ListConversationStatusesParams) ([]db.Status, error) {
+	statuses := append([]db.Status{}, s.statusesByConversation[arg.ConversationID.Int64]...)
+	sort.Slice(statuses, func(i, j int) bool {
+		return statuses[i].ID < statuses[j].ID
+	})
+
+	filtered := make([]db.Status, 0, len(statuses))
+	for _, status := range statuses {
+		if arg.MinID > 0 && status.ID <= arg.MinID {
+			continue
+		}
+		if status.Visibility != 0 && status.Visibility != 1 {
+			continue
+		}
+		filtered = append(filtered, status)
+	}
+
+	limit := int(arg.Limit)
+	if limit <= 0 || limit > len(filtered) {
+		limit = len(filtered)
+	}
+	return filtered[:limit], nil
+}
+
+func (s *stubActivityPubStore) ListStatusReplies(ctx context.Context, arg db.ListStatusRepliesParams) ([]db.Status, error) {
+	statuses := make([]db.Status, 0)
+	for _, status := range s.statusesByID {
+		if !status.InReplyToID.Valid || status.InReplyToID.Int64 != arg.StatusID.Int64 {
+			continue
+		}
+		if status.Visibility != 0 && status.Visibility != 1 {
+			continue
+		}
+		if arg.MinID.Valid && status.ID <= arg.MinID.Int64 {
+			continue
+		}
+		if arg.AccountID.Valid && status.AccountID != arg.AccountID.Int64 {
+			continue
+		}
+		if arg.ExcludeAccountID.Valid && status.AccountID == arg.ExcludeAccountID.Int64 {
+			continue
+		}
+		statuses = append(statuses, status)
+	}
+	if len(statuses) == 0 {
+		return []db.Status{}, nil
+	}
+	sort.Slice(statuses, func(i, j int) bool {
+		return statuses[i].ID < statuses[j].ID
+	})
+	limit := int(arg.Limit)
+	if limit <= 0 || limit > len(statuses) {
+		limit = len(statuses)
+	}
+	return statuses[:limit], nil
 }
 
 func (s *stubActivityPubStore) GetMentionsByStatusIDs(ctx context.Context, statusIds []int64) ([]db.Mention, error) {
@@ -211,6 +353,25 @@ func (s *stubActivityPubStore) GetFollowers(ctx context.Context, arg db.GetFollo
 		end = len(accounts)
 	}
 	return accounts[start:end], nil
+}
+
+func (s *stubActivityPubStore) ListFollowerURIsByPrefix(ctx context.Context, arg db.ListFollowerURIsByPrefixParams) ([]string, error) {
+	uris := append([]string{}, s.followerURIsByAccount[arg.TargetAccountID]...)
+	if !arg.Prefix.Valid || strings.TrimSpace(arg.Prefix.String) == "" {
+		return uris, nil
+	}
+	prefix := strings.TrimSpace(arg.Prefix.String)
+	filtered := make([]string, 0, len(uris))
+	for _, uri := range uris {
+		trimmed := strings.TrimSpace(uri)
+		if trimmed == "" {
+			continue
+		}
+		if trimmed == prefix || strings.HasPrefix(trimmed, prefix) {
+			filtered = append(filtered, trimmed)
+		}
+	}
+	return filtered, nil
 }
 
 func (s *stubActivityPubStore) GetFollowing(ctx context.Context, arg db.GetFollowingParams) ([]db.Account, error) {
@@ -258,6 +419,20 @@ func signedInboxRequest(t *testing.T, body []byte, keyID, privateKeyPEM string) 
 		t.Fatalf("NewHTTPSigner() error = %v", err)
 	}
 	if err := signer.Sign(req, body); err != nil {
+		t.Fatalf("Sign() error = %v", err)
+	}
+	return req
+}
+
+func signedGetRequest(t *testing.T, url, keyID, privateKeyPEM string) *http.Request {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodGet, url, nil)
+	signer, err := activitypub.NewHTTPSigner(keyID, privateKeyPEM)
+	if err != nil {
+		t.Fatalf("NewHTTPSigner() error = %v", err)
+	}
+	if err := signer.Sign(req, nil); err != nil {
 		t.Fatalf("Sign() error = %v", err)
 	}
 	return req
@@ -668,6 +843,514 @@ func TestFederationHandler_PostInbox_HandlerErrorStatus(t *testing.T) {
 	}
 }
 
+func TestFederationHandler_GetInstanceActor(t *testing.T) {
+	store := newStubActivityPubStore()
+
+	_, pub, err := activitypub.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair() error = %v", err)
+	}
+	publicKeyPEM, err := activitypub.EncodePublicKey(pub)
+	if err != nil {
+		t.Fatalf("EncodePublicKey() error = %v", err)
+	}
+
+	createdAt := time.Date(2024, time.March, 4, 10, 0, 0, 0, time.UTC)
+	store.addAccount(db.Account{
+		ID:        1,
+		Username:  "example.com",
+		Uri:       "https://example.com/actor",
+		PublicKey: publicKeyPEM,
+		ActorType: pgtype.Text{String: activitypub.TypeApplication, Valid: true},
+		CreatedAt: pgtype.Timestamptz{Time: createdAt, Valid: true},
+	})
+
+	handler := NewFederationHandler(store, "example.com")
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/actor", nil)
+	req.Header.Set("Accept", activitypub.ActivityPubContentType)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var actor map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &actor); err != nil {
+		t.Fatalf("unmarshal actor: %v", err)
+	}
+	if actor["id"] != "https://example.com/actor" {
+		t.Fatalf("id = %v, want %q", actor["id"], "https://example.com/actor")
+	}
+	if actor["type"] != activitypub.TypeApplication {
+		t.Fatalf("type = %v, want %s", actor["type"], activitypub.TypeApplication)
+	}
+	if actor["preferredUsername"] != "example.com" {
+		t.Fatalf("preferredUsername = %v, want %q", actor["preferredUsername"], "example.com")
+	}
+	if actor["inbox"] != "https://example.com/actor/inbox" {
+		t.Fatalf("inbox = %v, want %q", actor["inbox"], "https://example.com/actor/inbox")
+	}
+	if actor["outbox"] != "https://example.com/actor/outbox" {
+		t.Fatalf("outbox = %v, want %q", actor["outbox"], "https://example.com/actor/outbox")
+	}
+	if actor["url"] != "https://example.com/about/more?instance_actor=true" {
+		t.Fatalf("url = %v, want %q", actor["url"], "https://example.com/about/more?instance_actor=true")
+	}
+	if actor["manuallyApprovesFollowers"] != true {
+		t.Fatalf("manuallyApprovesFollowers = %v, want true", actor["manuallyApprovesFollowers"])
+	}
+
+	endpoints, ok := actor["endpoints"].(map[string]any)
+	if !ok {
+		t.Fatalf("endpoints missing or invalid: %T", actor["endpoints"])
+	}
+	if endpoints["sharedInbox"] != "https://example.com/inbox" {
+		t.Fatalf("endpoints.sharedInbox = %v, want %q", endpoints["sharedInbox"], "https://example.com/inbox")
+	}
+
+	publicKey, ok := actor["publicKey"].(map[string]any)
+	if !ok {
+		t.Fatalf("publicKey missing or invalid: %T", actor["publicKey"])
+	}
+	if publicKey["publicKeyPem"] != publicKeyPEM {
+		t.Fatalf("publicKey.publicKeyPem = %v, want %q", publicKey["publicKeyPem"], publicKeyPEM)
+	}
+}
+
+func TestFederationHandler_GetInstanceOutbox(t *testing.T) {
+	store := newStubActivityPubStore()
+	store.addAccount(db.Account{ID: 1, Username: "example.com", Uri: "https://example.com/actor"})
+
+	handler := NewFederationHandler(store, "example.com")
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/actor/outbox", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var collection map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &collection); err != nil {
+		t.Fatalf("unmarshal collection: %v", err)
+	}
+	if collection["type"] != activitypub.TypeOrderedCollection {
+		t.Fatalf("type = %v, want %s", collection["type"], activitypub.TypeOrderedCollection)
+	}
+	if collection["id"] != "https://example.com/actor/outbox" {
+		t.Fatalf("id = %v, want %q", collection["id"], "https://example.com/actor/outbox")
+	}
+	if collection["totalItems"] != float64(0) {
+		t.Fatalf("totalItems = %v, want 0", collection["totalItems"])
+	}
+}
+
+func TestFederationHandler_GetContext(t *testing.T) {
+	store := newStubActivityPubStore()
+	store.addAccount(db.Account{ID: 1, Username: "alice", Uri: "https://example.com/users/alice"})
+
+	conversation := db.Conversation{
+		ID:              10,
+		ParentAccountID: pgtype.Int8{Int64: 1, Valid: true},
+		ParentStatusID:  pgtype.Int8{Int64: 100, Valid: true},
+	}
+	store.addConversation(conversation)
+
+	store.addStatus(db.Status{
+		ID:             101,
+		AccountID:      1,
+		ConversationID: pgtype.Int8{Int64: 10, Valid: true},
+		Visibility:     0,
+		Local:          pgtype.Bool{Bool: true, Valid: true},
+	})
+	store.addStatus(db.Status{
+		ID:             102,
+		AccountID:      1,
+		ConversationID: pgtype.Int8{Int64: 10, Valid: true},
+		Visibility:     1,
+		Local:          pgtype.Bool{Bool: true, Valid: true},
+	})
+
+	handler := NewFederationHandler(store, "example.com")
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/contexts/1-100", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal context: %v", err)
+	}
+	if resp["type"] != activitypub.TypeCollection {
+		t.Fatalf("type = %v, want %s", resp["type"], activitypub.TypeCollection)
+	}
+	if resp["attributedTo"] != "https://example.com/users/alice" {
+		t.Fatalf("attributedTo = %v, want %q", resp["attributedTo"], "https://example.com/users/alice")
+	}
+
+	first, ok := resp["first"].(map[string]any)
+	if !ok {
+		t.Fatalf("first missing or invalid: %T", resp["first"])
+	}
+	if first["type"] != activitypub.TypeCollectionPage {
+		t.Fatalf("first.type = %v, want %s", first["type"], activitypub.TypeCollectionPage)
+	}
+	if first["partOf"] != "https://example.com/contexts/1-100/items" {
+		t.Fatalf("first.partOf = %v, want %q", first["partOf"], "https://example.com/contexts/1-100/items")
+	}
+	items, ok := first["items"].([]any)
+	if !ok {
+		t.Fatalf("first.items missing or invalid: %T", first["items"])
+	}
+	if len(items) != 2 {
+		t.Fatalf("first.items len = %d, want 2", len(items))
+	}
+	if items[0] != "https://example.com/users/alice/statuses/101" {
+		t.Fatalf("first.items[0] = %v, want %q", items[0], "https://example.com/users/alice/statuses/101")
+	}
+	if items[1] != "https://example.com/users/alice/statuses/102" {
+		t.Fatalf("first.items[1] = %v, want %q", items[1], "https://example.com/users/alice/statuses/102")
+	}
+}
+
+func TestFederationHandler_GetContextItems(t *testing.T) {
+	store := newStubActivityPubStore()
+	store.addAccount(db.Account{ID: 1, Username: "alice", Uri: "https://example.com/users/alice"})
+
+	conversation := db.Conversation{
+		ID:              10,
+		ParentAccountID: pgtype.Int8{Int64: 1, Valid: true},
+		ParentStatusID:  pgtype.Int8{Int64: 100, Valid: true},
+	}
+	store.addConversation(conversation)
+
+	store.addStatus(db.Status{
+		ID:             101,
+		AccountID:      1,
+		ConversationID: pgtype.Int8{Int64: 10, Valid: true},
+		Visibility:     0,
+		Local:          pgtype.Bool{Bool: true, Valid: true},
+	})
+
+	handler := NewFederationHandler(store, "example.com")
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/contexts/1-100/items?page=true", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal context items: %v", err)
+	}
+	if resp["type"] != activitypub.TypeCollectionPage {
+		t.Fatalf("type = %v, want %s", resp["type"], activitypub.TypeCollectionPage)
+	}
+	if resp["partOf"] != "https://example.com/contexts/1-100/items" {
+		t.Fatalf("partOf = %v, want %q", resp["partOf"], "https://example.com/contexts/1-100/items")
+	}
+	items, ok := resp["items"].([]any)
+	if !ok {
+		t.Fatalf("items missing or invalid: %T", resp["items"])
+	}
+	if len(items) != 1 {
+		t.Fatalf("items len = %d, want 1", len(items))
+	}
+	if items[0] != "https://example.com/users/alice/statuses/101" {
+		t.Fatalf("items[0] = %v, want %q", items[0], "https://example.com/users/alice/statuses/101")
+	}
+}
+
+func TestFederationHandler_GetStatus(t *testing.T) {
+	store := newStubActivityPubStore()
+	alice := db.Account{ID: 1, Username: "alice", Uri: "https://example.com/users/alice"}
+	store.addAccount(alice)
+
+	conversation := db.Conversation{
+		ID:              50,
+		ParentAccountID: pgtype.Int8{Int64: 1, Valid: true},
+		ParentStatusID:  pgtype.Int8{Int64: 10, Valid: true},
+	}
+	store.conversationsByID[50] = conversation
+
+	store.addStatus(db.Status{
+		ID:             10,
+		AccountID:      1,
+		Text:           "hello",
+		Visibility:     0,
+		Local:          pgtype.Bool{Bool: true, Valid: true},
+		ConversationID: pgtype.Int8{Int64: 50, Valid: true},
+	})
+	store.addStatus(db.Status{
+		ID:             11,
+		AccountID:      1,
+		Text:           "reply",
+		InReplyToID:    pgtype.Int8{Int64: 10, Valid: true},
+		Visibility:     0,
+		Local:          pgtype.Bool{Bool: true, Valid: true},
+		ConversationID: pgtype.Int8{Valid: false},
+	})
+	store.statusStatsByID[10] = db.StatusStat{StatusID: 10, FavouritesCount: 2, ReblogsCount: 3}
+
+	handler := NewFederationHandler(store, "example.com")
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/users/alice/statuses/10", nil)
+	req.Header.Set("Accept", activitypub.ActivityPubContentType)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var note map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &note); err != nil {
+		t.Fatalf("unmarshal note: %v", err)
+	}
+	if note["type"] != activitypub.TypeNote {
+		t.Fatalf("type = %v, want %s", note["type"], activitypub.TypeNote)
+	}
+	if note["id"] != "https://example.com/users/alice/statuses/10" {
+		t.Fatalf("id = %v, want %q", note["id"], "https://example.com/users/alice/statuses/10")
+	}
+	if note["attributedTo"] != "https://example.com/users/alice" {
+		t.Fatalf("attributedTo = %v, want %q", note["attributedTo"], "https://example.com/users/alice")
+	}
+	if note["content"] != "<p>hello</p>" {
+		t.Fatalf("content = %v, want %q", note["content"], "<p>hello</p>")
+	}
+	noteLikes, ok := note["likes"].(map[string]any)
+	if !ok {
+		t.Fatalf("likes missing or invalid: %T", note["likes"])
+	}
+	if noteLikes["totalItems"] != float64(2) {
+		t.Fatalf("likes.totalItems = %v, want 2", noteLikes["totalItems"])
+	}
+	noteShares, ok := note["shares"].(map[string]any)
+	if !ok {
+		t.Fatalf("shares missing or invalid: %T", note["shares"])
+	}
+	if noteShares["totalItems"] != float64(3) {
+		t.Fatalf("shares.totalItems = %v, want 3", noteShares["totalItems"])
+	}
+	noteReplies, ok := note["replies"].(map[string]any)
+	if !ok {
+		t.Fatalf("replies missing or invalid: %T", note["replies"])
+	}
+	if noteReplies["id"] != "https://example.com/users/alice/statuses/10/replies" {
+		t.Fatalf("replies.id = %v, want %q", noteReplies["id"], "https://example.com/users/alice/statuses/10/replies")
+	}
+	if note["context"] != "https://example.com/contexts/1-10" {
+		t.Fatalf("context = %v, want %q", note["context"], "https://example.com/contexts/1-10")
+	}
+	if note["conversation"] != "https://example.com/contexts/1-10" {
+		t.Fatalf("conversation = %v, want %q", note["conversation"], "https://example.com/contexts/1-10")
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/users/alice/statuses/10/activity", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("activity status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var activity map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &activity); err != nil {
+		t.Fatalf("unmarshal activity: %v", err)
+	}
+	if activity["type"] != activitypub.TypeCreate {
+		t.Fatalf("activity.type = %v, want %s", activity["type"], activitypub.TypeCreate)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/users/alice/statuses/10/replies?page=true", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("replies status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var replies map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &replies); err != nil {
+		t.Fatalf("unmarshal replies: %v", err)
+	}
+	if replies["type"] != activitypub.TypeCollectionPage {
+		t.Fatalf("replies.type = %v, want %s", replies["type"], activitypub.TypeCollectionPage)
+	}
+	items, ok := replies["items"].([]any)
+	if !ok {
+		t.Fatalf("replies.items missing or invalid: %T", replies["items"])
+	}
+	if len(items) != 1 {
+		t.Fatalf("replies.items len = %d, want 1", len(items))
+	}
+	if items[0] != "https://example.com/users/alice/statuses/11" {
+		t.Fatalf("replies.items[0] = %v, want %q", items[0], "https://example.com/users/alice/statuses/11")
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/users/alice/statuses/10/likes", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("likes status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var likes map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &likes); err != nil {
+		t.Fatalf("unmarshal likes: %v", err)
+	}
+	if likes["totalItems"] != float64(2) {
+		t.Fatalf("likes.totalItems = %v, want 2", likes["totalItems"])
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/users/alice/statuses/10/shares", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("shares status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var shares map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &shares); err != nil {
+		t.Fatalf("unmarshal shares: %v", err)
+	}
+	if shares["totalItems"] != float64(3) {
+		t.Fatalf("shares.totalItems = %v, want 3", shares["totalItems"])
+	}
+}
+
+func TestFederationHandler_GetFollowersSynchronization(t *testing.T) {
+	store := newStubActivityPubStore()
+	store.addAccount(db.Account{ID: 1, Username: "alice", Uri: "https://example.com/users/alice"})
+	store.followerURIsByAccount[1] = []string{
+		"https://remote.example/users/bob",
+		"https://other.example/users/carol",
+	}
+
+	priv, pub, err := activitypub.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair() error = %v", err)
+	}
+	privateKeyPEM := activitypub.EncodePrivateKey(priv)
+	publicKeyPEM, err := activitypub.EncodePublicKey(pub)
+	if err != nil {
+		t.Fatalf("EncodePublicKey() error = %v", err)
+	}
+
+	actorURI := "https://remote.example/users/admin"
+	store.addAccount(db.Account{ID: 5, Uri: actorURI, PublicKey: publicKeyPEM})
+
+	handler := NewFederationHandler(store, "example.com")
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	req := signedGetRequest(t, "https://example.com/users/alice/followers_synchronization", actorURI+"#main-key", privateKeyPEM)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp["type"] != activitypub.TypeOrderedCollection {
+		t.Fatalf("type = %v, want %s", resp["type"], activitypub.TypeOrderedCollection)
+	}
+	items, ok := resp["orderedItems"].([]any)
+	if !ok {
+		t.Fatalf("orderedItems missing or invalid: %T", resp["orderedItems"])
+	}
+	if len(items) != 1 {
+		t.Fatalf("orderedItems len = %d, want 1", len(items))
+	}
+	if items[0] != "https://remote.example/users/bob" {
+		t.Fatalf("orderedItems[0] = %v, want %q", items[0], "https://remote.example/users/bob")
+	}
+}
+
+func TestFederationHandler_GetQuoteAuthorization(t *testing.T) {
+	store := newStubActivityPubStore()
+	store.addAccount(db.Account{ID: 1, Username: "alice", Uri: "https://example.com/users/alice"})
+	store.addAccount(db.Account{ID: 2, Username: "bob", Uri: "https://example.com/users/bob"})
+
+	store.addStatus(db.Status{
+		ID:         100,
+		AccountID:  2,
+		Visibility: 0,
+		Local:      pgtype.Bool{Bool: true, Valid: true},
+	})
+	store.addStatus(db.Status{
+		ID:         200,
+		AccountID:  1,
+		Visibility: 0,
+		Local:      pgtype.Bool{Bool: true, Valid: true},
+	})
+	store.quotesByID[10] = db.Quote{
+		ID:              10,
+		AccountID:       2,
+		StatusID:        100,
+		QuotedStatusID:  pgtype.Int8{Int64: 200, Valid: true},
+		QuotedAccountID: pgtype.Int8{Int64: 1, Valid: true},
+		State:           quoteStateAccepted,
+	}
+
+	handler := NewFederationHandler(store, "example.com")
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/users/alice/quote_authorizations/10", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp["type"] != "QuoteAuthorization" {
+		t.Fatalf("type = %v, want QuoteAuthorization", resp["type"])
+	}
+	if resp["id"] != "https://example.com/users/alice/quote_authorizations/10" {
+		t.Fatalf("id = %v, want %q", resp["id"], "https://example.com/users/alice/quote_authorizations/10")
+	}
+	if resp["attributedTo"] != "https://example.com/users/alice" {
+		t.Fatalf("attributedTo = %v, want %q", resp["attributedTo"], "https://example.com/users/alice")
+	}
+	if resp["interactionTarget"] != "https://example.com/users/alice/statuses/200" {
+		t.Fatalf("interactionTarget = %v, want %q", resp["interactionTarget"], "https://example.com/users/alice/statuses/200")
+	}
+	if resp["interactingObject"] != "https://example.com/users/bob/statuses/100" {
+		t.Fatalf("interactingObject = %v, want %q", resp["interactingObject"], "https://example.com/users/bob/statuses/100")
+	}
+}
+
 func TestFederationHandler_GetOutbox_CollectionsAndPages(t *testing.T) {
 	store := newStubActivityPubStore()
 	alice := db.Account{ID: 1, Username: "alice", Uri: "https://example.com/users/alice"}
@@ -829,7 +1512,7 @@ func TestFederationHandler_GetFeaturedCollections(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
-	req := httptest.NewRequest(http.MethodGet, "/users/alice/collections/featured?page=true", nil)
+	req := httptest.NewRequest(http.MethodGet, "/users/alice/collections/featured", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -851,7 +1534,7 @@ func TestFederationHandler_GetFeaturedCollections(t *testing.T) {
 		t.Fatalf("featured orderedItems len = %d, want 1", len(featuredItems))
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/users/alice/collections/tags?page=true", nil)
+	req = httptest.NewRequest(http.MethodGet, "/users/alice/collections/tags", nil)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -861,13 +1544,13 @@ func TestFederationHandler_GetFeaturedCollections(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &tags); err != nil {
 		t.Fatalf("unmarshal tags: %v", err)
 	}
-	rawTagItems, ok := tags["orderedItems"]
+	rawTagItems, ok := tags["items"]
 	if !ok {
-		t.Fatalf("tags orderedItems missing, body=%s", rec.Body.String())
+		t.Fatalf("tags items missing, body=%s", rec.Body.String())
 	}
 	tagItems, ok := rawTagItems.([]any)
 	if !ok {
-		t.Fatalf("tags orderedItems type = %T, want []any", rawTagItems)
+		t.Fatalf("tags items type = %T, want []any", rawTagItems)
 	}
 	if len(tagItems) != 1 {
 		t.Fatalf("tags orderedItems len = %d, want 1", len(tagItems))
@@ -894,6 +1577,13 @@ func TestFederationHandler_ApAliasRoutes(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/ap/users/alice/followers", nil)
 	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/ap/users/1/followers", nil)
+	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
