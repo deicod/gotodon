@@ -19,3 +19,7 @@
 ## 2026-01-22 - [HTML Parsing Fast Path]
 **Learning:** `xhtml.Parse` and `Render` are expensive. For functions that only transform specific HTML elements (like `<a>`), guarding the parse with a `strings.Contains` check on the input string can avoid the entire overhead for the majority of inputs (e.g. plain text).
 **Action:** Implement fast-path checks using `strings.Contains` for expensive transformation functions if the triggers are rare.
+
+## 2026-02-12 - [Merged Text Formatting Pipeline]
+**Learning:** Chaining multiple formatting functions (e.g., `linkify` -> `string` -> `formatParagraphs` -> `string`) creates unnecessary intermediate string allocations.
+**Action:** Merge formatting steps into a single pass using a shared `strings.Builder`. Handle complex logic (like paragraph breaks) inline or via helper functions that accept the builder.
