@@ -139,6 +139,7 @@ type Querier interface {
 	ClearTagTrends(ctx context.Context) error
 	CountAccountOutboxStatuses(ctx context.Context, accountID int64) (int64, error)
 	CountAccountPins(ctx context.Context, accountID int64) (int64, error)
+	CountActiveUsers(ctx context.Context) (int64, error)
 	CountAnnualReportsByAccount(ctx context.Context, accountID int64) (int64, error)
 	CountDomainAllows(ctx context.Context) (int64, error)
 	CountFailedLoginAttempts(ctx context.Context, arg CountFailedLoginAttemptsParams) (int64, error)

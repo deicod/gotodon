@@ -5,6 +5,14 @@ JOIN accounts ON accounts.id = users.account_id
 WHERE users.confirmed_at IS NOT NULL
   AND accounts.suspended_at IS NULL;
 
+-- name: CountActiveUsers :one
+SELECT COUNT(*)
+FROM users
+JOIN accounts ON accounts.id = users.account_id
+WHERE users.confirmed_at IS NOT NULL
+  AND accounts.suspended_at IS NULL
+  AND COALESCE(users.current_sign_in_at, users.last_sign_in_at) >= NOW() - INTERVAL '30 days';
+
 -- name: CountInstanceStatuses :one
 SELECT COALESCE(SUM(account_stats.statuses_count), 0)::bigint
 FROM accounts

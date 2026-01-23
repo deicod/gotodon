@@ -9,6 +9,22 @@ import (
 	"context"
 )
 
+const countActiveUsers = `-- name: CountActiveUsers :one
+SELECT COUNT(*)
+FROM users
+JOIN accounts ON accounts.id = users.account_id
+WHERE users.confirmed_at IS NOT NULL
+  AND accounts.suspended_at IS NULL
+  AND COALESCE(users.current_sign_in_at, users.last_sign_in_at) >= NOW() - INTERVAL '30 days'
+`
+
+func (q *Queries) CountActiveUsers(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveUsers)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countInstanceDomains = `-- name: CountInstanceDomains :one
 SELECT COUNT(DISTINCT accounts.domain)
 FROM accounts

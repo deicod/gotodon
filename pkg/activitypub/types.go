@@ -194,13 +194,16 @@ func MastodonContextFull() []any {
 			"featuredTags":              map[string]string{"@id": "toot:featuredTags", "@type": "@id"},
 			"alsoKnownAs":               map[string]string{"@id": "as:alsoKnownAs", "@type": "@id"},
 			"movedTo":                   map[string]string{"@id": "as:movedTo", "@type": "@id"},
+			"schema":                    "http://schema.org#",
 			"discoverable":              "toot:discoverable",
+			"suspended":                 "toot:suspended",
 			"indexable":                 "toot:indexable",
 			"memorial":                  "toot:memorial",
 			"Emoji":                     "toot:Emoji",
 			"Hashtag":                   "as:Hashtag",
 			"PropertyValue":             "schema:PropertyValue",
 			"value":                     "schema:value",
+			"attributionDomains":        map[string]string{"@id": "toot:attributionDomains", "@type": "@id"},
 		},
 	}
 }
