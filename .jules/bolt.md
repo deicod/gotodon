@@ -23,3 +23,7 @@
 ## 2026-02-12 - [Merged Text Formatting Pipeline]
 **Learning:** Chaining multiple formatting functions (e.g., `linkify` -> `string` -> `formatParagraphs` -> `string`) creates unnecessary intermediate string allocations.
 **Action:** Merge formatting steps into a single pass using a shared `strings.Builder`. Handle complex logic (like paragraph breaks) inline or via helper functions that accept the builder.
+
+## 2026-02-18 - [IndexAny vs Byte Loop]
+**Learning:** For scanning strings with multiple delimiter targets (e.g., HTML special chars + newlines), `strings.IndexAny` outperforms manual byte-by-byte loops in Go for typical inputs where delimiters are sparse. While `IndexAny` incurs a slice header allocation overhead, its assembly-optimized scanning provides a net benefit for clean text runs.
+**Action:** Prefer `strings.IndexAny` over manual byte loops for multi-character search in hot paths, unless the text is known to be extremely dense with delimiters.
