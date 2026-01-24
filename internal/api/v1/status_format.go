@@ -137,31 +137,36 @@ func linkifyAndFormatText(cfg *config.Config, text string, opts statusContentOpt
 }
 
 func writeFormattedText(b *strings.Builder, s string) {
-	start := 0
-	n := len(s)
 	i := 0
+	n := len(s)
 	for i < n {
-		c := s[i]
-		switch c {
-		case '\r', '\n':
-			if i > start {
-				b.WriteString(s[start:i])
-			}
+		j := strings.IndexAny(s[i:], "\r\n\"'&<>")
+		if j == -1 {
+			b.WriteString(s[i:])
+			break
+		}
+		j += i
 
+		if j > i {
+			b.WriteString(s[i:j])
+		}
+
+		c := s[j]
+		if c == '\r' || c == '\n' {
 			// Handle newlines
 			newlines := 0
-			j := i
-			for j < n {
-				c2 := s[j]
+			k := j
+			for k < n {
+				c2 := s[k]
 				if c2 == '\r' {
 					newlines++
-					j++
-					if j < n && s[j] == '\n' {
-						j++
+					k++
+					if k < n && s[k] == '\n' {
+						k++
 					}
 				} else if c2 == '\n' {
 					newlines++
-					j++
+					k++
 				} else {
 					break
 				}
@@ -172,36 +177,22 @@ func writeFormattedText(b *strings.Builder, s string) {
 			} else {
 				b.WriteString("<br />")
 			}
-
-			start = j
-			i = j
-			continue // Skip i++
-
-		case '"':
-			b.WriteString(s[start:i])
-			b.WriteString("&#34;")
-			start = i + 1
-		case '&':
-			b.WriteString(s[start:i])
-			b.WriteString("&amp;")
-			start = i + 1
-		case '\'':
-			b.WriteString(s[start:i])
-			b.WriteString("&#39;")
-			start = i + 1
-		case '<':
-			b.WriteString(s[start:i])
-			b.WriteString("&lt;")
-			start = i + 1
-		case '>':
-			b.WriteString(s[start:i])
-			b.WriteString("&gt;")
-			start = i + 1
+			i = k
+		} else {
+			switch c {
+			case '"':
+				b.WriteString("&#34;")
+			case '&':
+				b.WriteString("&amp;")
+			case '\'':
+				b.WriteString("&#39;")
+			case '<':
+				b.WriteString("&lt;")
+			case '>':
+				b.WriteString("&gt;")
+			}
+			i = j + 1
 		}
-		i++
-	}
-	if start < n {
-		b.WriteString(s[start:])
 	}
 }
 
