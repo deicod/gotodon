@@ -27,3 +27,7 @@
 ## 2026-02-18 - [IndexAny vs Byte Loop]
 **Learning:** For scanning strings with multiple delimiter targets (e.g., HTML special chars + newlines), `strings.IndexAny` outperforms manual byte-by-byte loops in Go for typical inputs where delimiters are sparse. While `IndexAny` incurs a slice header allocation overhead, its assembly-optimized scanning provides a net benefit for clean text runs.
 **Action:** Prefer `strings.IndexAny` over manual byte loops for multi-character search in hot paths, unless the text is known to be extremely dense with delimiters.
+
+## 2026-02-27 - [Lazy Map Initialization in Serializers]
+**Learning:** Serialization functions often pre-allocate multiple maps for potential related data (mentions, emojis, media), but in the majority of cases (e.g. plain text status), these maps remain empty. Pre-allocating them causes significant GC pressure.
+**Action:** Use lazy initialization for maps in serialization logic. Wrap map allocation and population in `if len(data) > 0` checks. Ensure consuming code handles nil maps gracefully (which Go does naturally).

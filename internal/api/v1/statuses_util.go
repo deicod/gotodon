@@ -70,12 +70,7 @@ func isPinnableStatus(accountID int64, status db.Status) bool {
 }
 
 func buildStatusRelationships(ctx context.Context, q statusRelationshipQuerier, accountID int64, statuses []db.Status) statusRelationships {
-	relationships := statusRelationships{
-		favourited: make(map[int64]bool),
-		reblogged:  make(map[int64]bool),
-		bookmarked: make(map[int64]bool),
-		pinned:     make(map[int64]bool),
-	}
+	relationships := statusRelationships{}
 	if q == nil || accountID == 0 || len(statuses) == 0 {
 		return relationships
 	}
@@ -113,7 +108,8 @@ func buildStatusRelationships(ctx context.Context, q statusRelationshipQuerier, 
 	if ids, err := q.ListFavouritedStatusIDs(ctx, db.ListFavouritedStatusIDsParams{
 		AccountID: accountID,
 		StatusIds: statusIDs,
-	}); err == nil {
+	}); err == nil && len(ids) > 0 {
+		relationships.favourited = make(map[int64]bool)
 		for _, id := range ids {
 			relationships.favourited[id] = true
 		}
@@ -122,7 +118,8 @@ func buildStatusRelationships(ctx context.Context, q statusRelationshipQuerier, 
 	if ids, err := q.ListBookmarkedStatusIDs(ctx, db.ListBookmarkedStatusIDsParams{
 		AccountID: accountID,
 		StatusIds: statusIDs,
-	}); err == nil {
+	}); err == nil && len(ids) > 0 {
+		relationships.bookmarked = make(map[int64]bool)
 		for _, id := range ids {
 			relationships.bookmarked[id] = true
 		}
@@ -131,7 +128,8 @@ func buildStatusRelationships(ctx context.Context, q statusRelationshipQuerier, 
 	if ids, err := q.ListRebloggedStatusIDs(ctx, db.ListRebloggedStatusIDsParams{
 		AccountID: accountID,
 		StatusIds: statusIDs,
-	}); err == nil {
+	}); err == nil && len(ids) > 0 {
+		relationships.reblogged = make(map[int64]bool)
 		for _, id := range ids {
 			if id.Valid {
 				relationships.reblogged[id.Int64] = true
@@ -143,7 +141,8 @@ func buildStatusRelationships(ctx context.Context, q statusRelationshipQuerier, 
 		if ids, err := q.ListPinnedStatusIDs(ctx, db.ListPinnedStatusIDsParams{
 			AccountID: accountID,
 			StatusIds: pinnableIDs,
-		}); err == nil {
+		}); err == nil && len(ids) > 0 {
+			relationships.pinned = make(map[int64]bool)
 			for _, id := range ids {
 				relationships.pinned[id] = true
 			}
@@ -193,15 +192,22 @@ func buildStatusEmojis(ctx context.Context, q statusEmojiQuerier, statuses []db.
 		return emojisByStatus
 	}
 
-	statusShortcodesMap := make(map[int64][]string, len(statuses))
-	statusDomains := make(map[int64]string, len(statuses))
-	domainShortcodes := make(map[string]map[string]struct{})
+	var statusShortcodesMap map[int64][]string
+	var statusDomains map[int64]string
+	var domainShortcodes map[string]map[string]struct{}
 
 	for _, status := range statuses {
 		shortcodes := statusShortcodes(status.SpoilerText, status.Text)
 		if len(shortcodes) == 0 {
 			continue
 		}
+
+		if statusShortcodesMap == nil {
+			statusShortcodesMap = make(map[int64][]string, len(statuses))
+			statusDomains = make(map[int64]string, len(statuses))
+			domainShortcodes = make(map[string]map[string]struct{})
+		}
+
 		domain := ""
 		if acc, ok := accounts[status.AccountID]; ok {
 			domain = statusEmojiDomain(acc)
@@ -365,102 +371,114 @@ func serializeStatusesInternal(ctx context.Context, q statusSerializerQuerier, c
 	accountsMap := serializeAccounts(ctx, q, cfg, dbAccounts, true)
 	statusEmojis := buildStatusEmojis(ctx, q, dbStatuses, accountsMap)
 
-	mediaMap := make(map[int64][]MediaAttach)
-	for _, m := range dbMedias {
-		if !m.StatusID.Valid {
-			continue
-		}
-		sid := m.StatusID.Int64
-		mediaType := "image"
-		if m.Type == MediaTypeVideo {
-			mediaType = "video"
-		}
+	var mediaMap map[int64][]MediaAttach
+	if len(dbMedias) > 0 {
+		mediaMap = make(map[int64][]MediaAttach)
+		for _, m := range dbMedias {
+			if !m.StatusID.Valid {
+				continue
+			}
+			sid := m.StatusID.Int64
+			mediaType := "image"
+			if m.Type == MediaTypeVideo {
+				mediaType = "video"
+			}
 
-		var remoteURL *string
-		if m.RemoteUrl != "" {
-			s := m.RemoteUrl
-			remoteURL = &s
+			var remoteURL *string
+			if m.RemoteUrl != "" {
+				s := m.RemoteUrl
+				remoteURL = &s
+			}
+
+			var description *string
+			if m.Description.Valid {
+				s := m.Description.String
+				description = &s
+			}
+
+			var blurhash *string
+			if m.Blurhash.Valid {
+				s := m.Blurhash.String
+				blurhash = &s
+			}
+
+			// Use configured domain if media is local and URL is relative (though model usually stores full or relative)
+			// For robustness, assumes URL in DB is correct for now, or we could prefix if needed.
+			// Existing code used raw m.RemoteUrl or m.ThumbnailRemoteUrl.
+			// For local files, we might need to prepend valid URLs but let's stick to DB values for now unless empty.
+
+			mediaMap[sid] = append(mediaMap[sid], MediaAttach{
+				ID:          strconv.FormatInt(m.ID, 10),
+				Type:        mediaType,
+				URL:         m.RemoteUrl,
+				PreviewURL:  m.ThumbnailRemoteUrl.String,
+				RemoteURL:   remoteURL,
+				Description: description,
+				Blurhash:    blurhash,
+			})
 		}
-
-		var description *string
-		if m.Description.Valid {
-			s := m.Description.String
-			description = &s
-		}
-
-		var blurhash *string
-		if m.Blurhash.Valid {
-			s := m.Blurhash.String
-			blurhash = &s
-		}
-
-		// Use configured domain if media is local and URL is relative (though model usually stores full or relative)
-		// For robustness, assumes URL in DB is correct for now, or we could prefix if needed.
-		// Existing code used raw m.RemoteUrl or m.ThumbnailRemoteUrl.
-		// For local files, we might need to prepend valid URLs but let's stick to DB values for now unless empty.
-
-		mediaMap[sid] = append(mediaMap[sid], MediaAttach{
-			ID:          strconv.FormatInt(m.ID, 10),
-			Type:        mediaType,
-			URL:         m.RemoteUrl,
-			PreviewURL:  m.ThumbnailRemoteUrl.String,
-			RemoteURL:   remoteURL,
-			Description: description,
-			Blurhash:    blurhash,
-		})
 	}
 
-	mentionsMap := make(map[int64][]Mention)
+	var mentionsMap map[int64][]Mention
 	// For mentions, we need the mentioned account usernames.
 	// The bulk query GetMentionsByStatusIDs gives us the Mention records.
 	// We need to fetch the Accounts for these mentions to populate Username/Acct/URL.
 	// This is valid: [P1] N+1 fix.
 
-	// Collect mentioned account IDs
-	mentionedAccountIDs := make([]int64, 0)
-	mentionedAccountIDSeen := make(map[int64]bool)
-	for _, m := range dbMentions {
-		if !mentionedAccountIDSeen[m.AccountID] {
-			mentionedAccountIDs = append(mentionedAccountIDs, m.AccountID)
-			mentionedAccountIDSeen[m.AccountID] = true
-		}
-	}
-
-	// Fetch mentioned accounts
-	if len(mentionedAccountIDs) > 0 {
-		mentionedDbAccounts, _ := q.GetAccountsByIDs(ctx, mentionedAccountIDs)
-		mentionedAccountsMap := serializeAccounts(ctx, q, cfg, mentionedDbAccounts, true)
-
+	if len(dbMentions) > 0 {
+		mentionsMap = make(map[int64][]Mention)
+		// Collect mentioned account IDs
+		mentionedAccountIDs := make([]int64, 0, len(dbMentions))
+		mentionedAccountIDSeen := make(map[int64]bool, len(dbMentions))
 		for _, m := range dbMentions {
-			acc, ok := mentionedAccountsMap[m.AccountID]
-			if ok {
-				url := acc.URL
-				if strings.TrimSpace(url) == "" {
-					url = acc.URI
+			if !mentionedAccountIDSeen[m.AccountID] {
+				mentionedAccountIDs = append(mentionedAccountIDs, m.AccountID)
+				mentionedAccountIDSeen[m.AccountID] = true
+			}
+		}
+
+		// Fetch mentioned accounts
+		if len(mentionedAccountIDs) > 0 {
+			mentionedDbAccounts, _ := q.GetAccountsByIDs(ctx, mentionedAccountIDs)
+			mentionedAccountsMap := serializeAccounts(ctx, q, cfg, mentionedDbAccounts, true)
+
+			for _, m := range dbMentions {
+				acc, ok := mentionedAccountsMap[m.AccountID]
+				if ok {
+					url := acc.URL
+					if strings.TrimSpace(url) == "" {
+						url = acc.URI
+					}
+					mentionsMap[m.StatusID] = append(mentionsMap[m.StatusID], Mention{
+						ID:       acc.ID,
+						Username: acc.Username,
+						Acct:     acc.Acct,
+						URL:      url,
+					})
 				}
-				mentionsMap[m.StatusID] = append(mentionsMap[m.StatusID], Mention{
-					ID:       acc.ID,
-					Username: acc.Username,
-					Acct:     acc.Acct,
-					URL:      url,
-				})
 			}
 		}
 	}
 
 	// Fetch tags
 	dbTags, _ := q.GetTagsByStatusIDs(ctx, statusIDs)
-	tagsMap := make(map[int64][]Tag)
-	for _, t := range dbTags {
-		tagsMap[t.StatusID] = append(tagsMap[t.StatusID], Tag{
-			Name: t.Name,
-			URL:  "https://" + cfg.Instance.LocalDomain + "/tags/" + t.Name, // Construct local tag URL
-		})
+	var tagsMap map[int64][]Tag
+	if len(dbTags) > 0 {
+		tagsMap = make(map[int64][]Tag)
+		for _, t := range dbTags {
+			tagsMap[t.StatusID] = append(tagsMap[t.StatusID], Tag{
+				Name: t.Name,
+				URL:  "https://" + cfg.Instance.LocalDomain + "/tags/" + t.Name, // Construct local tag URL
+			})
+		}
 	}
 
-	statsMap := make(map[int64]db.StatusStat)
-	for _, s := range dbStats {
-		statsMap[s.StatusID] = s
+	var statsMap map[int64]db.StatusStat
+	if len(dbStats) > 0 {
+		statsMap = make(map[int64]db.StatusStat)
+		for _, s := range dbStats {
+			statsMap[s.StatusID] = s
+		}
 	}
 
 	mutedConversations := make(map[int64]bool)
@@ -476,8 +494,9 @@ func serializeStatusesInternal(ctx context.Context, q statusSerializerQuerier, c
 		}
 	}
 
-	previewCardsMap := make(map[int64]*PreviewCard)
-	if rows, err := q.GetPreviewCardsByStatusIDs(ctx, statusIDs); err == nil {
+	var previewCardsMap map[int64]*PreviewCard
+	if rows, err := q.GetPreviewCardsByStatusIDs(ctx, statusIDs); err == nil && len(rows) > 0 {
+		previewCardsMap = make(map[int64]*PreviewCard)
 		authorAccountIDs := make(map[int64]struct{})
 		for _, row := range rows {
 			if row.AuthorAccountID.Valid {
