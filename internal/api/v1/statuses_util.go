@@ -179,13 +179,6 @@ func statusEmojiDomain(acc Account) string {
 	return ""
 }
 
-func statusShortcodes(spoilerText, content string) []string {
-	shortcodes := make([]string, 0)
-	appendShortcodes(spoilerText, &shortcodes)
-	appendShortcodes(content, &shortcodes)
-	return shortcodes
-}
-
 func buildStatusEmojis(ctx context.Context, q statusEmojiQuerier, statuses []db.Status, accounts map[int64]Account) map[int64][]CustomEmoji {
 	emojisByStatus := make(map[int64][]CustomEmoji, len(statuses))
 	if q == nil || len(statuses) == 0 {
@@ -196,11 +189,21 @@ func buildStatusEmojis(ctx context.Context, q statusEmojiQuerier, statuses []db.
 	var statusDomains map[int64]string
 	var domainShortcodes map[string]map[string]struct{}
 
+	// Reuse buffer for shortcode extraction to avoid allocations
+	var shortcodeBuf []string
+
 	for _, status := range statuses {
-		shortcodes := statusShortcodes(status.SpoilerText, status.Text)
-		if len(shortcodes) == 0 {
+		shortcodeBuf = shortcodeBuf[:0]
+		appendShortcodes(status.SpoilerText, &shortcodeBuf)
+		appendShortcodes(status.Text, &shortcodeBuf)
+
+		if len(shortcodeBuf) == 0 {
 			continue
 		}
+
+		// Must copy because buffer is reused
+		shortcodes := make([]string, len(shortcodeBuf))
+		copy(shortcodes, shortcodeBuf)
 
 		if statusShortcodesMap == nil {
 			statusShortcodesMap = make(map[int64][]string, len(statuses))

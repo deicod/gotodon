@@ -31,3 +31,7 @@
 ## 2026-02-27 - [Lazy Map Initialization in Serializers]
 **Learning:** Serialization functions often pre-allocate multiple maps for potential related data (mentions, emojis, media), but in the majority of cases (e.g. plain text status), these maps remain empty. Pre-allocating them causes significant GC pressure.
 **Action:** Use lazy initialization for maps in serialization logic. Wrap map allocation and population in `if len(data) > 0` checks. Ensure consuming code handles nil maps gracefully (which Go does naturally).
+
+## 2026-03-05 - [Reusable Slice Buffer in Loops]
+**Learning:** Allocating slice headers (e.g., `make([]T, 0)`) inside tight loops adds up to significant GC pressure, even if the backing array isn't allocated immediately. This is common in "extraction" functions called per item.
+**Action:** Define a reusable buffer variable (e.g. `var buf []string`) outside the loop, reset it with `buf = buf[:0]` inside, and only allocate a final result slice if data is found.
