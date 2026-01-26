@@ -183,6 +183,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 		mux.Handle("GET /api/v1/streaming", pubSubHandler)
 		mux.Handle("GET /api/v1/streaming/", pubSubHandler)
+		mux.Handle("GET /api/v1/streaming/{stream...}", pubSubHandler)
 	}
 
 	// Internal handlers

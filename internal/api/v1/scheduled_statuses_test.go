@@ -23,6 +23,10 @@ type scheduledStatusStub struct {
 	countDaily   int64
 	scheduled    db.ScheduledStatus
 	media        []db.MediaAttachment
+	list         []db.ScheduledStatus
+	listErr      error
+	deleteParams []db.DeleteScheduledStatusParams
+	detachParams []db.DetachMediaFromScheduledStatusParams
 	getErr       error
 	updateErr    error
 	updated      bool
@@ -37,6 +41,13 @@ func (s *scheduledStatusStub) GetScheduledStatus(ctx context.Context, arg db.Get
 		return db.ScheduledStatus{}, pgx.ErrNoRows
 	}
 	return s.scheduled, nil
+}
+
+func (s *scheduledStatusStub) ListScheduledStatuses(ctx context.Context, arg db.ListScheduledStatusesParams) ([]db.ScheduledStatus, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	return s.list, nil
 }
 
 func (s *scheduledStatusStub) CountScheduledStatusesByAccount(ctx context.Context, accountID int64) (int64, error) {
@@ -63,6 +74,16 @@ func (s *scheduledStatusStub) UpdateScheduledStatus(ctx context.Context, arg db.
 	return updated, nil
 }
 
+func (s *scheduledStatusStub) DeleteScheduledStatus(ctx context.Context, arg db.DeleteScheduledStatusParams) error {
+	s.deleteParams = append(s.deleteParams, arg)
+	return nil
+}
+
+func (s *scheduledStatusStub) DetachMediaFromScheduledStatus(ctx context.Context, arg db.DetachMediaFromScheduledStatusParams) (int64, error) {
+	s.detachParams = append(s.detachParams, arg)
+	return 1, nil
+}
+
 func (s *scheduledStatusStub) GetMediaAttachmentsByScheduledStatusIDs(ctx context.Context, ids []int64) ([]db.MediaAttachment, error) {
 	return s.media, nil
 }
@@ -86,6 +107,15 @@ func scheduledStatusRequest(method, path, body string, accountID int64, scopes s
 	req = req.WithContext(ctx)
 
 	rec := httptest.NewRecorder()
+	return req, rec
+}
+
+func scheduledStatusRequestWithToken(method, path, body string, accountID int64, scopes string, tokenID int64) (*http.Request, *httptest.ResponseRecorder) {
+	req, rec := scheduledStatusRequest(method, path, body, accountID, scopes)
+	if tokenID > 0 {
+		ctx := context.WithValue(req.Context(), middleware.ContextKeyTokenID, tokenID)
+		req = req.WithContext(ctx)
+	}
 	return req, rec
 }
 
@@ -278,5 +308,112 @@ func TestScheduledStatusesHandler_Update_Success(t *testing.T) {
 	}
 	if !parsed.Equal(updatedAt) {
 		t.Fatalf("scheduled_at = %s, want %s", parsed, updatedAt)
+	}
+}
+
+func TestScheduledStatusesHandler_List_AppToken(t *testing.T) {
+	h := NewScheduledStatusesHandler(nil)
+
+	req, rec := scheduledStatusRequestWithToken(http.MethodGet, "/api/v1/scheduled_statuses", "", 0, "read:statuses", 99)
+
+	h.List(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+}
+
+func TestScheduledStatusesHandler_List_Forbidden(t *testing.T) {
+	h := NewScheduledStatusesHandler(nil)
+
+	req, rec := scheduledStatusRequest(http.MethodGet, "/api/v1/scheduled_statuses", "", 10, "write:statuses")
+
+	h.List(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
+func TestScheduledStatusesHandler_List_Success(t *testing.T) {
+	now := time.Now().UTC().Add(10 * time.Minute)
+	stub := &scheduledStatusStub{
+		list: []db.ScheduledStatus{
+			{
+				ID:          1,
+				AccountID:   5,
+				ScheduledAt: pgtype.Timestamptz{Time: now, Valid: true},
+				Params:      []byte(`{}`),
+			},
+		},
+	}
+	h := NewScheduledStatusesHandler(stub)
+
+	req, rec := scheduledStatusRequest(http.MethodGet, "/api/v1/scheduled_statuses", "", 5, "read:statuses")
+
+	h.List(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var resp []ScheduledStatus
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(resp) != 1 || resp[0].ID != "1" {
+		t.Fatalf("response = %#v, want id 1", resp)
+	}
+}
+
+func TestScheduledStatusesHandler_Get_AppToken(t *testing.T) {
+	h := NewScheduledStatusesHandler(nil)
+
+	req, rec := scheduledStatusRequestWithToken(http.MethodGet, "/api/v1/scheduled_statuses/1", "", 0, "read:statuses", 77)
+	req.SetPathValue("id", "1")
+
+	h.Get(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+}
+
+func TestScheduledStatusesHandler_Get_Forbidden(t *testing.T) {
+	h := NewScheduledStatusesHandler(nil)
+
+	req, rec := scheduledStatusRequest(http.MethodGet, "/api/v1/scheduled_statuses/1", "", 5, "write:statuses")
+	req.SetPathValue("id", "1")
+
+	h.Get(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
+func TestScheduledStatusesHandler_Delete_AppToken(t *testing.T) {
+	h := NewScheduledStatusesHandler(nil)
+
+	req, rec := scheduledStatusRequestWithToken(http.MethodDelete, "/api/v1/scheduled_statuses/1", "", 0, "write:statuses", 55)
+	req.SetPathValue("id", "1")
+
+	h.Delete(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+}
+
+func TestScheduledStatusesHandler_Delete_Forbidden(t *testing.T) {
+	h := NewScheduledStatusesHandler(nil)
+
+	req, rec := scheduledStatusRequest(http.MethodDelete, "/api/v1/scheduled_statuses/1", "", 5, "read:statuses")
+	req.SetPathValue("id", "1")
+
+	h.Delete(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
 }

@@ -497,9 +497,14 @@ func (h *ScheduledStatusesHandler) validateScheduledStatusLimits(ctx context.Con
 
 // List handles GET /api/v1/scheduled_statuses
 func (h *ScheduledStatusesHandler) List(w http.ResponseWriter, r *http.Request) {
-	accountID, ok := middleware.GetAccountID(r.Context())
+	accountID, ok := scheduledStatusesAccount(w, r)
 	if !ok {
-		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	scopes := middleware.GetScopes(r.Context())
+	if !oauth.HasScope(scopes, "read:statuses") {
+		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
 		return
 	}
 
@@ -538,11 +543,29 @@ type ScheduledStatus struct {
 	MediaAttachments []MediaAttach   `json:"media_attachments"`
 }
 
+func scheduledStatusesAccount(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	accountID, ok := middleware.GetAccountID(r.Context())
+	if ok {
+		return accountID, true
+	}
+	if _, ok := r.Context().Value(middleware.ContextKeyTokenID).(int64); ok {
+		web.JSONError(w, http.StatusUnprocessableEntity, "This method requires an authenticated user")
+		return 0, false
+	}
+	web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+	return 0, false
+}
+
 // Get handles GET /api/v1/scheduled_statuses/:id
 func (h *ScheduledStatusesHandler) Get(w http.ResponseWriter, r *http.Request) {
-	accountID, ok := middleware.GetAccountID(r.Context())
+	accountID, ok := scheduledStatusesAccount(w, r)
 	if !ok {
-		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	scopes := middleware.GetScopes(r.Context())
+	if !oauth.HasScope(scopes, "read:statuses") {
+		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
 		return
 	}
 
@@ -571,9 +594,8 @@ func (h *ScheduledStatusesHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 // Update handles PUT /api/v1/scheduled_statuses/:id
 func (h *ScheduledStatusesHandler) Update(w http.ResponseWriter, r *http.Request) {
-	accountID, ok := middleware.GetAccountID(r.Context())
+	accountID, ok := scheduledStatusesAccount(w, r)
 	if !ok {
-		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
 		return
 	}
 
@@ -657,9 +679,14 @@ func (h *ScheduledStatusesHandler) Update(w http.ResponseWriter, r *http.Request
 
 // Delete handles DELETE /api/v1/scheduled_statuses/:id
 func (h *ScheduledStatusesHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	accountID, ok := middleware.GetAccountID(r.Context())
+	accountID, ok := scheduledStatusesAccount(w, r)
 	if !ok {
-		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	scopes := middleware.GetScopes(r.Context())
+	if !oauth.HasScope(scopes, "write:statuses") {
+		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
 		return
 	}
 

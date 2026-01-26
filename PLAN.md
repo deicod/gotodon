@@ -53,7 +53,7 @@ Missing routes (from `mastodon/config/routes/api.rb`)
 - [x] POST /api/v1/statuses/:id/unmute
 - [x] PUT /api/v1/statuses/:id/interaction_policy
 - [x] GET /api/v1/timelines/link
-- GET /api/v1/streaming/(*any)
+- [x] GET /api/v1/streaming/(*any)
 - [x] POST /api/v1/conversations/:id/unread
 - [x] DELETE /api/v1/media/:id
 - [x] /api/v1/filters (all CRUD)
