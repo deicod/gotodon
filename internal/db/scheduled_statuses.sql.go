@@ -134,19 +134,30 @@ func (q *Queries) ListDueScheduledStatuses(ctx context.Context) ([]ScheduledStat
 
 const listScheduledStatuses = `-- name: ListScheduledStatuses :many
 SELECT id, account_id, scheduled_at, params FROM scheduled_statuses 
-WHERE account_id = $1 
-ORDER BY scheduled_at ASC
-LIMIT $2 OFFSET $3
+WHERE account_id = $1
+  AND ($2::bigint IS NULL OR id < $2::bigint)
+  AND ($3::bigint IS NULL OR id > $3::bigint)
+  AND ($4::bigint IS NULL OR id > $4::bigint)
+ORDER BY id DESC
+LIMIT $5
 `
 
 type ListScheduledStatusesParams struct {
-	AccountID int64 `db:"account_id" json:"account_id"`
-	Limit     int32 `db:"limit" json:"limit"`
-	Offset    int32 `db:"offset" json:"offset"`
+	AccountID int64       `db:"account_id" json:"account_id"`
+	MaxID     pgtype.Int8 `db:"max_id" json:"max_id"`
+	SinceID   pgtype.Int8 `db:"since_id" json:"since_id"`
+	MinID     pgtype.Int8 `db:"min_id" json:"min_id"`
+	Limit     int32       `db:"limit" json:"limit"`
 }
 
 func (q *Queries) ListScheduledStatuses(ctx context.Context, arg ListScheduledStatusesParams) ([]ScheduledStatus, error) {
-	rows, err := q.db.Query(ctx, listScheduledStatuses, arg.AccountID, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, listScheduledStatuses,
+		arg.AccountID,
+		arg.MaxID,
+		arg.SinceID,
+		arg.MinID,
+		arg.Limit,
+	)
 	if err != nil {
 		return nil, err
 	}

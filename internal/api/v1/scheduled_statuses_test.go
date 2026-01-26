@@ -25,6 +25,7 @@ type scheduledStatusStub struct {
 	media        []db.MediaAttachment
 	list         []db.ScheduledStatus
 	listErr      error
+	listParams   db.ListScheduledStatusesParams
 	deleteParams []db.DeleteScheduledStatusParams
 	detachParams []db.DetachMediaFromScheduledStatusParams
 	getErr       error
@@ -44,6 +45,7 @@ func (s *scheduledStatusStub) GetScheduledStatus(ctx context.Context, arg db.Get
 }
 
 func (s *scheduledStatusStub) ListScheduledStatuses(ctx context.Context, arg db.ListScheduledStatusesParams) ([]db.ScheduledStatus, error) {
+	s.listParams = arg
 	if s.listErr != nil {
 		return nil, s.listErr
 	}
@@ -349,7 +351,7 @@ func TestScheduledStatusesHandler_List_Success(t *testing.T) {
 	}
 	h := NewScheduledStatusesHandler(stub)
 
-	req, rec := scheduledStatusRequest(http.MethodGet, "/api/v1/scheduled_statuses", "", 5, "read:statuses")
+	req, rec := scheduledStatusRequest(http.MethodGet, "/api/v1/scheduled_statuses?limit=5&max_id=99&since_id=2&min_id=1", "", 5, "read:statuses")
 
 	h.List(rec, req)
 
@@ -363,6 +365,40 @@ func TestScheduledStatusesHandler_List_Success(t *testing.T) {
 	}
 	if len(resp) != 1 || resp[0].ID != "1" {
 		t.Fatalf("response = %#v, want id 1", resp)
+	}
+	if stub.listParams.AccountID != 5 {
+		t.Fatalf("account_id = %d, want 5", stub.listParams.AccountID)
+	}
+	if stub.listParams.Limit != 5 {
+		t.Fatalf("limit = %d, want 5", stub.listParams.Limit)
+	}
+	if !stub.listParams.MaxID.Valid || stub.listParams.MaxID.Int64 != 99 {
+		t.Fatalf("max_id = %#v, want 99", stub.listParams.MaxID)
+	}
+	if !stub.listParams.SinceID.Valid || stub.listParams.SinceID.Int64 != 2 {
+		t.Fatalf("since_id = %#v, want 2", stub.listParams.SinceID)
+	}
+	if !stub.listParams.MinID.Valid || stub.listParams.MinID.Int64 != 1 {
+		t.Fatalf("min_id = %#v, want 1", stub.listParams.MinID)
+	}
+}
+
+func TestScheduledStatusesHandler_List_InvalidMaxID(t *testing.T) {
+	h := NewScheduledStatusesHandler(nil)
+
+	req, rec := scheduledStatusRequest(http.MethodGet, "/api/v1/scheduled_statuses?max_id=bad", "", 5, "read:statuses")
+
+	h.List(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var resp []ScheduledStatus
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(resp) != 0 {
+		t.Fatalf("response length = %d, want 0", len(resp))
 	}
 }
 

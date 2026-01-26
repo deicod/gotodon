@@ -509,10 +509,21 @@ func (h *ScheduledStatusesHandler) List(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if h.useDB() {
+		limit := parseAccountLimit(web.QueryParam(r, "limit"), defaultStatusesLimit, defaultStatusesLimit*2)
+		maxID, maxValid := parseOptionalID(web.QueryParam(r, "max_id"))
+		sinceID, sinceValid := parseOptionalID(web.QueryParam(r, "since_id"))
+		minID, minValid := parseOptionalID(web.QueryParam(r, "min_id"))
+		if !maxValid || !sinceValid || !minValid {
+			web.JSON(w, http.StatusOK, []ScheduledStatus{})
+			return
+		}
+
 		statuses, err := h.queries.ListScheduledStatuses(r.Context(), db.ListScheduledStatusesParams{
 			AccountID: accountID,
-			Limit:     40,
-			Offset:    0,
+			MaxID:     pgtype.Int8{Int64: maxID, Valid: maxID > 0},
+			SinceID:   pgtype.Int8{Int64: sinceID, Valid: sinceID > 0},
+			MinID:     pgtype.Int8{Int64: minID, Valid: minID > 0},
+			Limit:     int32(limit),
 		})
 		if err != nil {
 			web.JSON(w, http.StatusOK, []ScheduledStatus{})

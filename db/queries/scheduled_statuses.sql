@@ -18,9 +18,12 @@ SELECT * FROM scheduled_statuses WHERE id = $1 AND account_id = $2;
 
 -- name: ListScheduledStatuses :many
 SELECT * FROM scheduled_statuses 
-WHERE account_id = $1 
-ORDER BY scheduled_at ASC
-LIMIT $2 OFFSET $3;
+WHERE account_id = sqlc.arg('account_id')
+  AND (sqlc.narg('max_id')::bigint IS NULL OR id < sqlc.narg('max_id')::bigint)
+  AND (sqlc.narg('since_id')::bigint IS NULL OR id > sqlc.narg('since_id')::bigint)
+  AND (sqlc.narg('min_id')::bigint IS NULL OR id > sqlc.narg('min_id')::bigint)
+ORDER BY id DESC
+LIMIT sqlc.arg('limit');
 
 -- name: UpdateScheduledStatus :one
 UPDATE scheduled_statuses SET
