@@ -203,7 +203,7 @@ Plan
 Status: Medium-low.
 
 Gaps
-- Scheduled status creation is missing; workers exist but no creation flow in v1.
+- [x] Scheduled status creation is wired through v1 and workers.
 - Many Mastodon background features are missing (backups, bulk imports, relays, webhooks, follow recommendations, annual reports generation, etc).
 
 Plan
