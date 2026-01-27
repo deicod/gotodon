@@ -653,28 +653,32 @@ func writeShortenedLink(b *strings.Builder, rawURL string, relMe bool) {
 // writeEscapeString escapes special characters like html.EscapeString but writes to strings.Builder
 // to avoid intermediate allocations.
 func writeEscapeString(b *strings.Builder, s string) {
-	start := 0
-	for i := 0; i < len(s); i++ {
-		var escaped string
-		switch s[i] {
-		case '"':
-			escaped = "&#34;"
-		case '&':
-			escaped = "&amp;"
-		case '\'':
-			escaped = "&#39;"
-		case '<':
-			escaped = "&lt;"
-		case '>':
-			escaped = "&gt;"
-		default:
-			continue
+	i := 0
+	n := len(s)
+	for i < n {
+		j := strings.IndexAny(s[i:], "\"'&<>")
+		if j == -1 {
+			b.WriteString(s[i:])
+			break
 		}
-		b.WriteString(s[start:i])
-		b.WriteString(escaped)
-		start = i + 1
+		j += i
+
+		b.WriteString(s[i:j])
+
+		switch s[j] {
+		case '"':
+			b.WriteString("&#34;")
+		case '&':
+			b.WriteString("&amp;")
+		case '\'':
+			b.WriteString("&#39;")
+		case '<':
+			b.WriteString("&lt;")
+		case '>':
+			b.WriteString("&gt;")
+		}
+		i = j + 1
 	}
-	b.WriteString(s[start:])
 }
 
 var (
