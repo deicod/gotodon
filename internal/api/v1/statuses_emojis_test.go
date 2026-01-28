@@ -125,3 +125,27 @@ func TestBuildStatusEmojis(t *testing.T) {
 		t.Fatalf("expected 1 call to ListCustomEmojisByShortcodesAndDomains, got %d", len(queries.calls))
 	}
 }
+
+func TestBuildStatusEmojis_Optimization(t *testing.T) {
+	// Case 1: No statuses
+	res := buildStatusEmojis(context.Background(), nil, nil, nil)
+	if res != nil {
+		t.Errorf("Expected nil map for no statuses, got non-nil")
+	}
+
+	// Case 2: Statuses but no emojis in text
+	statuses := []db.Status{
+		{ID: 1, Text: "hello world"},
+		{ID: 2, Text: "no emojis here"},
+	}
+
+	q := &statusEmojiStub{
+		emojisByDomain: map[string]map[string]db.CustomEmoji{},
+	}
+
+	res = buildStatusEmojis(context.Background(), q, statuses, nil)
+
+	if res != nil {
+		t.Errorf("Expected nil map when no emojis found, got non-nil map of size %d", len(res))
+	}
+}

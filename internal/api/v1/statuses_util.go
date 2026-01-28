@@ -180,9 +180,8 @@ func statusEmojiDomain(acc Account) string {
 }
 
 func buildStatusEmojis(ctx context.Context, q statusEmojiQuerier, statuses []db.Status, accounts map[int64]Account) map[int64][]CustomEmoji {
-	emojisByStatus := make(map[int64][]CustomEmoji, len(statuses))
 	if q == nil || len(statuses) == 0 {
-		return emojisByStatus
+		return nil
 	}
 
 	var statusShortcodesMap map[int64][]string
@@ -227,7 +226,7 @@ func buildStatusEmojis(ctx context.Context, q statusEmojiQuerier, statuses []db.
 	}
 
 	if len(domainShortcodes) == 0 {
-		return emojisByStatus
+		return nil
 	}
 
 	// Flatten domains and shortcodes for bulk query
@@ -257,7 +256,7 @@ func buildStatusEmojis(ctx context.Context, q statusEmojiQuerier, statuses []db.
 	})
 	if err != nil {
 		// Log error? For now just return empty as per original behavior which ignored errors inside loop
-		return emojisByStatus
+		return nil
 	}
 
 	emojisByDomain := make(map[string]map[string]db.CustomEmoji)
@@ -272,6 +271,7 @@ func buildStatusEmojis(ctx context.Context, q statusEmojiQuerier, statuses []db.
 		emojisByDomain[domain][emoji.Shortcode] = emoji
 	}
 
+	emojisByStatus := make(map[int64][]CustomEmoji, len(statusShortcodesMap))
 	for statusID, shortcodes := range statusShortcodesMap {
 		domain := statusDomains[statusID]
 		emojiMap := emojisByDomain[domain]
