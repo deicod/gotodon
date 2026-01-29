@@ -184,7 +184,12 @@ func buildStatusEmojis(ctx context.Context, q statusEmojiQuerier, statuses []db.
 		return nil
 	}
 
-	var statusShortcodesMap map[int64][]string
+	type shortcodeRange struct {
+		start, end int
+	}
+
+	var statusShortcodeRanges map[int64]shortcodeRange
+	var allShortcodes []string
 	var statusDomains map[int64]string
 	var domainShortcodes map[string]map[string]struct{}
 
@@ -200,27 +205,29 @@ func buildStatusEmojis(ctx context.Context, q statusEmojiQuerier, statuses []db.
 			continue
 		}
 
-		// Must copy because buffer is reused
-		shortcodes := make([]string, len(shortcodeBuf))
-		copy(shortcodes, shortcodeBuf)
-
-		if statusShortcodesMap == nil {
-			statusShortcodesMap = make(map[int64][]string, len(statuses))
+		if statusShortcodeRanges == nil {
+			statusShortcodeRanges = make(map[int64]shortcodeRange, len(statuses))
 			statusDomains = make(map[int64]string, len(statuses))
 			domainShortcodes = make(map[string]map[string]struct{})
 		}
+
+		// Append to flat buffer instead of allocating new slice
+		start := len(allShortcodes)
+		allShortcodes = append(allShortcodes, shortcodeBuf...)
+		end := len(allShortcodes)
+
+		statusShortcodeRanges[status.ID] = shortcodeRange{start: start, end: end}
 
 		domain := ""
 		if acc, ok := accounts[status.AccountID]; ok {
 			domain = statusEmojiDomain(acc)
 		}
-		statusShortcodesMap[status.ID] = shortcodes
 		statusDomains[status.ID] = domain
 
 		if _, ok := domainShortcodes[domain]; !ok {
 			domainShortcodes[domain] = make(map[string]struct{})
 		}
-		for _, shortcode := range shortcodes {
+		for _, shortcode := range shortcodeBuf {
 			domainShortcodes[domain][shortcode] = struct{}{}
 		}
 	}
@@ -231,7 +238,7 @@ func buildStatusEmojis(ctx context.Context, q statusEmojiQuerier, statuses []db.
 
 	// Flatten domains and shortcodes for bulk query
 	allDomains := make([]string, 0, len(domainShortcodes))
-	allShortcodes := make([]string, 0)
+	queryShortcodes := make([]string, 0)
 	shortcodeSeen := make(map[string]struct{})
 	includeLocal := false
 
@@ -243,14 +250,14 @@ func buildStatusEmojis(ctx context.Context, q statusEmojiQuerier, statuses []db.
 		}
 		for shortcode := range shortcodes {
 			if _, ok := shortcodeSeen[shortcode]; !ok {
-				allShortcodes = append(allShortcodes, shortcode)
+				queryShortcodes = append(queryShortcodes, shortcode)
 				shortcodeSeen[shortcode] = struct{}{}
 			}
 		}
 	}
 
 	emojis, err := q.ListCustomEmojisByShortcodesAndDomains(ctx, db.ListCustomEmojisByShortcodesAndDomainsParams{
-		Shortcodes:   allShortcodes,
+		Shortcodes:   queryShortcodes,
 		Domains:      allDomains,
 		IncludeLocal: includeLocal,
 	})
@@ -271,8 +278,9 @@ func buildStatusEmojis(ctx context.Context, q statusEmojiQuerier, statuses []db.
 		emojisByDomain[domain][emoji.Shortcode] = emoji
 	}
 
-	emojisByStatus := make(map[int64][]CustomEmoji, len(statusShortcodesMap))
-	for statusID, shortcodes := range statusShortcodesMap {
+	emojisByStatus := make(map[int64][]CustomEmoji, len(statusShortcodeRanges))
+	for statusID, rng := range statusShortcodeRanges {
+		shortcodes := allShortcodes[rng.start:rng.end]
 		domain := statusDomains[statusID]
 		emojiMap := emojisByDomain[domain]
 		if len(emojiMap) == 0 {
