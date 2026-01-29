@@ -35,3 +35,7 @@
 ## 2026-03-05 - [Reusable Slice Buffer in Loops]
 **Learning:** Allocating slice headers (e.g., `make([]T, 0)`) inside tight loops adds up to significant GC pressure, even if the backing array isn't allocated immediately. This is common in "extraction" functions called per item.
 **Action:** Define a reusable buffer variable (e.g. `var buf []string`) outside the loop, reset it with `buf = buf[:0]` inside, and only allocate a final result slice if data is found.
+
+## 2026-03-10 - [Flattening Slice Allocations]
+**Learning:** Storing slices of data per item in batch processing (e.g., `map[int64][]string`) causes N heap allocations. Flattening this into a single large slice `[]string` and using a `map[int64]struct{start, end int}` to track ranges reduces GC pressure significantly.
+**Action:** Replace maps of slices with flat buffers and range maps in hot batch processing paths.
