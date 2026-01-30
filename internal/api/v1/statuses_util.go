@@ -319,7 +319,8 @@ func serializeStatusesInternal(ctx context.Context, q statusSerializerQuerier, c
 		return []Status{}
 	}
 
-	rebloggedStatuses := map[int64]Status{}
+	// Optimization: Use lazy map initialization for reblogged statuses.
+	var rebloggedStatuses map[int64]Status
 	if opts.includeReblogs {
 		reblogIDs := make([]int64, 0)
 		reblogIDSeen := make(map[int64]struct{})
@@ -340,9 +341,12 @@ func serializeStatusesInternal(ctx context.Context, q statusSerializerQuerier, c
 					includeReblogs: false,
 					includeQuotes:  true,
 				})
-				for _, status := range serialized {
-					if statusID, err := strconv.ParseInt(status.ID, 10, 64); err == nil {
-						rebloggedStatuses[statusID] = status
+				if len(serialized) > 0 {
+					rebloggedStatuses = make(map[int64]Status)
+					for _, status := range serialized {
+						if statusID, err := strconv.ParseInt(status.ID, 10, 64); err == nil {
+							rebloggedStatuses[statusID] = status
+						}
 					}
 				}
 			}
@@ -564,28 +568,35 @@ func serializeStatusesInternal(ctx context.Context, q statusSerializerQuerier, c
 		}
 	}
 
-	quotesMap := make(map[int64]db.Quote)
-	quotedStatusesMap := make(map[int64]Status)
+	// Optimization: Use lazy map initialization for quotes.
+	var quotesMap map[int64]db.Quote
+	var quotedStatusesMap map[int64]Status
 	if opts.includeQuotes {
 		// Fetch quotes for statuses (quotes where these statuses are the quoting status)
 		dbQuotes, _ := q.GetQuotesByStatusIDs(ctx, statusIDs)
-		quotedStatusIDs := make([]int64, 0)
-		for _, qr := range dbQuotes {
-			quotesMap[qr.StatusID] = qr
-			if qr.QuotedStatusID.Valid {
-				quotedStatusIDs = append(quotedStatusIDs, qr.QuotedStatusID.Int64)
+		if len(dbQuotes) > 0 {
+			quotesMap = make(map[int64]db.Quote)
+			quotedStatusIDs := make([]int64, 0)
+			for _, qr := range dbQuotes {
+				quotesMap[qr.StatusID] = qr
+				if qr.QuotedStatusID.Valid {
+					quotedStatusIDs = append(quotedStatusIDs, qr.QuotedStatusID.Int64)
+				}
 			}
-		}
 
-		if len(quotedStatusIDs) > 0 {
-			if quotedDbStatuses, err := q.GetStatusesByIDs(ctx, quotedStatusIDs); err == nil {
-				serialized := serializeStatusesInternal(ctx, q, cfg, quotedDbStatuses, statusSerializeOptions{
-					includeReblogs: true,
-					includeQuotes:  false,
-				})
-				for _, status := range serialized {
-					if statusID, err := strconv.ParseInt(status.ID, 10, 64); err == nil {
-						quotedStatusesMap[statusID] = status
+			if len(quotedStatusIDs) > 0 {
+				if quotedDbStatuses, err := q.GetStatusesByIDs(ctx, quotedStatusIDs); err == nil {
+					serialized := serializeStatusesInternal(ctx, q, cfg, quotedDbStatuses, statusSerializeOptions{
+						includeReblogs: true,
+						includeQuotes:  false,
+					})
+					if len(serialized) > 0 {
+						quotedStatusesMap = make(map[int64]Status)
+						for _, status := range serialized {
+							if statusID, err := strconv.ParseInt(status.ID, 10, 64); err == nil {
+								quotedStatusesMap[statusID] = status
+							}
+						}
 					}
 				}
 			}
