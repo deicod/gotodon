@@ -291,7 +291,7 @@ func (h *NotificationsHandler) buildGroupedResponse(ctx context.Context, notific
 	}
 
 	if !h.useDB() {
-		return resp, nil
+		return resp, errors.New("notifications unavailable")
 	}
 
 	if len(accountIDs) > 0 {
@@ -331,7 +331,7 @@ func (h *NotificationsHandler) buildGroupedResponse(ctx context.Context, notific
 
 func (h *NotificationsHandler) listNotificationsForGroup(ctx context.Context, accountID int64, groupKey string) ([]db.Notification, error) {
 	if !h.useDB() {
-		return []db.Notification{}, nil
+		return nil, errors.New("notifications unavailable")
 	}
 
 	if id, ok := parseUngroupedKey(groupKey); ok {
@@ -399,35 +399,37 @@ func (h *NotificationsHandler) GetPolicy(w http.ResponseWriter, r *http.Request)
 	}
 
 	policy := defaultNotificationPolicy()
-
-	if h.useDB() {
-		ctx := r.Context()
-		dbPolicy, err := h.queries.GetNotificationPolicy(ctx, accountID)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			web.JSONError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-		if err == nil {
-			policy.ForNotFollowing = policyIntToString(dbPolicy.ForNotFollowing)
-			policy.ForNotFollowers = policyIntToString(dbPolicy.ForNotFollowers)
-			policy.ForNewAccounts = policyIntToString(dbPolicy.ForNewAccounts)
-			policy.ForPrivateMentions = policyIntToString(dbPolicy.ForPrivateMentions)
-			policy.ForLimitedAccounts = policyIntToString(dbPolicy.ForLimitedAccounts)
-		}
-
-		pendingCount, err := h.queries.CountNotificationRequests(ctx, accountID)
-		if err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-		pendingNotifications, err := h.queries.SumNotificationRequestNotifications(ctx, accountID)
-		if err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-		policy.Summary.PendingRequestsCount = pendingCount
-		policy.Summary.PendingNotificationsCount = pendingNotifications
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
+		return
 	}
+
+	ctx := r.Context()
+	dbPolicy, err := h.queries.GetNotificationPolicy(ctx, accountID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if err == nil {
+		policy.ForNotFollowing = policyIntToString(dbPolicy.ForNotFollowing)
+		policy.ForNotFollowers = policyIntToString(dbPolicy.ForNotFollowers)
+		policy.ForNewAccounts = policyIntToString(dbPolicy.ForNewAccounts)
+		policy.ForPrivateMentions = policyIntToString(dbPolicy.ForPrivateMentions)
+		policy.ForLimitedAccounts = policyIntToString(dbPolicy.ForLimitedAccounts)
+	}
+
+	pendingCount, err := h.queries.CountNotificationRequests(ctx, accountID)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	pendingNotifications, err := h.queries.SumNotificationRequestNotifications(ctx, accountID)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	policy.Summary.PendingRequestsCount = pendingCount
+	policy.Summary.PendingNotificationsCount = pendingNotifications
 
 	web.JSON(w, http.StatusOK, policy)
 }
@@ -453,21 +455,23 @@ func (h *NotificationsHandler) UpdatePolicy(w http.ResponseWriter, r *http.Reque
 	}
 
 	policy := defaultNotificationPolicy()
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
+		return
+	}
 
-	if h.useDB() {
-		ctx := r.Context()
-		dbPolicy, err := h.queries.GetNotificationPolicy(ctx, accountID)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			web.JSONError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-		if err == nil {
-			policy.ForNotFollowing = policyIntToString(dbPolicy.ForNotFollowing)
-			policy.ForNotFollowers = policyIntToString(dbPolicy.ForNotFollowers)
-			policy.ForNewAccounts = policyIntToString(dbPolicy.ForNewAccounts)
-			policy.ForPrivateMentions = policyIntToString(dbPolicy.ForPrivateMentions)
-			policy.ForLimitedAccounts = policyIntToString(dbPolicy.ForLimitedAccounts)
-		}
+	ctx := r.Context()
+	dbPolicy, err := h.queries.GetNotificationPolicy(ctx, accountID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if err == nil {
+		policy.ForNotFollowing = policyIntToString(dbPolicy.ForNotFollowing)
+		policy.ForNotFollowers = policyIntToString(dbPolicy.ForNotFollowers)
+		policy.ForNewAccounts = policyIntToString(dbPolicy.ForNewAccounts)
+		policy.ForPrivateMentions = policyIntToString(dbPolicy.ForPrivateMentions)
+		policy.ForLimitedAccounts = policyIntToString(dbPolicy.ForLimitedAccounts)
 	}
 
 	if req.ForNotFollowing != nil {
@@ -506,39 +510,36 @@ func (h *NotificationsHandler) UpdatePolicy(w http.ResponseWriter, r *http.Reque
 		policy.ForLimitedAccounts = *req.ForLimitedAccounts
 	}
 
-	if h.useDB() {
-		ctx := r.Context()
-		forNotFollowing, _ := policyStringToInt(policy.ForNotFollowing)
-		forNotFollowers, _ := policyStringToInt(policy.ForNotFollowers)
-		forNewAccounts, _ := policyStringToInt(policy.ForNewAccounts)
-		forPrivateMentions, _ := policyStringToInt(policy.ForPrivateMentions)
-		forLimitedAccounts, _ := policyStringToInt(policy.ForLimitedAccounts)
+	forNotFollowing, _ := policyStringToInt(policy.ForNotFollowing)
+	forNotFollowers, _ := policyStringToInt(policy.ForNotFollowers)
+	forNewAccounts, _ := policyStringToInt(policy.ForNewAccounts)
+	forPrivateMentions, _ := policyStringToInt(policy.ForPrivateMentions)
+	forLimitedAccounts, _ := policyStringToInt(policy.ForLimitedAccounts)
 
-		if _, err := h.queries.UpsertNotificationPolicy(ctx, db.UpsertNotificationPolicyParams{
-			AccountID:          accountID,
-			ForNotFollowing:    forNotFollowing,
-			ForNotFollowers:    forNotFollowers,
-			ForNewAccounts:     forNewAccounts,
-			ForPrivateMentions: forPrivateMentions,
-			ForLimitedAccounts: forLimitedAccounts,
-		}); err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-
-		pendingCount, err := h.queries.CountNotificationRequests(ctx, accountID)
-		if err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-		pendingNotifications, err := h.queries.SumNotificationRequestNotifications(ctx, accountID)
-		if err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-		policy.Summary.PendingRequestsCount = pendingCount
-		policy.Summary.PendingNotificationsCount = pendingNotifications
+	if _, err := h.queries.UpsertNotificationPolicy(ctx, db.UpsertNotificationPolicyParams{
+		AccountID:          accountID,
+		ForNotFollowing:    forNotFollowing,
+		ForNotFollowers:    forNotFollowers,
+		ForNewAccounts:     forNewAccounts,
+		ForPrivateMentions: forPrivateMentions,
+		ForLimitedAccounts: forLimitedAccounts,
+	}); err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
+
+	pendingCount, err := h.queries.CountNotificationRequests(ctx, accountID)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	pendingNotifications, err := h.queries.SumNotificationRequestNotifications(ctx, accountID)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	policy.Summary.PendingRequestsCount = pendingCount
+	policy.Summary.PendingNotificationsCount = pendingNotifications
 
 	web.JSON(w, http.StatusOK, policy)
 }
@@ -562,11 +563,7 @@ func (h *NotificationsHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !h.useDB() {
-		web.JSON(w, http.StatusOK, GroupedNotificationsResponse{
-			Accounts:           []v1.Account{},
-			Statuses:           []v1.Status{},
-			NotificationGroups: []NotificationGroup{},
-		})
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
 		return
 	}
 
@@ -606,27 +603,13 @@ func (h *NotificationsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !h.useDB() {
-		resp := GroupedNotificationsResponse{
-			Accounts:           []v1.Account{},
-			Statuses:           []v1.Status{},
-			NotificationGroups: []NotificationGroup{},
-		}
-		resp.NotificationGroups = append(resp.NotificationGroups, NotificationGroup{
-			GroupKey:                 groupKey,
-			NotificationsCount:       1,
-			Type:                     "mention",
-			MostRecentNotificationID: "1",
-			PageMinID:                stringPtr("1"),
-			PageMaxID:                stringPtr("1"),
-			SampleAccountIDs:         []string{"2"},
-		})
-		web.JSON(w, http.StatusOK, resp)
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
 		return
 	}
 
 	notifications, err := h.listNotificationsForGroup(r.Context(), accountID, groupKey)
 	if err != nil {
-		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
 		return
 	}
 	if len(notifications) == 0 {
@@ -657,33 +640,35 @@ func (h *NotificationsHandler) Dismiss(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.useDB() {
-		if id, ok := parseUngroupedKey(groupKey); ok {
-			if err := h.queries.DeleteNotification(r.Context(), db.DeleteNotificationParams{
-				ID:        id,
-				AccountID: accountID,
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
+		return
+	}
+	if id, ok := parseUngroupedKey(groupKey); ok {
+		if err := h.queries.DeleteNotification(r.Context(), db.DeleteNotificationParams{
+			ID:        id,
+			AccountID: accountID,
+		}); err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+	} else {
+		if err := h.queries.DeleteNotificationsByGroupKey(r.Context(), db.DeleteNotificationsByGroupKeyParams{
+			AccountID: accountID,
+			GroupKey:  pgtype.Text{String: groupKey, Valid: true},
+		}); err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		if notifType, activityType, activityID, ok := parseGroupKey(groupKey); ok {
+			if err := h.queries.DeleteNotificationsByTypeAndActivity(r.Context(), db.DeleteNotificationsByTypeAndActivityParams{
+				AccountID:    accountID,
+				Type:         pgtype.Text{String: notifType, Valid: true},
+				ActivityType: activityType,
+				ActivityID:   activityID,
 			}); err != nil {
 				web.JSONError(w, http.StatusInternalServerError, "Database error")
 				return
-			}
-		} else {
-			if err := h.queries.DeleteNotificationsByGroupKey(r.Context(), db.DeleteNotificationsByGroupKeyParams{
-				AccountID: accountID,
-				GroupKey:  pgtype.Text{String: groupKey, Valid: true},
-			}); err != nil {
-				web.JSONError(w, http.StatusInternalServerError, "Database error")
-				return
-			}
-			if notifType, activityType, activityID, ok := parseGroupKey(groupKey); ok {
-				if err := h.queries.DeleteNotificationsByTypeAndActivity(r.Context(), db.DeleteNotificationsByTypeAndActivityParams{
-					AccountID:    accountID,
-					Type:         pgtype.Text{String: notifType, Valid: true},
-					ActivityType: activityType,
-					ActivityID:   activityID,
-				}); err != nil {
-					web.JSONError(w, http.StatusInternalServerError, "Database error")
-					return
-				}
 			}
 		}
 	}
@@ -708,13 +693,13 @@ func (h *NotificationsHandler) Accounts(w http.ResponseWriter, r *http.Request) 
 	limit := parseLimit(web.QueryParam(r, "limit"), defaultNotificationsLimit, maxNotificationsLimit)
 
 	if !h.useDB() {
-		web.JSON(w, http.StatusOK, []v1.Account{})
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
 		return
 	}
 
 	notifications, err := h.listNotificationsForGroup(r.Context(), accountID, groupKey)
 	if err != nil {
-		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
 		return
 	}
 
@@ -765,9 +750,11 @@ func (h *NotificationsHandler) Clear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.useDB() {
-		_ = h.queries.ClearNotifications(r.Context(), accountID)
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
+		return
 	}
+	_ = h.queries.ClearNotifications(r.Context(), accountID)
 
 	web.JSON(w, http.StatusOK, map[string]any{})
 }
@@ -781,7 +768,7 @@ func (h *NotificationsHandler) UnreadCount(w http.ResponseWriter, r *http.Reques
 	}
 
 	if !h.useDB() {
-		web.JSON(w, http.StatusOK, map[string]int64{"count": 0})
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
 		return
 	}
 

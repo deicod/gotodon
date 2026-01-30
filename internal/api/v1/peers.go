@@ -33,6 +33,10 @@ func (h *PeersHandler) Search(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Peers unavailable")
+		return
+	}
 
 	if h.useDB() {
 		// Get all known domains
@@ -59,8 +63,6 @@ func (h *PeersHandler) Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mock fallback - return empty list
-	web.JSON(w, http.StatusOK, []string{})
 }
 
 // RegisterRoutes registers the peers routes

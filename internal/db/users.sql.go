@@ -452,6 +452,24 @@ func (q *Queries) ListUserSettingsByAccountIDs(ctx context.Context, accountIds [
 	return items, nil
 }
 
+const updateUserConfirmationToken = `-- name: UpdateUserConfirmationToken :exec
+UPDATE users
+SET confirmation_token = $2,
+    confirmation_sent_at = now(),
+    updated_at = now()
+WHERE id = $1
+`
+
+type UpdateUserConfirmationTokenParams struct {
+	ID                int64       `db:"id" json:"id"`
+	ConfirmationToken pgtype.Text `db:"confirmation_token" json:"confirmation_token"`
+}
+
+func (q *Queries) UpdateUserConfirmationToken(ctx context.Context, arg UpdateUserConfirmationTokenParams) error {
+	_, err := q.db.Exec(ctx, updateUserConfirmationToken, arg.ID, arg.ConfirmationToken)
+	return err
+}
+
 const updateUserSettings = `-- name: UpdateUserSettings :exec
 UPDATE users SET
     settings = COALESCE($2, settings),

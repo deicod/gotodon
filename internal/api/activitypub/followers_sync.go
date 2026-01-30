@@ -18,7 +18,7 @@ import (
 // GetFollowersSynchronization handles GET /users/:username/followers_synchronization
 func (h *FederationHandler) GetFollowersSynchronization(w http.ResponseWriter, r *http.Request) {
 	if !h.useDB() {
-		web.JSONError(w, http.StatusNotFound, "Actor not found")
+		web.JSONError(w, http.StatusInternalServerError, "Followers synchronization unavailable")
 		return
 	}
 

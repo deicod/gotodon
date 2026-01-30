@@ -14,15 +14,12 @@ import (
 // MarkersHandler handles marker endpoints
 type MarkersHandler struct {
 	queries *db.Queries
-	// In-memory storage for markers (fallback or during migration)
-	markers map[int64]map[string]*Marker
 }
 
 // NewMarkersHandler creates a new markers handler
 func NewMarkersHandler(queries *db.Queries) *MarkersHandler {
 	return &MarkersHandler{
 		queries: queries,
-		markers: make(map[int64]map[string]*Marker),
 	}
 }
 
@@ -60,6 +57,10 @@ func (h *MarkersHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result := make(MarkersResponse)
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Markers unavailable")
+		return
+	}
 
 	if h.useDB() {
 		// Get User ID from Account ID
@@ -90,19 +91,6 @@ func (h *MarkersHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// In-memory fallback
-	accountMarkers := h.markers[accountID]
-	for _, timeline := range timelines {
-		if !validMarkerTimelines[timeline] {
-			continue
-		}
-		if accountMarkers != nil {
-			if marker, exists := accountMarkers[timeline]; exists {
-				result[timeline] = marker
-			}
-		}
-	}
-
 	web.JSON(w, http.StatusOK, result)
 }
 
@@ -123,13 +111,12 @@ func (h *MarkersHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Initialize account markers if needed (for fallback)
-	if h.markers[accountID] == nil {
-		h.markers[accountID] = make(map[string]*Marker)
-	}
-
 	result := make(MarkersResponse)
 	ctx := r.Context()
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Markers unavailable")
+		return
+	}
 
 	var userID int64
 	if h.useDB() {
@@ -180,20 +167,8 @@ func (h *MarkersHandler) Update(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Fallback
-		existing := h.markers[accountID][timeline]
-		version := 0
-		if existing != nil {
-			version = existing.Version + 1
-		}
-
-		marker := &Marker{
-			LastReadID: data.LastReadID,
-			Version:    version,
-			UpdatedAt:  time.Now(),
-		}
-		h.markers[accountID][timeline] = marker
-		result[timeline] = marker
+		web.JSONError(w, http.StatusInternalServerError, "Markers unavailable")
+		return
 	}
 
 	web.JSON(w, http.StatusOK, result)

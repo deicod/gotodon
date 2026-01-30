@@ -7,7 +7,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/config"
+	"github.com/deicod/gotodon/internal/db"
 )
 
 func mockProfileRequest(method, path string, accountID int64) (*http.Request, *httptest.ResponseRecorder) {
@@ -24,8 +28,69 @@ func mockProfileRequest(method, path string, accountID int64) (*http.Request, *h
 	return req, rec
 }
 
-func TestProfileHandler_DeleteAvatar_MockMode(t *testing.T) {
-	h := NewProfileHandler(nil, nil)
+type stubProfileQueries struct {
+	account           db.Account
+	clearAvatarCalled bool
+	clearHeaderCalled bool
+}
+
+func (s *stubProfileQueries) ClearAccountAvatar(ctx context.Context, id int64) (db.Account, error) {
+	s.clearAvatarCalled = true
+	return s.account, nil
+}
+
+func (s *stubProfileQueries) ClearAccountHeader(ctx context.Context, id int64) (db.Account, error) {
+	s.clearHeaderCalled = true
+	return s.account, nil
+}
+
+func (s *stubProfileQueries) GetAccountByID(ctx context.Context, id int64) (db.Account, error) {
+	return s.account, nil
+}
+
+func (s *stubProfileQueries) ListAccountStatsByAccountIDs(ctx context.Context, accountIds []int64) ([]db.AccountStat, error) {
+	return nil, nil
+}
+
+func (s *stubProfileQueries) ListUserSettingsByAccountIDs(ctx context.Context, accountIds []int64) ([]db.ListUserSettingsByAccountIDsRow, error) {
+	return nil, nil
+}
+
+func (s *stubProfileQueries) ListUserRolesByAccountIDs(ctx context.Context, accountIds []int64) ([]db.ListUserRolesByAccountIDsRow, error) {
+	return nil, nil
+}
+
+func (s *stubProfileQueries) ListCustomEmojisByShortcodesAndDomain(ctx context.Context, arg db.ListCustomEmojisByShortcodesAndDomainParams) ([]db.CustomEmoji, error) {
+	return nil, nil
+}
+
+func (s *stubProfileQueries) GetAccountsByIDs(ctx context.Context, ids []int64) ([]db.Account, error) {
+	return nil, nil
+}
+
+func (s *stubProfileQueries) GetAccountsByUsernames(ctx context.Context, usernames []string) ([]db.Account, error) {
+	return nil, nil
+}
+
+func (s *stubProfileQueries) GetAccountsByUsernamesAndDomains(ctx context.Context, arg db.GetAccountsByUsernamesAndDomainsParams) ([]db.Account, error) {
+	return nil, nil
+}
+
+func (s *stubProfileQueries) GetUserByAccountID(ctx context.Context, accountID int64) (db.User, error) {
+	return db.User{ID: 1, AccountID: accountID}, nil
+}
+
+func (s *stubProfileQueries) CountFollowRequestsForAccount(ctx context.Context, targetAccountID int64) (int64, error) {
+	return 0, nil
+}
+
+func (s *stubProfileQueries) GetUserRole(ctx context.Context, userID int64) (db.UserRole, error) {
+	return db.UserRole{}, pgx.ErrNoRows
+}
+
+func TestProfileHandler_DeleteAvatar(t *testing.T) {
+	stub := &stubProfileQueries{account: db.Account{ID: 12345, Username: "user"}}
+	h := NewProfileHandler(stub, &config.Config{})
 
 	tests := []struct {
 		name      string
@@ -46,6 +111,7 @@ func TestProfileHandler_DeleteAvatar_MockMode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			stub.clearAvatarCalled = false
 			req, rec := mockProfileRequest(http.MethodDelete, "/api/v1/profile/avatar", tt.accountID)
 
 			h.DeleteAvatar(rec, req)
@@ -59,13 +125,17 @@ func TestProfileHandler_DeleteAvatar_MockMode(t *testing.T) {
 				if err := json.Unmarshal(rec.Body.Bytes(), &cred); err != nil {
 					t.Fatalf("Failed to unmarshal response: %v", err)
 				}
+				if !stub.clearAvatarCalled {
+					t.Fatal("expected ClearAccountAvatar to be called")
+				}
 			}
 		})
 	}
 }
 
-func TestProfileHandler_DeleteHeader_MockMode(t *testing.T) {
-	h := NewProfileHandler(nil, nil)
+func TestProfileHandler_DeleteHeader(t *testing.T) {
+	stub := &stubProfileQueries{account: db.Account{ID: 12345, Username: "user"}}
+	h := NewProfileHandler(stub, &config.Config{})
 
 	tests := []struct {
 		name      string
@@ -86,6 +156,7 @@ func TestProfileHandler_DeleteHeader_MockMode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			stub.clearHeaderCalled = false
 			req, rec := mockProfileRequest(http.MethodDelete, "/api/v1/profile/header", tt.accountID)
 
 			h.DeleteHeader(rec, req)
@@ -98,6 +169,9 @@ func TestProfileHandler_DeleteHeader_MockMode(t *testing.T) {
 				var cred CredentialAccount
 				if err := json.Unmarshal(rec.Body.Bytes(), &cred); err != nil {
 					t.Fatalf("Failed to unmarshal response: %v", err)
+				}
+				if !stub.clearHeaderCalled {
+					t.Fatal("expected ClearAccountHeader to be called")
 				}
 			}
 		})

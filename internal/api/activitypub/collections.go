@@ -35,11 +35,7 @@ func (h *FederationHandler) writeOutbox(w http.ResponseWriter, r *http.Request) 
 
 	pageRequested, limit, maxID, minID, sinceID := parseOutboxRequest(r)
 	if !h.useDB() {
-		if pageRequested {
-			h.renderEmptyOutboxPage(w, fmt.Sprintf("%s/outbox", actorURI), limit, maxID, minID, sinceID)
-			return
-		}
-		h.renderEmptyOutboxCollection(w, fmt.Sprintf("%s/outbox", actorURI), limit)
+		web.JSONError(w, http.StatusInternalServerError, "Outbox unavailable")
 		return
 	}
 
@@ -149,11 +145,7 @@ func (h *FederationHandler) writeFollowCollection(w http.ResponseWriter, r *http
 
 	isPage, limit, offset := parsePageRequest(r)
 	if !h.useDB() {
-		if isPage {
-			h.renderEmptyOrderedPage(w, base, limit, offset)
-			return
-		}
-		h.renderEmptyOrderedCollection(w, base)
+		web.JSONError(w, http.StatusInternalServerError, "Collection unavailable")
 		return
 	}
 
@@ -257,7 +249,7 @@ func (h *FederationHandler) GetFeatured(w http.ResponseWriter, r *http.Request) 
 	base := fmt.Sprintf("%s/collections/featured", actorURI)
 
 	if !h.useDB() {
-		h.renderEmptyOrderedItemsCollection(w, base)
+		web.JSONError(w, http.StatusInternalServerError, "Collection unavailable")
 		return
 	}
 
@@ -315,7 +307,7 @@ func (h *FederationHandler) GetFeaturedTags(w http.ResponseWriter, r *http.Reque
 	base := fmt.Sprintf("%s/collections/tags", actorURI)
 
 	if !h.useDB() {
-		h.renderEmptyCollection(w, base)
+		web.JSONError(w, http.StatusInternalServerError, "Collection unavailable")
 		return
 	}
 

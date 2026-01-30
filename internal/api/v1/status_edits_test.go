@@ -26,7 +26,7 @@ func mockStatusRequest(method, path string, accountID int64) (*http.Request, *ht
 	return req, rec
 }
 
-func TestStatusesHandler_History_MockMode(t *testing.T) {
+func TestStatusesHandler_History_DBUnavailable(t *testing.T) {
 	h := NewStatusesHandler(nil, nil, nil, nil, nil)
 
 	tests := []struct {
@@ -36,10 +36,10 @@ func TestStatusesHandler_History_MockMode(t *testing.T) {
 		wantLength int
 	}{
 		{
-			name:       "valid status ID returns empty array in mock mode",
+			name:       "valid status ID returns error when db unavailable",
 			statusID:   "123456789",
-			wantCode:   http.StatusOK,
-			wantLength: 0, // Mock mode returns empty array
+			wantCode:   http.StatusInternalServerError,
+			wantLength: 0,
 		},
 		{
 			name:       "empty status ID returns not found",
@@ -79,7 +79,7 @@ func TestStatusesHandler_History_MockMode(t *testing.T) {
 	}
 }
 
-func TestStatusesHandler_Source_MockMode(t *testing.T) {
+func TestStatusesHandler_Source_DBUnavailable(t *testing.T) {
 	h := NewStatusesHandler(nil, nil, nil, nil, nil)
 
 	tests := []struct {
@@ -91,10 +91,10 @@ func TestStatusesHandler_Source_MockMode(t *testing.T) {
 		wantSpoiler string
 	}{
 		{
-			name:        "authenticated user gets source",
+			name:        "authenticated user returns error when db unavailable",
 			statusID:    "123456789",
 			accountID:   12345,
-			wantCode:    http.StatusOK,
+			wantCode:    http.StatusInternalServerError,
 			wantText:    "Hello, world!",
 			wantSpoiler: "",
 		},
@@ -148,7 +148,7 @@ func TestStatusesHandler_Source_MockMode(t *testing.T) {
 	}
 }
 
-func TestStatusesHandler_Context_MockMode(t *testing.T) {
+func TestStatusesHandler_Context_DBUnavailable(t *testing.T) {
 	h := NewStatusesHandler(nil, nil, nil, nil, nil)
 
 	tests := []struct {
@@ -158,10 +158,9 @@ func TestStatusesHandler_Context_MockMode(t *testing.T) {
 		wantLength int
 	}{
 		{
-			name:       "valid status ID returns empty context in mock mode",
-			statusID:   "123456789",
-			wantCode:   http.StatusOK,
-			wantLength: 0,
+			name:     "valid status ID returns error when db unavailable",
+			statusID: "123456789",
+			wantCode: http.StatusInternalServerError,
 		},
 		{
 			name:     "empty status ID returns not found",
@@ -341,7 +340,7 @@ func TestStatusesHandler_Source_RequiresAuth(t *testing.T) {
 	}
 }
 
-func TestStatusesHandler_Translate_MockMode(t *testing.T) {
+func TestStatusesHandler_Translate_Disabled(t *testing.T) {
 	h := NewStatusesHandler(nil, nil, nil, nil, nil)
 
 	tests := []struct {
@@ -407,7 +406,7 @@ func TestTranslationStruct(t *testing.T) {
 	}
 }
 
-func TestStatusesHandler_Quotes_MockMode(t *testing.T) {
+func TestStatusesHandler_Quotes_DBUnavailable(t *testing.T) {
 	h := NewStatusesHandler(nil, nil, nil, nil, nil)
 
 	tests := []struct {
@@ -416,9 +415,9 @@ func TestStatusesHandler_Quotes_MockMode(t *testing.T) {
 		wantCode int
 	}{
 		{
-			name:     "valid status ID returns empty quotes list",
+			name:     "valid status ID returns error when db unavailable",
 			statusID: "123456789",
-			wantCode: http.StatusOK,
+			wantCode: http.StatusInternalServerError,
 		},
 		{
 			name:     "empty status ID returns not found",
@@ -446,7 +445,7 @@ func TestStatusesHandler_Quotes_MockMode(t *testing.T) {
 	}
 }
 
-func TestStatusesHandler_RevokeQuote_MockMode(t *testing.T) {
+func TestStatusesHandler_RevokeQuote_DBUnavailable(t *testing.T) {
 	h := NewStatusesHandler(nil, nil, nil, nil, nil)
 
 	tests := []struct {
@@ -457,11 +456,11 @@ func TestStatusesHandler_RevokeQuote_MockMode(t *testing.T) {
 		wantCode  int
 	}{
 		{
-			name:      "authenticated user can revoke quote",
+			name:      "authenticated user returns error when db unavailable",
 			statusID:  "123456789",
 			quoteID:   "999",
 			accountID: 12345,
-			wantCode:  http.StatusOK,
+			wantCode:  http.StatusInternalServerError,
 		},
 		{
 			name:      "unauthenticated user gets 401",

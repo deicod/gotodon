@@ -14,7 +14,6 @@ import (
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/streaming"
 	"github.com/deicod/gotodon/internal/web"
-	"github.com/deicod/gotodon/pkg/snowflake"
 )
 
 // Filter action constants
@@ -36,18 +35,13 @@ var stringToFilterAction = map[string]int32{
 // FiltersHandler handles filter endpoints
 type FiltersHandler struct {
 	queries   *db.Queries
-	idGen     *snowflake.Generator
 	publisher streaming.EventPublisher
-	// In-memory storage for fallback when queries is nil
-	memFilters map[int64]map[int64]*FilterV2 // account_id -> filter_id -> filter
 }
 
 // NewFiltersHandler creates a new filters handler
 func NewFiltersHandler(queries *db.Queries) *FiltersHandler {
 	return &FiltersHandler{
-		queries:    queries,
-		idGen:      snowflake.NewGenerator(),
-		memFilters: make(map[int64]map[int64]*FilterV2),
+		queries: queries,
 	}
 }
 
@@ -197,36 +191,6 @@ func (h *FiltersHandler) loadFilterStatuses(ctx context.Context, filterID int64)
 	return statuses
 }
 
-func (h *FiltersHandler) findMemKeyword(accountID int64, keywordID string) (*FilterV2, int) {
-	accountFilters := h.memFilters[accountID]
-	if accountFilters == nil {
-		return nil, -1
-	}
-	for _, filter := range accountFilters {
-		for i := range filter.Keywords {
-			if filter.Keywords[i].ID == keywordID {
-				return filter, i
-			}
-		}
-	}
-	return nil, -1
-}
-
-func (h *FiltersHandler) findMemStatus(accountID int64, statusID string) (*FilterV2, int) {
-	accountFilters := h.memFilters[accountID]
-	if accountFilters == nil {
-		return nil, -1
-	}
-	for _, filter := range accountFilters {
-		for i := range filter.Statuses {
-			if filter.Statuses[i].ID == statusID {
-				return filter, i
-			}
-		}
-	}
-	return nil, -1
-}
-
 // List handles GET /api/v2/filters
 func (h *FiltersHandler) List(w http.ResponseWriter, r *http.Request) {
 	accountID, ok := middleware.GetAccountID(r.Context())
@@ -235,41 +199,27 @@ func (h *FiltersHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Filters unavailable")
+		return
+	}
+
 	ctx := context.Background()
-
-	if h.useDB() {
-		dbFilters, err := h.queries.ListFilters(ctx, accountID)
-		if err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-		result := make([]FilterV2, 0, len(dbFilters))
-		for _, dbFilter := range dbFilters {
-			// Skip expired filters
-			if dbFilter.ExpiresAt.Valid && dbFilter.ExpiresAt.Time.Before(time.Now()) {
-				continue
-			}
-			filter := h.dbFilterToAPI(dbFilter)
-			filter.Keywords = h.loadFilterKeywords(ctx, dbFilter.ID)
-			filter.Statuses = h.loadFilterStatuses(ctx, dbFilter.ID)
-			result = append(result, filter)
-		}
-		web.JSON(w, http.StatusOK, result)
+	dbFilters, err := h.queries.ListFilters(ctx, accountID)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-
-	// In-memory fallback
-	accountFilters := h.memFilters[accountID]
-	if accountFilters == nil {
-		web.JSON(w, http.StatusOK, []FilterV2{})
-		return
-	}
-	result := make([]FilterV2, 0, len(accountFilters))
-	for _, filter := range accountFilters {
-		if filter.ExpiresAt != nil && filter.ExpiresAt.Before(time.Now()) {
+	result := make([]FilterV2, 0, len(dbFilters))
+	for _, dbFilter := range dbFilters {
+		// Skip expired filters
+		if dbFilter.ExpiresAt.Valid && dbFilter.ExpiresAt.Time.Before(time.Now()) {
 			continue
 		}
-		result = append(result, *filter)
+		filter := h.dbFilterToAPI(dbFilter)
+		filter.Keywords = h.loadFilterKeywords(ctx, dbFilter.ID)
+		filter.Statuses = h.loadFilterStatuses(ctx, dbFilter.ID)
+		result = append(result, filter)
 	}
 	web.JSON(w, http.StatusOK, result)
 }
@@ -288,32 +238,25 @@ func (h *FiltersHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
-
-	if h.useDB() {
-		dbFilter, err := h.queries.GetFilter(ctx, db.GetFilterParams{
-			ID:        filterID,
-			AccountID: accountID,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-		filter := h.dbFilterToAPI(dbFilter)
-		filter.Keywords = h.loadFilterKeywords(ctx, filterID)
-		filter.Statuses = h.loadFilterStatuses(ctx, filterID)
-		web.JSON(w, http.StatusOK, filter)
-		h.publishFiltersChanged(ctx, accountID)
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Filters unavailable")
 		return
 	}
 
-	// In-memory fallback
-	accountFilters := h.memFilters[accountID]
-	if accountFilters == nil || accountFilters[filterID] == nil {
+	ctx := context.Background()
+	dbFilter, err := h.queries.GetFilter(ctx, db.GetFilterParams{
+		ID:        filterID,
+		AccountID: accountID,
+	})
+	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
-	web.JSON(w, http.StatusOK, accountFilters[filterID])
+	filter := h.dbFilterToAPI(dbFilter)
+	filter.Keywords = h.loadFilterKeywords(ctx, filterID)
+	filter.Statuses = h.loadFilterStatuses(ctx, filterID)
+	web.JSON(w, http.StatusOK, filter)
+	h.publishFiltersChanged(ctx, accountID)
 }
 
 // Create handles POST /api/v2/filters
@@ -348,102 +291,66 @@ func (h *FiltersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	actionStr := "warn"
 	actionInt := int32(FilterActionWarn)
 	if req.FilterAction != "" {
 		if !validActions[req.FilterAction] {
 			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Filter action is invalid")
 			return
 		}
-		actionStr = req.FilterAction
 		actionInt = stringToFilterAction[req.FilterAction]
 	}
 
 	// Calculate expiration
-	var expiresAt *time.Time
 	var expiresAtPG pgtype.Timestamptz
 	if req.ExpiresIn != nil && *req.ExpiresIn > 0 {
 		exp := time.Now().Add(time.Duration(*req.ExpiresIn) * time.Second)
-		expiresAt = &exp
 		expiresAtPG = pgtype.Timestamptz{Time: exp, Valid: true}
 	}
 
 	ctx := context.Background()
-
-	if h.useDB() {
-		dbFilter, err := h.queries.CreateFilter(ctx, db.CreateFilterParams{
-			AccountID: accountID,
-			Phrase:    req.Title,
-			Context:   req.Context,
-			Action:    actionInt,
-			ExpiresAt: expiresAtPG,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Failed to create filter")
-			return
-		}
-
-		// Create keywords
-		keywords := make([]FilterKeyword, 0, len(req.KeywordsAttributes))
-		for _, kw := range req.KeywordsAttributes {
-			wholeWord := true
-			if kw.WholeWord != nil {
-				wholeWord = *kw.WholeWord
-			}
-			dbKw, err := h.queries.CreateFilterKeyword(ctx, db.CreateFilterKeywordParams{
-				CustomFilterID: dbFilter.ID,
-				Keyword:        kw.Keyword,
-				WholeWord:      wholeWord,
-			})
-			if err == nil {
-				keywords = append(keywords, FilterKeyword{
-					ID:        strconv.FormatInt(dbKw.ID, 10),
-					Keyword:   dbKw.Keyword,
-					WholeWord: dbKw.WholeWord,
-				})
-			}
-		}
-
-		filter := h.dbFilterToAPI(dbFilter)
-		filter.Keywords = keywords
-		filter.Statuses = []FilterStatus{}
-		web.JSON(w, http.StatusOK, filter)
-		h.publishFiltersChanged(ctx, accountID)
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Filters unavailable")
 		return
 	}
 
-	// In-memory fallback
-	filterID := h.idGen.Generate()
+	dbFilter, err := h.queries.CreateFilter(ctx, db.CreateFilterParams{
+		AccountID: accountID,
+		Phrase:    req.Title,
+		Context:   req.Context,
+		Action:    actionInt,
+		ExpiresAt: expiresAtPG,
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to create filter")
+		return
+	}
+
+	// Create keywords
 	keywords := make([]FilterKeyword, 0, len(req.KeywordsAttributes))
 	for _, kw := range req.KeywordsAttributes {
 		wholeWord := true
 		if kw.WholeWord != nil {
 			wholeWord = *kw.WholeWord
 		}
-		keywords = append(keywords, FilterKeyword{
-			ID:        strconv.FormatInt(h.idGen.Generate(), 10),
-			Keyword:   kw.Keyword,
-			WholeWord: wholeWord,
+		dbKw, err := h.queries.CreateFilterKeyword(ctx, db.CreateFilterKeywordParams{
+			CustomFilterID: dbFilter.ID,
+			Keyword:        kw.Keyword,
+			WholeWord:      wholeWord,
 		})
+		if err == nil {
+			keywords = append(keywords, FilterKeyword{
+				ID:        strconv.FormatInt(dbKw.ID, 10),
+				Keyword:   dbKw.Keyword,
+				WholeWord: dbKw.WholeWord,
+			})
+		}
 	}
 
-	filter := &FilterV2{
-		ID:           strconv.FormatInt(filterID, 10),
-		Title:        req.Title,
-		Context:      req.Context,
-		ExpiresAt:    expiresAt,
-		FilterAction: actionStr,
-		Keywords:     keywords,
-		Statuses:     []FilterStatus{},
-	}
-
-	if h.memFilters[accountID] == nil {
-		h.memFilters[accountID] = make(map[int64]*FilterV2)
-	}
-	h.memFilters[accountID][filterID] = filter
-
+	filter := h.dbFilterToAPI(dbFilter)
+	filter.Keywords = keywords
+	filter.Statuses = []FilterStatus{}
 	web.JSON(w, http.StatusOK, filter)
-	h.publishFiltersChanged(r.Context(), accountID)
+	h.publishFiltersChanged(ctx, accountID)
 }
 
 // Update handles PUT /api/v2/filters/:id
@@ -463,6 +370,10 @@ func (h *FiltersHandler) Update(w http.ResponseWriter, r *http.Request) {
 	var req UpdateFilterRequest
 	if err := web.Bind(r, &req); err != nil {
 		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Filters unavailable")
 		return
 	}
 
@@ -571,84 +482,6 @@ func (h *FiltersHandler) Update(w http.ResponseWriter, r *http.Request) {
 		web.JSON(w, http.StatusOK, filter)
 		return
 	}
-
-	// In-memory fallback
-	accountFilters := h.memFilters[accountID]
-	if accountFilters == nil || accountFilters[filterID] == nil {
-		web.JSONError(w, http.StatusNotFound, "Record not found")
-		return
-	}
-
-	filter := accountFilters[filterID]
-	if req.Title != nil {
-		filter.Title = *req.Title
-	}
-	if len(req.Context) > 0 {
-		for _, ctx := range req.Context {
-			if !validContexts[ctx] {
-				web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Context is invalid")
-				return
-			}
-		}
-		filter.Context = req.Context
-	}
-	if req.FilterAction != nil {
-		if !validActions[*req.FilterAction] {
-			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Filter action is invalid")
-			return
-		}
-		filter.FilterAction = *req.FilterAction
-	}
-	if req.ExpiresIn != nil {
-		if *req.ExpiresIn > 0 {
-			exp := time.Now().Add(time.Duration(*req.ExpiresIn) * time.Second)
-			filter.ExpiresAt = &exp
-		} else {
-			filter.ExpiresAt = nil
-		}
-	}
-
-	// Handle keyword updates (in-memory)
-	if len(req.KeywordsAttributes) > 0 {
-		keywordMap := make(map[string]*FilterKeyword)
-		for i := range filter.Keywords {
-			keywordMap[filter.Keywords[i].ID] = &filter.Keywords[i]
-		}
-		for _, kw := range req.KeywordsAttributes {
-			if kw.ID != nil {
-				if existing, ok := keywordMap[*kw.ID]; ok {
-					if kw.Destroy != nil && *kw.Destroy {
-						delete(keywordMap, *kw.ID)
-					} else {
-						if kw.Keyword != nil {
-							existing.Keyword = *kw.Keyword
-						}
-						if kw.WholeWord != nil {
-							existing.WholeWord = *kw.WholeWord
-						}
-					}
-				}
-			} else if kw.Keyword != nil {
-				wholeWord := true
-				if kw.WholeWord != nil {
-					wholeWord = *kw.WholeWord
-				}
-				newKw := FilterKeyword{
-					ID:        strconv.FormatInt(h.idGen.Generate(), 10),
-					Keyword:   *kw.Keyword,
-					WholeWord: wholeWord,
-				}
-				keywordMap[newKw.ID] = &newKw
-			}
-		}
-		filter.Keywords = make([]FilterKeyword, 0, len(keywordMap))
-		for _, kw := range keywordMap {
-			filter.Keywords = append(filter.Keywords, *kw)
-		}
-	}
-
-	web.JSON(w, http.StatusOK, filter)
-	h.publishFiltersChanged(r.Context(), accountID)
 }
 
 // Delete handles DELETE /api/v2/filters/:id
@@ -665,30 +498,21 @@ func (h *FiltersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
-
-	if h.useDB() {
-		if err := h.queries.DeleteFilter(ctx, db.DeleteFilterParams{
-			ID:        filterID,
-			AccountID: accountID,
-		}); err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-		web.JSON(w, http.StatusOK, map[string]any{})
-		h.publishFiltersChanged(ctx, accountID)
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Filters unavailable")
 		return
 	}
 
-	// In-memory fallback
-	accountFilters := h.memFilters[accountID]
-	if accountFilters == nil || accountFilters[filterID] == nil {
+	ctx := context.Background()
+	if err := h.queries.DeleteFilter(ctx, db.DeleteFilterParams{
+		ID:        filterID,
+		AccountID: accountID,
+	}); err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
-	delete(accountFilters, filterID)
 	web.JSON(w, http.StatusOK, map[string]any{})
-	h.publishFiltersChanged(r.Context(), accountID)
+	h.publishFiltersChanged(ctx, accountID)
 }
 
 // ListKeywords handles GET /api/v2/filters/:filter_id/keywords
@@ -704,43 +528,37 @@ func (h *FiltersHandler) ListKeywords(w http.ResponseWriter, r *http.Request) {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Filters unavailable")
+		return
+	}
 
 	ctx := context.Background()
 
-	if h.useDB() {
-		_, err := h.queries.GetFilter(ctx, db.GetFilterParams{
-			ID:        filterID,
-			AccountID: accountID,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-
-		dbKeywords, err := h.queries.ListFilterKeywords(ctx, filterID)
-		if err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-
-		keywords := make([]FilterKeyword, len(dbKeywords))
-		for i, kw := range dbKeywords {
-			keywords[i] = FilterKeyword{
-				ID:        strconv.FormatInt(kw.ID, 10),
-				Keyword:   kw.Keyword,
-				WholeWord: kw.WholeWord,
-			}
-		}
-		web.JSON(w, http.StatusOK, keywords)
-		return
-	}
-
-	accountFilters := h.memFilters[accountID]
-	if accountFilters == nil || accountFilters[filterID] == nil {
+	_, err = h.queries.GetFilter(ctx, db.GetFilterParams{
+		ID:        filterID,
+		AccountID: accountID,
+	})
+	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
-	web.JSON(w, http.StatusOK, accountFilters[filterID].Keywords)
+
+	dbKeywords, err := h.queries.ListFilterKeywords(ctx, filterID)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+
+	keywords := make([]FilterKeyword, len(dbKeywords))
+	for i, kw := range dbKeywords {
+		keywords[i] = FilterKeyword{
+			ID:        strconv.FormatInt(kw.ID, 10),
+			Keyword:   kw.Keyword,
+			WholeWord: kw.WholeWord,
+		}
+	}
+	web.JSON(w, http.StatusOK, keywords)
 }
 
 // GetKeyword handles GET /api/v2/filters/:filter_id/keywords/:id
@@ -753,43 +571,25 @@ func (h *FiltersHandler) GetKeyword(w http.ResponseWriter, r *http.Request) {
 
 	filterID, _ := strconv.ParseInt(web.Param(r, "filter_id"), 10, 64)
 	keywordIDStr := web.Param(r, "id")
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Filters unavailable")
+		return
+	}
 
 	ctx := context.Background()
 
-	if h.useDB() {
-		// Verify filter ownership
-		_, err := h.queries.GetFilter(ctx, db.GetFilterParams{
-			ID:        filterID,
-			AccountID: accountID,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-
-		keywords := h.loadFilterKeywords(ctx, filterID)
-		for _, kw := range keywords {
-			if kw.ID == keywordIDStr {
-				web.JSON(w, http.StatusOK, kw)
-				return
-			}
-		}
+	// Verify filter ownership
+	_, err := h.queries.GetFilter(ctx, db.GetFilterParams{
+		ID:        filterID,
+		AccountID: accountID,
+	})
+	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
 
-	// In-memory fallback
-	accountFilters := h.memFilters[accountID]
-	if accountFilters == nil {
-		web.JSONError(w, http.StatusNotFound, "Record not found")
-		return
-	}
-	filter := accountFilters[filterID]
-	if filter == nil {
-		web.JSONError(w, http.StatusNotFound, "Record not found")
-		return
-	}
-	for _, kw := range filter.Keywords {
+	keywords := h.loadFilterKeywords(ctx, filterID)
+	for _, kw := range keywords {
 		if kw.ID == keywordIDStr {
 			web.JSON(w, http.StatusOK, kw)
 			return
@@ -812,34 +612,27 @@ func (h *FiltersHandler) GetKeywordByID(w http.ResponseWriter, r *http.Request) 
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Filters unavailable")
+		return
+	}
 
 	ctx := context.Background()
 
-	if h.useDB() {
-		dbKw, err := h.queries.GetFilterKeyword(ctx, db.GetFilterKeywordParams{
-			ID:        keywordID,
-			AccountID: accountID,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-		web.JSON(w, http.StatusOK, FilterKeyword{
-			ID:        strconv.FormatInt(dbKw.ID, 10),
-			Keyword:   dbKw.Keyword,
-			WholeWord: dbKw.WholeWord,
-		})
-		h.publishFiltersChanged(ctx, accountID)
-		return
-	}
-
-	filter, idx := h.findMemKeyword(accountID, keywordIDStr)
-	if filter == nil {
+	dbKw, err := h.queries.GetFilterKeyword(ctx, db.GetFilterKeywordParams{
+		ID:        keywordID,
+		AccountID: accountID,
+	})
+	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
-	web.JSON(w, http.StatusOK, filter.Keywords[idx])
-	h.publishFiltersChanged(r.Context(), accountID)
+	web.JSON(w, http.StatusOK, FilterKeyword{
+		ID:        strconv.FormatInt(dbKw.ID, 10),
+		Keyword:   dbKw.Keyword,
+		WholeWord: dbKw.WholeWord,
+	})
+	h.publishFiltersChanged(ctx, accountID)
 }
 
 // UpdateKeywordByID handles PUT /api/v2/filters/keywords/:id
@@ -871,54 +664,40 @@ func (h *FiltersHandler) UpdateKeywordByID(w http.ResponseWriter, r *http.Reques
 		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Keyword can't be blank")
 		return
 	}
-
-	ctx := context.Background()
-
-	if h.useDB() {
-		_, err := h.queries.GetFilterKeyword(ctx, db.GetFilterKeywordParams{
-			ID:        keywordID,
-			AccountID: accountID,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-
-		updateParams := db.UpdateFilterKeywordParams{ID: keywordID}
-		if req.Keyword != nil {
-			updateParams.Keyword = pgtype.Text{String: *req.Keyword, Valid: true}
-		}
-		if req.WholeWord != nil {
-			updateParams.WholeWord = pgtype.Bool{Bool: *req.WholeWord, Valid: true}
-		}
-		dbKw, err := h.queries.UpdateFilterKeyword(ctx, updateParams)
-		if err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Failed to update keyword")
-			return
-		}
-
-		web.JSON(w, http.StatusOK, FilterKeyword{
-			ID:        strconv.FormatInt(dbKw.ID, 10),
-			Keyword:   dbKw.Keyword,
-			WholeWord: dbKw.WholeWord,
-		})
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Filters unavailable")
 		return
 	}
 
-	filter, idx := h.findMemKeyword(accountID, keywordIDStr)
-	if filter == nil {
+	ctx := context.Background()
+
+	_, err = h.queries.GetFilterKeyword(ctx, db.GetFilterKeywordParams{
+		ID:        keywordID,
+		AccountID: accountID,
+	})
+	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
 
+	updateParams := db.UpdateFilterKeywordParams{ID: keywordID}
 	if req.Keyword != nil {
-		filter.Keywords[idx].Keyword = *req.Keyword
+		updateParams.Keyword = pgtype.Text{String: *req.Keyword, Valid: true}
 	}
 	if req.WholeWord != nil {
-		filter.Keywords[idx].WholeWord = *req.WholeWord
+		updateParams.WholeWord = pgtype.Bool{Bool: *req.WholeWord, Valid: true}
+	}
+	dbKw, err := h.queries.UpdateFilterKeyword(ctx, updateParams)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to update keyword")
+		return
 	}
 
-	web.JSON(w, http.StatusOK, filter.Keywords[idx])
+	web.JSON(w, http.StatusOK, FilterKeyword{
+		ID:        strconv.FormatInt(dbKw.ID, 10),
+		Keyword:   dbKw.Keyword,
+		WholeWord: dbKw.WholeWord,
+	})
 }
 
 // DeleteKeywordByID handles DELETE /api/v2/filters/keywords/:id
@@ -935,35 +714,27 @@ func (h *FiltersHandler) DeleteKeywordByID(w http.ResponseWriter, r *http.Reques
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Filters unavailable")
+		return
+	}
 
 	ctx := context.Background()
 
-	if h.useDB() {
-		_, err := h.queries.GetFilterKeyword(ctx, db.GetFilterKeywordParams{
-			ID:        keywordID,
-			AccountID: accountID,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-		if err := h.queries.DeleteFilterKeyword(ctx, keywordID); err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-		web.JSON(w, http.StatusOK, map[string]any{})
-		h.publishFiltersChanged(ctx, accountID)
-		return
-	}
-
-	filter, idx := h.findMemKeyword(accountID, keywordIDStr)
-	if filter == nil {
+	_, err = h.queries.GetFilterKeyword(ctx, db.GetFilterKeywordParams{
+		ID:        keywordID,
+		AccountID: accountID,
+	})
+	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
-	filter.Keywords = append(filter.Keywords[:idx], filter.Keywords[idx+1:]...)
+	if err := h.queries.DeleteFilterKeyword(ctx, keywordID); err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
 	web.JSON(w, http.StatusOK, map[string]any{})
-	h.publishFiltersChanged(r.Context(), accountID)
+	h.publishFiltersChanged(ctx, accountID)
 }
 
 // CreateKeyword handles POST /api/v2/filters/:filter_id/keywords
@@ -989,6 +760,10 @@ func (h *FiltersHandler) CreateKeyword(w http.ResponseWriter, r *http.Request) {
 		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Keyword can't be blank")
 		return
 	}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Filters unavailable")
+		return
+	}
 
 	wholeWord := true
 	if req.WholeWord != nil {
@@ -997,54 +772,31 @@ func (h *FiltersHandler) CreateKeyword(w http.ResponseWriter, r *http.Request) {
 
 	ctx := context.Background()
 
-	if h.useDB() {
-		// Verify filter ownership
-		_, err := h.queries.GetFilter(ctx, db.GetFilterParams{
-			ID:        filterID,
-			AccountID: accountID,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-
-		dbKw, err := h.queries.CreateFilterKeyword(ctx, db.CreateFilterKeywordParams{
-			CustomFilterID: filterID,
-			Keyword:        req.Keyword,
-			WholeWord:      wholeWord,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Failed to create keyword")
-			return
-		}
-		web.JSON(w, http.StatusOK, FilterKeyword{
-			ID:        strconv.FormatInt(dbKw.ID, 10),
-			Keyword:   dbKw.Keyword,
-			WholeWord: dbKw.WholeWord,
-		})
-		h.publishFiltersChanged(ctx, accountID)
-		return
-	}
-
-	// In-memory fallback
-	accountFilters := h.memFilters[accountID]
-	if accountFilters == nil {
+	// Verify filter ownership
+	_, err := h.queries.GetFilter(ctx, db.GetFilterParams{
+		ID:        filterID,
+		AccountID: accountID,
+	})
+	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
-	filter := accountFilters[filterID]
-	if filter == nil {
-		web.JSONError(w, http.StatusNotFound, "Record not found")
+
+	dbKw, err := h.queries.CreateFilterKeyword(ctx, db.CreateFilterKeywordParams{
+		CustomFilterID: filterID,
+		Keyword:        req.Keyword,
+		WholeWord:      wholeWord,
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to create keyword")
 		return
 	}
-	kw := FilterKeyword{
-		ID:        strconv.FormatInt(h.idGen.Generate(), 10),
-		Keyword:   req.Keyword,
-		WholeWord: wholeWord,
-	}
-	filter.Keywords = append(filter.Keywords, kw)
-	web.JSON(w, http.StatusOK, kw)
-	h.publishFiltersChanged(r.Context(), accountID)
+	web.JSON(w, http.StatusOK, FilterKeyword{
+		ID:        strconv.FormatInt(dbKw.ID, 10),
+		Keyword:   dbKw.Keyword,
+		WholeWord: dbKw.WholeWord,
+	})
+	h.publishFiltersChanged(ctx, accountID)
 }
 
 // DeleteKeyword handles DELETE /api/v2/filters/:filter_id/keywords/:id
@@ -1066,50 +818,28 @@ func (h *FiltersHandler) DeleteKeyword(w http.ResponseWriter, r *http.Request) {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Filters unavailable")
+		return
+	}
 
 	ctx := context.Background()
 
-	if h.useDB() {
-		dbKw, err := h.queries.GetFilterKeyword(ctx, db.GetFilterKeywordParams{
-			ID:        keywordID,
-			AccountID: accountID,
-		})
-		if err != nil || dbKw.CustomFilterID != filterID {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-
-		if err := h.queries.DeleteFilterKeyword(ctx, keywordID); err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-		web.JSON(w, http.StatusOK, map[string]any{})
-		h.publishFiltersChanged(ctx, accountID)
-		return
-	}
-
-	// In-memory fallback
-	accountFilters := h.memFilters[accountID]
-	if accountFilters == nil {
-		web.JSONError(w, http.StatusNotFound, "Record not found")
-		return
-	}
-	filter := accountFilters[filterID]
-	if filter == nil {
+	dbKw, err := h.queries.GetFilterKeyword(ctx, db.GetFilterKeywordParams{
+		ID:        keywordID,
+		AccountID: accountID,
+	})
+	if err != nil || dbKw.CustomFilterID != filterID {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
 
-	// Find and remove
-	for i, kw := range filter.Keywords {
-		if kw.ID == keywordIDStr {
-			filter.Keywords = append(filter.Keywords[:i], filter.Keywords[i+1:]...)
-			web.JSON(w, http.StatusOK, map[string]any{})
-			h.publishFiltersChanged(r.Context(), accountID)
-			return
-		}
+	if err := h.queries.DeleteFilterKeyword(ctx, keywordID); err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
-	web.JSONError(w, http.StatusNotFound, "Record not found")
+	web.JSON(w, http.StatusOK, map[string]any{})
+	h.publishFiltersChanged(ctx, accountID)
 }
 
 // ListStatuses handles GET /api/v2/filters/:filter_id/statuses
@@ -1125,42 +855,36 @@ func (h *FiltersHandler) ListStatuses(w http.ResponseWriter, r *http.Request) {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Filters unavailable")
+		return
+	}
 
 	ctx := context.Background()
 
-	if h.useDB() {
-		_, err := h.queries.GetFilter(ctx, db.GetFilterParams{
-			ID:        filterID,
-			AccountID: accountID,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-
-		dbStatuses, err := h.queries.ListFilterStatuses(ctx, filterID)
-		if err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-
-		statuses := make([]FilterStatus, len(dbStatuses))
-		for i, s := range dbStatuses {
-			statuses[i] = FilterStatus{
-				ID:       strconv.FormatInt(s.ID, 10),
-				StatusID: strconv.FormatInt(s.StatusID, 10),
-			}
-		}
-		web.JSON(w, http.StatusOK, statuses)
-		return
-	}
-
-	accountFilters := h.memFilters[accountID]
-	if accountFilters == nil || accountFilters[filterID] == nil {
+	_, err = h.queries.GetFilter(ctx, db.GetFilterParams{
+		ID:        filterID,
+		AccountID: accountID,
+	})
+	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
-	web.JSON(w, http.StatusOK, accountFilters[filterID].Statuses)
+
+	dbStatuses, err := h.queries.ListFilterStatuses(ctx, filterID)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+
+	statuses := make([]FilterStatus, len(dbStatuses))
+	for i, s := range dbStatuses {
+		statuses[i] = FilterStatus{
+			ID:       strconv.FormatInt(s.ID, 10),
+			StatusID: strconv.FormatInt(s.StatusID, 10),
+		}
+	}
+	web.JSON(w, http.StatusOK, statuses)
 }
 
 // CreateStatus handles POST /api/v2/filters/:filter_id/statuses
@@ -1192,49 +916,35 @@ func (h *FiltersHandler) CreateStatus(w http.ResponseWriter, r *http.Request) {
 		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Status ID can't be blank")
 		return
 	}
-
-	ctx := context.Background()
-
-	if h.useDB() {
-		_, err := h.queries.GetFilter(ctx, db.GetFilterParams{
-			ID:        filterID,
-			AccountID: accountID,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-
-		dbStatus, err := h.queries.CreateFilterStatus(ctx, db.CreateFilterStatusParams{
-			CustomFilterID: filterID,
-			StatusID:       statusID,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Failed to create status")
-			return
-		}
-		web.JSON(w, http.StatusOK, FilterStatus{
-			ID:       strconv.FormatInt(dbStatus.ID, 10),
-			StatusID: strconv.FormatInt(dbStatus.StatusID, 10),
-		})
-		h.publishFiltersChanged(ctx, accountID)
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Filters unavailable")
 		return
 	}
 
-	accountFilters := h.memFilters[accountID]
-	if accountFilters == nil || accountFilters[filterID] == nil {
+	ctx := context.Background()
+
+	_, err = h.queries.GetFilter(ctx, db.GetFilterParams{
+		ID:        filterID,
+		AccountID: accountID,
+	})
+	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
 
-	filter := accountFilters[filterID]
-	status := FilterStatus{
-		ID:       strconv.FormatInt(h.idGen.Generate(), 10),
-		StatusID: req.StatusID,
+	dbStatus, err := h.queries.CreateFilterStatus(ctx, db.CreateFilterStatusParams{
+		CustomFilterID: filterID,
+		StatusID:       statusID,
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to create status")
+		return
 	}
-	filter.Statuses = append(filter.Statuses, status)
-	web.JSON(w, http.StatusOK, status)
-	h.publishFiltersChanged(r.Context(), accountID)
+	web.JSON(w, http.StatusOK, FilterStatus{
+		ID:       strconv.FormatInt(dbStatus.ID, 10),
+		StatusID: strconv.FormatInt(dbStatus.StatusID, 10),
+	})
+	h.publishFiltersChanged(ctx, accountID)
 }
 
 // GetStatus handles GET /api/v2/filters/statuses/:id
@@ -1251,31 +961,25 @@ func (h *FiltersHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Filters unavailable")
+		return
+	}
 
 	ctx := context.Background()
 
-	if h.useDB() {
-		dbStatus, err := h.queries.GetFilterStatus(ctx, db.GetFilterStatusParams{
-			ID:        statusID,
-			AccountID: accountID,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-		web.JSON(w, http.StatusOK, FilterStatus{
-			ID:       strconv.FormatInt(dbStatus.ID, 10),
-			StatusID: strconv.FormatInt(dbStatus.StatusID, 10),
-		})
-		return
-	}
-
-	filter, idx := h.findMemStatus(accountID, statusIDStr)
-	if filter == nil {
+	dbStatus, err := h.queries.GetFilterStatus(ctx, db.GetFilterStatusParams{
+		ID:        statusID,
+		AccountID: accountID,
+	})
+	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
-	web.JSON(w, http.StatusOK, filter.Statuses[idx])
+	web.JSON(w, http.StatusOK, FilterStatus{
+		ID:       strconv.FormatInt(dbStatus.ID, 10),
+		StatusID: strconv.FormatInt(dbStatus.StatusID, 10),
+	})
 }
 
 // DeleteStatus handles DELETE /api/v2/filters/statuses/:id
@@ -1292,35 +996,27 @@ func (h *FiltersHandler) DeleteStatus(w http.ResponseWriter, r *http.Request) {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Filters unavailable")
+		return
+	}
 
 	ctx := context.Background()
 
-	if h.useDB() {
-		_, err := h.queries.GetFilterStatus(ctx, db.GetFilterStatusParams{
-			ID:        statusID,
-			AccountID: accountID,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-		if err := h.queries.DeleteFilterStatus(ctx, statusID); err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-		web.JSON(w, http.StatusOK, map[string]any{})
-		h.publishFiltersChanged(ctx, accountID)
-		return
-	}
-
-	filter, idx := h.findMemStatus(accountID, statusIDStr)
-	if filter == nil {
+	_, err = h.queries.GetFilterStatus(ctx, db.GetFilterStatusParams{
+		ID:        statusID,
+		AccountID: accountID,
+	})
+	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
-	filter.Statuses = append(filter.Statuses[:idx], filter.Statuses[idx+1:]...)
+	if err := h.queries.DeleteFilterStatus(ctx, statusID); err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
 	web.JSON(w, http.StatusOK, map[string]any{})
-	h.publishFiltersChanged(r.Context(), accountID)
+	h.publishFiltersChanged(ctx, accountID)
 }
 
 // RegisterRoutes registers filter routes

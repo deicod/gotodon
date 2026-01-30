@@ -1,7 +1,6 @@
 package v1
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -13,7 +12,7 @@ import (
 	"github.com/deicod/gotodon/internal/db"
 )
 
-func TestTrendsHandler_Links_MockMode(t *testing.T) {
+func TestTrendsHandler_Links_DBUnavailable(t *testing.T) {
 	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
 	h := NewTrendsHandler(nil, cfg)
 
@@ -22,20 +21,12 @@ func TestTrendsHandler_Links_MockMode(t *testing.T) {
 
 	h.Links(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var links []TrendingLink
-	if err := json.Unmarshal(rec.Body.Bytes(), &links); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
-	}
-	if len(links) != 0 {
-		t.Fatalf("expected 0 links, got %d", len(links))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
-func TestTrendsHandler_IndexAlias_MockMode(t *testing.T) {
+func TestTrendsHandler_IndexAlias_DBUnavailable(t *testing.T) {
 	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
 	h := NewTrendsHandler(nil, cfg)
 
@@ -44,20 +35,12 @@ func TestTrendsHandler_IndexAlias_MockMode(t *testing.T) {
 
 	h.Index(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var tags []TrendingTag
-	if err := json.Unmarshal(rec.Body.Bytes(), &tags); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
-	}
-	if len(tags) != 0 {
-		t.Fatalf("expected 0 tags, got %d", len(tags))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
-func TestTrendsHandler_Statuses_MockMode(t *testing.T) {
+func TestTrendsHandler_Statuses_DBUnavailable(t *testing.T) {
 	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
 	h := NewTrendsHandler(nil, cfg)
 
@@ -66,16 +49,8 @@ func TestTrendsHandler_Statuses_MockMode(t *testing.T) {
 
 	h.Statuses(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var statuses []Status
-	if err := json.Unmarshal(rec.Body.Bytes(), &statuses); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
-	}
-	if len(statuses) != 0 {
-		t.Fatalf("expected 0 statuses, got %d", len(statuses))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 

@@ -17,7 +17,7 @@ import (
 	"github.com/deicod/gotodon/internal/db"
 )
 
-func TestInstanceInfoHandler_Rules_MockMode(t *testing.T) {
+func TestInstanceInfoHandler_Rules_DBUnavailable(t *testing.T) {
 	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
 	h := NewInstanceInfoHandler(nil, cfg)
 
@@ -26,21 +26,12 @@ func TestInstanceInfoHandler_Rules_MockMode(t *testing.T) {
 
 	h.Rules(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var rules []RuleResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &rules); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
-	}
-
-	if len(rules) != 3 {
-		t.Errorf("rules length = %d, want 3", len(rules))
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
-func TestInstanceInfoHandler_Peers_MockMode(t *testing.T) {
+func TestInstanceInfoHandler_Peers_DBUnavailable(t *testing.T) {
 	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
 	h := NewInstanceInfoHandler(nil, cfg)
 
@@ -49,22 +40,12 @@ func TestInstanceInfoHandler_Peers_MockMode(t *testing.T) {
 
 	h.Peers(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var peers []string
-	if err := json.Unmarshal(rec.Body.Bytes(), &peers); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
-	}
-
-	// Mock mode returns empty list
-	if len(peers) != 0 {
-		t.Errorf("peers length = %d, want 0", len(peers))
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
-func TestInstanceInfoHandler_Activity_MockMode(t *testing.T) {
+func TestInstanceInfoHandler_Activity_DBUnavailable(t *testing.T) {
 	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
 	h := NewInstanceInfoHandler(nil, cfg)
 
@@ -73,24 +54,8 @@ func TestInstanceInfoHandler_Activity_MockMode(t *testing.T) {
 
 	h.Activity(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var weeks []ActivityWeek
-	if err := json.Unmarshal(rec.Body.Bytes(), &weeks); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
-	}
-
-	if len(weeks) != 12 {
-		t.Errorf("weeks length = %d, want 12", len(weeks))
-	}
-
-	// Check that weeks have proper structure
-	for _, week := range weeks {
-		if week.Week == "" {
-			t.Error("week timestamp should not be empty")
-		}
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
@@ -161,7 +126,7 @@ func TestInstanceInfoHandler_ExtendedDescription(t *testing.T) {
 	}
 }
 
-func TestInstanceInfoHandler_PrivacyPolicy(t *testing.T) {
+func TestInstanceInfoHandler_PrivacyPolicy_DBUnavailable(t *testing.T) {
 	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
 	h := NewInstanceInfoHandler(nil, cfg)
 
@@ -170,26 +135,12 @@ func TestInstanceInfoHandler_PrivacyPolicy(t *testing.T) {
 
 	h.PrivacyPolicyHandler(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var policy PrivacyPolicy
-	if err := json.Unmarshal(rec.Body.Bytes(), &policy); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
-	}
-	if policy.UpdatedAt == nil || policy.UpdatedAt.Format("2006-01-02") != "2022-10-07" {
-		t.Fatalf("updated_at = %v, want 2022-10-07", policy.UpdatedAt)
-	}
-	if !strings.Contains(policy.Content, "example.com") {
-		t.Fatalf("content missing domain substitution: %q", policy.Content)
-	}
-	if !strings.Contains(policy.Content, "This privacy policy describes how") {
-		t.Fatalf("content missing expected text: %q", policy.Content)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
-func TestInstanceInfoHandler_TermsOfService_NotFound_MockMode(t *testing.T) {
+func TestInstanceInfoHandler_TermsOfService_DBUnavailable(t *testing.T) {
 	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
 	h := NewInstanceInfoHandler(nil, cfg)
 
@@ -198,8 +149,8 @@ func TestInstanceInfoHandler_TermsOfService_NotFound_MockMode(t *testing.T) {
 
 	h.TermsOfServiceHandler(rec, req)
 
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
@@ -218,7 +169,7 @@ func TestInstanceInfoHandler_TermsOfServiceByDate_InvalidDate(t *testing.T) {
 	}
 }
 
-func TestInstanceInfoHandler_TermsOfServiceByDate_NotFound_MockMode(t *testing.T) {
+func TestInstanceInfoHandler_TermsOfServiceByDate_DBUnavailable(t *testing.T) {
 	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
 	h := NewInstanceInfoHandler(nil, cfg)
 
@@ -228,8 +179,8 @@ func TestInstanceInfoHandler_TermsOfServiceByDate_NotFound_MockMode(t *testing.T
 
 	h.TermsOfServiceByDate(rec, req)
 
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
@@ -327,7 +278,7 @@ func TestInstanceInfoHandler_Languages(t *testing.T) {
 	}
 }
 
-func TestInstanceInfoHandler_DomainBlocks_Disabled(t *testing.T) {
+func TestInstanceInfoHandler_DomainBlocks_DBUnavailable(t *testing.T) {
 	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
 	h := NewInstanceInfoHandler(nil, cfg)
 
@@ -336,8 +287,8 @@ func TestInstanceInfoHandler_DomainBlocks_Disabled(t *testing.T) {
 
 	h.DomainBlocksPublic(rec, req)
 
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 

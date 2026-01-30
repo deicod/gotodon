@@ -1,7 +1,6 @@
 package v2
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -14,7 +13,7 @@ import (
 	"github.com/deicod/gotodon/internal/db"
 )
 
-func TestSearchHandler_Search_MockMode(t *testing.T) {
+func TestSearchHandler_Search_NoDB(t *testing.T) {
 	h := NewSearchHandler(nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v2/search?q=test", nil)
@@ -22,23 +21,8 @@ func TestSearchHandler_Search_MockMode(t *testing.T) {
 
 	h.Search(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var resp SearchResult
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-
-	if len(resp.Accounts) != 0 {
-		t.Fatalf("accounts len = %d, want 0", len(resp.Accounts))
-	}
-	if len(resp.Statuses) != 0 {
-		t.Fatalf("statuses len = %d, want 0", len(resp.Statuses))
-	}
-	if len(resp.Hashtags) != 0 {
-		t.Fatalf("hashtags len = %d, want 0", len(resp.Hashtags))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 

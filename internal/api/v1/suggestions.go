@@ -54,7 +54,7 @@ func (h *SuggestionsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.queries == nil {
-		web.JSON(w, http.StatusOK, []Account{})
+		web.JSONError(w, http.StatusInternalServerError, "Suggestions unavailable")
 		return
 	}
 
@@ -95,25 +95,27 @@ func (h *SuggestionsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
+	if h.queries == nil {
+		web.JSONError(w, http.StatusInternalServerError, "Suggestions unavailable")
+		return
+	}
 
-	if h.queries != nil {
-		err = h.queries.CreateFollowRecommendationMute(r.Context(), db.CreateFollowRecommendationMuteParams{
-			AccountID:       accountID,
-			TargetAccountID: targetID,
-		})
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				web.JSONError(w, http.StatusNotFound, "Record not found")
-				return
-			}
-			var pgErr *pgconn.PgError
-			if errors.As(err, &pgErr) && pgErr.Code == "23503" {
-				web.JSONError(w, http.StatusNotFound, "Record not found")
-				return
-			}
-			web.JSONError(w, http.StatusInternalServerError, "Database error")
+	err = h.queries.CreateFollowRecommendationMute(r.Context(), db.CreateFollowRecommendationMuteParams{
+		AccountID:       accountID,
+		TargetAccountID: targetID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
 			return
 		}
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
 	// In production: remove this suggestion for the user

@@ -205,6 +205,10 @@ func (h *NotificationsHandler) List(w http.ResponseWriter, r *http.Request) {
 	excludeTypes := r.URL.Query()["exclude_types[]"]
 
 	ctx := r.Context()
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
+		return
+	}
 
 	if h.useDB() {
 		dbNotifs, err := h.queries.ListNotifications(ctx, db.ListNotificationsParams{
@@ -248,6 +252,10 @@ func (h *NotificationsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
+		return
+	}
 
 	if h.useDB() {
 		dbNotif, err := h.queries.GetNotification(ctx, db.GetNotificationParams{
@@ -262,24 +270,6 @@ func (h *NotificationsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mock fallback
-	now := time.Now()
-	discoverable := true
-	web.JSON(w, http.StatusOK, Notification{
-		ID:        idStr,
-		Type:      "favourite",
-		CreatedAt: now.Add(-time.Hour),
-		Account: Account{
-			ID:           "2",
-			Username:     "other",
-			Acct:         "other",
-			DisplayName:  "Another User",
-			Discoverable: &discoverable,
-			CreatedAt:    now.Add(-48 * time.Hour),
-			Emojis:       []CustomEmoji{},
-			Fields:       []Field{},
-		},
-	})
 }
 
 // Clear handles POST /api/v1/notifications/clear
@@ -287,6 +277,10 @@ func (h *NotificationsHandler) Clear(w http.ResponseWriter, r *http.Request) {
 	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
 		return
 	}
 
@@ -309,6 +303,10 @@ func (h *NotificationsHandler) Dismiss(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
 		return
 	}
 
@@ -381,6 +379,10 @@ func (h *NotificationsHandler) UnreadCount(w http.ResponseWriter, r *http.Reques
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
 		return
 	}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
+		return
+	}
 
 	count := int64(0)
 	if h.useDB() {
@@ -398,6 +400,10 @@ func (h *NotificationsHandler) GetPolicy(w http.ResponseWriter, r *http.Request)
 	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
 		return
 	}
 
@@ -447,6 +453,10 @@ func (h *NotificationsHandler) UpdatePolicy(w http.ResponseWriter, r *http.Reque
 	}
 	if err := web.Bind(r, &req); err != nil {
 		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
 		return
 	}
 
@@ -504,6 +514,10 @@ func (h *NotificationsHandler) ListRequests(w http.ResponseWriter, r *http.Reque
 			limit = int32(parsed)
 		}
 	}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
+		return
+	}
 
 	if h.useDB() {
 		ctx := r.Context()
@@ -525,7 +539,7 @@ func (h *NotificationsHandler) ListRequests(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	web.JSON(w, http.StatusOK, []NotificationRequest{})
+	web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
 }
 
 // GetRequest handles GET /api/v1/notifications/requests/:id
@@ -542,6 +556,10 @@ func (h *NotificationsHandler) GetRequest(w http.ResponseWriter, r *http.Request
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
+		return
+	}
 
 	if h.useDB() {
 		ctx := r.Context()
@@ -554,24 +572,6 @@ func (h *NotificationsHandler) GetRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	now := time.Now()
-	discoverable := true
-	web.JSON(w, http.StatusOK, NotificationRequest{
-		ID:                 idStr,
-		CreatedAt:          now.Add(-time.Hour),
-		UpdatedAt:          now,
-		NotificationsCount: 1,
-		Account: Account{
-			ID:           "2",
-			Username:     "other",
-			Acct:         "other",
-			DisplayName:  "Another User",
-			Discoverable: &discoverable,
-			CreatedAt:    now.Add(-48 * time.Hour),
-			Emojis:       []CustomEmoji{},
-			Fields:       []Field{},
-		},
-	})
 }
 
 type notificationRequestBulkPayload struct {
@@ -619,6 +619,10 @@ func (h *NotificationsHandler) AcceptRequest(w http.ResponseWriter, r *http.Requ
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
+		return
+	}
 
 	if h.useDB() {
 		_ = h.queries.AcceptNotificationRequest(r.Context(), db.AcceptNotificationRequestParams{
@@ -644,6 +648,10 @@ func (h *NotificationsHandler) DismissRequest(w http.ResponseWriter, r *http.Req
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
+		return
+	}
 
 	if h.useDB() {
 		_ = h.queries.DismissNotificationRequest(r.Context(), db.DismissNotificationRequestParams{
@@ -666,6 +674,10 @@ func (h *NotificationsHandler) AcceptRequests(w http.ResponseWriter, r *http.Req
 	ids, err := parseNotificationRequestIDs(r)
 	if err != nil {
 		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
 		return
 	}
 	if len(ids) > 0 && h.useDB() {
@@ -694,6 +706,10 @@ func (h *NotificationsHandler) DismissRequests(w http.ResponseWriter, r *http.Re
 		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
+		return
+	}
 	if len(ids) > 0 && h.useDB() {
 		if err := h.queries.BulkDismissNotificationRequests(r.Context(), db.BulkDismissNotificationRequestsParams{
 			AccountID: accountID,
@@ -712,6 +728,10 @@ func (h *NotificationsHandler) RequestsMerged(w http.ResponseWriter, r *http.Req
 	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Notifications unavailable")
 		return
 	}
 

@@ -156,7 +156,7 @@ func (h *AdminAccountsHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.queries == nil {
-		web.JSON(w, http.StatusOK, []AdminAccountV2{})
+		web.JSONError(w, http.StatusInternalServerError, "Admin data unavailable")
 		return
 	}
 

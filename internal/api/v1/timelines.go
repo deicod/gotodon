@@ -42,22 +42,21 @@ func (h *TimelinesHandler) Home(w http.ResponseWriter, r *http.Request) {
 
 	limit := parseLimit(web.QueryParam(r, "limit"), 20, 40)
 	ctx := r.Context()
-
-	if h.useDB() {
-		dbStatuses, err := h.queries.GetHomeTimeline(ctx, db.GetHomeTimelineParams{
-			AccountID: accountID,
-			Limit:     int32(limit),
-			Offset:    0,
-		})
-		if err != nil {
-			web.JSON(w, http.StatusOK, []Status{})
-			return
-		}
-		web.JSON(w, http.StatusOK, SerializeStatuses(ctx, h.queries, h.cfg, dbStatuses))
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Timelines unavailable")
 		return
 	}
 
-	web.JSON(w, http.StatusOK, []Status{})
+	dbStatuses, err := h.queries.GetHomeTimeline(ctx, db.GetHomeTimelineParams{
+		AccountID: accountID,
+		Limit:     int32(limit),
+		Offset:    0,
+	})
+	if err != nil {
+		web.JSON(w, http.StatusOK, []Status{})
+		return
+	}
+	web.JSON(w, http.StatusOK, SerializeStatuses(ctx, h.queries, h.cfg, dbStatuses))
 }
 
 // Public handles GET /api/v1/timelines/public
@@ -66,22 +65,21 @@ func (h *TimelinesHandler) Public(w http.ResponseWriter, r *http.Request) {
 	local := web.QueryParam(r, "local") == "true"
 
 	ctx := r.Context()
-
-	if h.useDB() {
-		dbStatuses, err := h.queries.GetPublicTimeline(ctx, db.GetPublicTimelineParams{
-			Limit:  int32(limit),
-			Offset: 0,
-			Local:  local,
-		})
-		if err != nil {
-			web.JSON(w, http.StatusOK, []Status{})
-			return
-		}
-		web.JSON(w, http.StatusOK, SerializeStatuses(ctx, h.queries, h.cfg, dbStatuses))
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Timelines unavailable")
 		return
 	}
 
-	web.JSON(w, http.StatusOK, []Status{})
+	dbStatuses, err := h.queries.GetPublicTimeline(ctx, db.GetPublicTimelineParams{
+		Limit:  int32(limit),
+		Offset: 0,
+		Local:  local,
+	})
+	if err != nil {
+		web.JSON(w, http.StatusOK, []Status{})
+		return
+	}
+	web.JSON(w, http.StatusOK, SerializeStatuses(ctx, h.queries, h.cfg, dbStatuses))
 }
 
 // Hashtag handles GET /api/v1/timelines/tag/:hashtag
@@ -96,23 +94,22 @@ func (h *TimelinesHandler) Hashtag(w http.ResponseWriter, r *http.Request) {
 	local := web.QueryParam(r, "local") == "true"
 
 	ctx := r.Context()
-
-	if h.useDB() {
-		dbStatuses, err := h.queries.GetHashtagTimeline(ctx, db.GetHashtagTimelineParams{
-			Tag:    hashtag,
-			Limit:  int32(limit),
-			Offset: 0,
-			Local:  local,
-		})
-		if err != nil {
-			web.JSON(w, http.StatusOK, []Status{})
-			return
-		}
-		web.JSON(w, http.StatusOK, SerializeStatuses(ctx, h.queries, h.cfg, dbStatuses))
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Timelines unavailable")
 		return
 	}
 
-	web.JSON(w, http.StatusOK, []Status{})
+	dbStatuses, err := h.queries.GetHashtagTimeline(ctx, db.GetHashtagTimelineParams{
+		Tag:    hashtag,
+		Limit:  int32(limit),
+		Offset: 0,
+		Local:  local,
+	})
+	if err != nil {
+		web.JSON(w, http.StatusOK, []Status{})
+		return
+	}
+	web.JSON(w, http.StatusOK, SerializeStatuses(ctx, h.queries, h.cfg, dbStatuses))
 }
 
 // List handles GET /api/v1/timelines/list/:list_id
@@ -137,32 +134,31 @@ func (h *TimelinesHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	limit := parseLimit(web.QueryParam(r, "limit"), 20, 40)
-
-	if h.useDB() {
-		// Verify list ownership
-		_, err := h.queries.GetList(ctx, db.GetListParams{
-			ID:        listID,
-			AccountID: accountID,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-
-		dbStatuses, err := h.queries.GetListTimeline(ctx, db.GetListTimelineParams{
-			ListID: listID,
-			Limit:  int32(limit),
-			Offset: 0,
-		})
-		if err != nil {
-			web.JSON(w, http.StatusOK, []Status{})
-			return
-		}
-		web.JSON(w, http.StatusOK, SerializeStatuses(ctx, h.queries, h.cfg, dbStatuses))
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Timelines unavailable")
 		return
 	}
 
-	web.JSON(w, http.StatusOK, []Status{})
+	// Verify list ownership
+	_, err = h.queries.GetList(ctx, db.GetListParams{
+		ID:        listID,
+		AccountID: accountID,
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	dbStatuses, err := h.queries.GetListTimeline(ctx, db.GetListTimelineParams{
+		ListID: listID,
+		Limit:  int32(limit),
+		Offset: 0,
+	})
+	if err != nil {
+		web.JSON(w, http.StatusOK, []Status{})
+		return
+	}
+	web.JSON(w, http.StatusOK, SerializeStatuses(ctx, h.queries, h.cfg, dbStatuses))
 }
 
 // Link handles GET /api/v1/timelines/link
@@ -190,7 +186,7 @@ func (h *TimelinesHandler) Link(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !h.useDB() {
-		web.JSON(w, http.StatusOK, []Status{})
+		web.JSONError(w, http.StatusInternalServerError, "Timelines unavailable")
 		return
 	}
 

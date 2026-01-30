@@ -93,7 +93,7 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	if !h.useDB() {
-		web.JSON(w, http.StatusOK, result)
+		web.JSONError(w, http.StatusInternalServerError, "Search unavailable")
 		return
 	}
 

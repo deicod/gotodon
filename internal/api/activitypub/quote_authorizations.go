@@ -26,7 +26,7 @@ type quoteAuthorization struct {
 // GetQuoteAuthorization handles GET /users/:username/quote_authorizations/:id
 func (h *FederationHandler) GetQuoteAuthorization(w http.ResponseWriter, r *http.Request) {
 	if !h.useDB() {
-		web.JSONError(w, http.StatusNotFound, "Quote not found")
+		web.JSONError(w, http.StatusInternalServerError, "Quote authorization unavailable")
 		return
 	}
 

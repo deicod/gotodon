@@ -20,6 +20,13 @@ SELECT * FROM users WHERE reset_password_token = $1 AND reset_password_token IS 
 -- name: GetUserByAccountID :one
 SELECT * FROM users WHERE account_id = $1;
 
+-- name: UpdateUserConfirmationToken :exec
+UPDATE users
+SET confirmation_token = $2,
+    confirmation_sent_at = now(),
+    updated_at = now()
+WHERE id = $1;
+
 -- name: ListUserSettingsByAccountIDs :many
 SELECT account_id, settings
 FROM users

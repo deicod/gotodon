@@ -2,9 +2,11 @@ package v1
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -33,12 +35,18 @@ type AccountsHandler struct {
 	resolver *federation.RemoteActorResolver
 }
 
-const defaultAccountsLimit = 40
+const (
+	defaultAccountsLimit = 40
+	maxProfileFields     = 4
+)
 
 // NewAccountsHandler creates a new accounts handler
 func NewAccountsHandler(queries db.Querier, pool *pgxpool.Pool, cfg *config.Config, outgoing federation.OutgoingDeliverer) *AccountsHandler {
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
 	var resolver *federation.RemoteActorResolver
-	if queries != nil && cfg != nil {
+	if queries != nil {
 		resolver = federation.NewRemoteActorResolver(queries, cfg.Instance.LocalDomain)
 	}
 	return &AccountsHandler{queries: queries, pool: pool, cfg: cfg, outgoing: outgoing, resolver: resolver}
@@ -159,76 +167,45 @@ func (h *AccountsHandler) VerifyCredentials(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	ctx := r.Context()
-
-	if h.useDB() {
-		dbAcc, err := h.queries.GetAccountByID(ctx, accountID)
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-		web.JSON(w, http.StatusOK, buildCredentialAccount(ctx, h.queries, h.cfg, dbAcc))
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Account data unavailable")
 		return
 	}
 
-	// Fallback mock
-	discoverable := true
-	web.JSON(w, http.StatusOK, CredentialAccount{
-		Account: Account{
-			ID:             strconv.FormatInt(accountID, 10),
-			Username:       "user",
-			Acct:           "user",
-			DisplayName:    "Test User",
-			Locked:         false,
-			Bot:            false,
-			Discoverable:   &discoverable,
-			Indexable:      true,
-			Group:          false,
-			CreatedAt:      time.Now().Add(-24 * time.Hour),
-			Note:           "",
-			URL:            "https://example.com/@user",
-			URI:            "https://example.com/users/user",
-			Avatar:         "https://example.com/avatars/original/missing.png",
-			AvatarStatic:   "https://example.com/avatars/original/missing.png",
-			Header:         "https://example.com/headers/original/missing.png",
-			HeaderStatic:   "https://example.com/headers/original/missing.png",
-			FollowersCount: 0,
-			FollowingCount: 0,
-			StatusesCount:  0,
-			LastStatusAt:   nil,
-			Emojis:         []CustomEmoji{},
-			Fields:         []Field{},
-		},
-		Source: AccountSource{
-			Privacy:             "public",
-			Sensitive:           false,
-			Language:            "en",
-			Note:                "",
-			Fields:              []Field{},
-			FollowRequestsCount: 0,
-			HideCollections:     false,
-			Discoverable:        true,
-			Indexable:           true,
-			AttributionDomains:  []string{},
-			QuotePolicy:         "public",
-		},
-	})
+	ctx := r.Context()
+	dbAcc, err := h.queries.GetAccountByID(ctx, accountID)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+	web.JSON(w, http.StatusOK, buildCredentialAccount(ctx, h.queries, h.cfg, dbAcc))
 }
 
 // UpdateCredentialsRequest is the request for PATCH /api/v1/accounts/update_credentials
 type UpdateCredentialsRequest struct {
-	DisplayName     *string `json:"display_name" form:"display_name"`
-	Note            *string `json:"note" form:"note"`
-	Avatar          *string `json:"avatar" form:"avatar"`
-	Header          *string `json:"header" form:"header"`
-	Locked          *bool   `json:"locked" form:"locked"`
-	Bot             *bool   `json:"bot" form:"bot"`
-	Discoverable    *bool   `json:"discoverable" form:"discoverable"`
-	HideCollections *bool   `json:"hide_collections" form:"hide_collections"`
-	Indexable       *bool   `json:"indexable" form:"indexable"`
-	SourcePrivacy   *string `json:"source[privacy]" form:"source[privacy]"`
-	SourceSensitive *bool   `json:"source[sensitive]" form:"source[sensitive]"`
-	SourceLanguage  *string `json:"source[language]" form:"source[language]"`
+	DisplayName        *string                  `json:"display_name" form:"display_name"`
+	Note               *string                  `json:"note" form:"note"`
+	Avatar             *string                  `json:"avatar" form:"avatar"`
+	Header             *string                  `json:"header" form:"header"`
+	Locked             *bool                    `json:"locked" form:"locked"`
+	Bot                *bool                    `json:"bot" form:"bot"`
+	Discoverable       *bool                    `json:"discoverable" form:"discoverable"`
+	HideCollections    *bool                    `json:"hide_collections" form:"hide_collections"`
+	Indexable          *bool                    `json:"indexable" form:"indexable"`
+	Source             *UpdateCredentialsSource `json:"source" form:"source"`
+	AttributionDomains []string                 `json:"attribution_domains" form:"attribution_domains"`
+	FieldsAttributes   []UpdateCredentialsField `json:"fields_attributes" form:"fields_attributes"`
+}
+
+type UpdateCredentialsField struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type UpdateCredentialsSource struct {
+	Privacy   *string `json:"privacy" form:"privacy"`
+	Sensitive *bool   `json:"sensitive" form:"sensitive"`
+	Language  *string `json:"language" form:"language"`
 }
 
 // UpdateCredentials handles PATCH /api/v1/accounts/update_credentials
@@ -274,6 +251,23 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 			}
 			params.ActorType = pgtype.Text{String: actorType, Valid: true}
 		}
+		if req.AttributionDomains != nil {
+			params.AttributionDomains = normalizeAttributionDomains(req.AttributionDomains)
+		}
+
+		fields, fieldsProvided, err := parseUpdateCredentialsFields(r, req)
+		if err != nil {
+			web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+			return
+		}
+		if fieldsProvided {
+			encoded, err := json.Marshal(fields)
+			if err != nil {
+				web.JSONError(w, http.StatusInternalServerError, "Failed to encode fields")
+				return
+			}
+			params.Fields = encoded
+		}
 
 		dbAcc, err := h.queries.UpdateAccount(ctx, params)
 		if err != nil {
@@ -282,7 +276,15 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 		}
 
 		// Update user settings (source params)
-		if req.SourcePrivacy != nil || req.SourceSensitive != nil || req.SourceLanguage != nil {
+		var sourcePrivacy *string
+		var sourceSensitive *bool
+		var sourceLanguage *string
+		if req.Source != nil {
+			sourcePrivacy = req.Source.Privacy
+			sourceSensitive = req.Source.Sensitive
+			sourceLanguage = req.Source.Language
+		}
+		if sourcePrivacy != nil || sourceSensitive != nil || sourceLanguage != nil {
 			settings := map[string]any{}
 			user, err := h.queries.GetUserByAccountID(ctx, accountID)
 			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -293,7 +295,7 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 				settings = settingsFromText(user.Settings)
 			}
 
-			applySourceSettings(settings, req.SourcePrivacy, req.SourceSensitive, req.SourceLanguage)
+			applySourceSettings(settings, sourcePrivacy, sourceSensitive, sourceLanguage)
 			encoded, err := settingsToText(settings)
 			if err != nil {
 				web.JSONError(w, http.StatusInternalServerError, "Failed to encode preferences")
@@ -315,6 +317,157 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 	h.VerifyCredentials(w, r)
 }
 
+func parseUpdateCredentialsFields(r *http.Request, req UpdateCredentialsRequest) ([]UpdateCredentialsField, bool, error) {
+	if req.FieldsAttributes != nil {
+		return normalizeFieldsAttributes(req.FieldsAttributes), true, nil
+	}
+	if err := r.ParseForm(); err != nil {
+		return nil, false, err
+	}
+	fields, ok := fieldsAttributesFromForm(r.PostForm)
+	return normalizeFieldsAttributes(fields), ok, nil
+}
+
+func fieldsAttributesFromForm(values url.Values) ([]UpdateCredentialsField, bool) {
+	if len(values) == 0 {
+		return nil, false
+	}
+
+	indexed := map[int]*UpdateCredentialsField{}
+	maxIndex := -1
+	present := false
+
+	for key, vals := range values {
+		if !strings.HasPrefix(key, "fields_attributes[") {
+			continue
+		}
+		idx, attr, indexedKey := parseFieldAttributeKey(key)
+		if attr == "" {
+			continue
+		}
+		present = true
+		if !indexedKey {
+			continue
+		}
+		field := indexed[idx]
+		if field == nil {
+			field = &UpdateCredentialsField{}
+			indexed[idx] = field
+		}
+		if len(vals) == 0 {
+			continue
+		}
+		switch attr {
+		case "name":
+			field.Name = vals[0]
+		case "value":
+			field.Value = vals[0]
+		}
+		if idx > maxIndex {
+			maxIndex = idx
+		}
+	}
+
+	fields := make([]UpdateCredentialsField, 0)
+	for i := 0; i <= maxIndex; i++ {
+		if field, ok := indexed[i]; ok {
+			fields = append(fields, *field)
+		}
+	}
+
+	names := values["fields_attributes[][name]"]
+	vals := values["fields_attributes[][value]"]
+	if len(names) > 0 || len(vals) > 0 {
+		present = true
+		maxLen := len(names)
+		if len(vals) > maxLen {
+			maxLen = len(vals)
+		}
+		for i := 0; i < maxLen; i++ {
+			field := UpdateCredentialsField{}
+			if i < len(names) {
+				field.Name = names[i]
+			}
+			if i < len(vals) {
+				field.Value = vals[i]
+			}
+			fields = append(fields, field)
+		}
+	}
+
+	if !present {
+		return nil, false
+	}
+	return fields, true
+}
+
+func parseFieldAttributeKey(key string) (int, string, bool) {
+	const prefix = "fields_attributes["
+	if !strings.HasPrefix(key, prefix) {
+		return 0, "", false
+	}
+	rest := strings.TrimPrefix(key, prefix)
+	idxEnd := strings.Index(rest, "]")
+	if idxEnd == -1 {
+		return 0, "", false
+	}
+	idxPart := rest[:idxEnd]
+	remainder := rest[idxEnd+1:]
+	if !strings.HasPrefix(remainder, "[") {
+		return 0, "", false
+	}
+	attrEnd := strings.Index(remainder, "]")
+	if attrEnd == -1 {
+		return 0, "", false
+	}
+	attr := remainder[1:attrEnd]
+	if attr != "name" && attr != "value" {
+		return 0, "", false
+	}
+	if idxPart == "" {
+		return 0, attr, false
+	}
+	idx, err := strconv.Atoi(idxPart)
+	if err != nil || idx < 0 {
+		return 0, "", false
+	}
+	return idx, attr, true
+}
+
+func normalizeFieldsAttributes(fields []UpdateCredentialsField) []UpdateCredentialsField {
+	normalized := make([]UpdateCredentialsField, 0, len(fields))
+	for _, field := range fields {
+		if strings.TrimSpace(field.Name) == "" && strings.TrimSpace(field.Value) == "" {
+			continue
+		}
+		normalized = append(normalized, field)
+		if len(normalized) >= maxProfileFields {
+			break
+		}
+	}
+	return normalized
+}
+
+func normalizeAttributionDomains(domains []string) []string {
+	if len(domains) == 0 {
+		return []string{}
+	}
+	seen := make(map[string]struct{}, len(domains))
+	normalized := make([]string, 0, len(domains))
+	for _, domain := range domains {
+		trimmed := strings.ToLower(strings.TrimSpace(domain))
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		normalized = append(normalized, trimmed)
+	}
+	return normalized
+}
+
 // Get handles GET /api/v1/accounts/:id
 func (h *AccountsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	idStr := web.Param(r, "id")
@@ -329,45 +482,18 @@ func (h *AccountsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
-
-	if h.useDB() {
-		dbAcc, err := h.queries.GetAccountByID(ctx, id)
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-		web.JSON(w, http.StatusOK, h.dbAccountWithStats(ctx, dbAcc))
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Account data unavailable")
 		return
 	}
 
-	// Fallback mock
-	discoverable := true
-	web.JSON(w, http.StatusOK, Account{
-		ID:             idStr,
-		Username:       "user",
-		Acct:           "user",
-		DisplayName:    "Test User",
-		Locked:         false,
-		Bot:            false,
-		Discoverable:   &discoverable,
-		Indexable:      true,
-		Group:          false,
-		CreatedAt:      time.Now().Add(-24 * time.Hour),
-		Note:           "",
-		URL:            "https://example.com/@user",
-		URI:            "https://example.com/users/user",
-		Avatar:         "https://example.com/avatars/original/missing.png",
-		AvatarStatic:   "https://example.com/avatars/original/missing.png",
-		Header:         "https://example.com/headers/original/missing.png",
-		HeaderStatic:   "https://example.com/headers/original/missing.png",
-		FollowersCount: 0,
-		FollowingCount: 0,
-		StatusesCount:  0,
-		LastStatusAt:   nil,
-		Emojis:         []CustomEmoji{},
-		Fields:         []Field{},
-	})
+	ctx := r.Context()
+	dbAcc, err := h.queries.GetAccountByID(ctx, id)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+	web.JSON(w, http.StatusOK, h.dbAccountWithStats(ctx, dbAcc))
 }
 
 // Index handles GET /api/v1/accounts
@@ -383,8 +509,11 @@ func (h *AccountsHandler) Index(w http.ResponseWriter, r *http.Request) {
 		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed")
 		return
 	}
-
-	if !h.useDB() || len(ids) == 0 {
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Account data unavailable")
+		return
+	}
+	if len(ids) == 0 {
 		web.JSON(w, http.StatusOK, []Account{})
 		return
 	}
@@ -451,6 +580,10 @@ func (h *AccountsHandler) Register(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	if h.useDB() {
+		if h.pool == nil {
+			web.JSONError(w, http.StatusInternalServerError, "Registration unavailable")
+			return
+		}
 		// Start transaction
 		tx, err := h.pool.Begin(ctx)
 		if err != nil {
@@ -489,7 +622,6 @@ func (h *AccountsHandler) Register(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Confirm the user immediately for now
 		// Confirm the user immediately for now
 		now := time.Now()
 		dbUser, err := qtx.CreateUser(ctx, db.CreateUserParams{
@@ -550,12 +682,7 @@ func (h *AccountsHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	web.JSON(w, http.StatusOK, map[string]interface{}{
-		"access_token": "placeholder_token",
-		"token_type":   "Bearer",
-		"scope":        "read write follow push",
-		"created_at":   time.Now().Unix(),
-	})
+	web.JSONError(w, http.StatusInternalServerError, "Registration unavailable")
 }
 
 // Search handles GET /api/v1/accounts/search
@@ -589,27 +716,27 @@ func (h *AccountsHandler) Search(w http.ResponseWriter, r *http.Request) {
 	resolve := parseBoolParam(web.QueryParam(r, "resolve"))
 	following := parseBoolParam(web.QueryParam(r, "following"))
 
-	ctx := r.Context()
-
-	if h.useDB() {
-		dbAccounts, err := accountSearch(ctx, h.queries, h.resolver, h.cfg, accountID, query, limit, offset, resolve, following)
-		if err != nil {
-			web.JSON(w, http.StatusOK, []Account{})
-			return
-		}
-
-		accountsMap := serializeAccounts(ctx, h.queries, h.cfg, dbAccounts, true)
-		accounts := make([]Account, 0, len(dbAccounts))
-		for _, dbAcc := range dbAccounts {
-			if acc, ok := accountsMap[dbAcc.ID]; ok {
-				accounts = append(accounts, acc)
-			}
-		}
-		web.JSON(w, http.StatusOK, accounts)
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Search unavailable")
 		return
 	}
 
-	web.JSON(w, http.StatusOK, []Account{})
+	ctx := r.Context()
+
+	dbAccounts, err := accountSearch(ctx, h.queries, h.resolver, h.cfg, accountID, query, limit, offset, resolve, following)
+	if err != nil {
+		web.JSON(w, http.StatusOK, []Account{})
+		return
+	}
+
+	accountsMap := serializeAccounts(ctx, h.queries, h.cfg, dbAccounts, true)
+	accounts := make([]Account, 0, len(dbAccounts))
+	for _, dbAcc := range dbAccounts {
+		if acc, ok := accountsMap[dbAcc.ID]; ok {
+			accounts = append(accounts, acc)
+		}
+	}
+	web.JSON(w, http.StatusOK, accounts)
 }
 
 type accountSearchQuerier interface {
@@ -761,29 +888,29 @@ func (h *AccountsHandler) Followers(w http.ResponseWriter, r *http.Request) {
 
 	limit := parseAccountLimit(web.QueryParam(r, "limit"), 40, 80)
 
-	if h.useDB() {
-		followers, err := h.queries.GetFollowers(r.Context(), db.GetFollowersParams{
-			TargetAccountID: id,
-			Limit:           int32(limit),
-			Offset:          0,
-		})
-		if err != nil {
-			web.JSON(w, http.StatusOK, []Account{})
-			return
-		}
-
-		accountsMap := serializeAccounts(r.Context(), h.queries, h.cfg, followers, true)
-		accounts := make([]Account, 0, len(followers))
-		for _, acc := range followers {
-			if apiAcc, ok := accountsMap[acc.ID]; ok {
-				accounts = append(accounts, apiAcc)
-			}
-		}
-		web.JSON(w, http.StatusOK, accounts)
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Account data unavailable")
 		return
 	}
 
-	web.JSON(w, http.StatusOK, []Account{})
+	followers, err := h.queries.GetFollowers(r.Context(), db.GetFollowersParams{
+		TargetAccountID: id,
+		Limit:           int32(limit),
+		Offset:          0,
+	})
+	if err != nil {
+		web.JSON(w, http.StatusOK, []Account{})
+		return
+	}
+
+	accountsMap := serializeAccounts(r.Context(), h.queries, h.cfg, followers, true)
+	accounts := make([]Account, 0, len(followers))
+	for _, acc := range followers {
+		if apiAcc, ok := accountsMap[acc.ID]; ok {
+			accounts = append(accounts, apiAcc)
+		}
+	}
+	web.JSON(w, http.StatusOK, accounts)
 }
 
 // Following handles GET /api/v1/accounts/:id/following
@@ -796,29 +923,29 @@ func (h *AccountsHandler) Following(w http.ResponseWriter, r *http.Request) {
 
 	limit := parseAccountLimit(web.QueryParam(r, "limit"), 40, 80)
 
-	if h.useDB() {
-		following, err := h.queries.GetFollowing(r.Context(), db.GetFollowingParams{
-			AccountID: id,
-			Limit:     int32(limit),
-			Offset:    0,
-		})
-		if err != nil {
-			web.JSON(w, http.StatusOK, []Account{})
-			return
-		}
-
-		accountsMap := serializeAccounts(r.Context(), h.queries, h.cfg, following, true)
-		accounts := make([]Account, 0, len(following))
-		for _, acc := range following {
-			if apiAcc, ok := accountsMap[acc.ID]; ok {
-				accounts = append(accounts, apiAcc)
-			}
-		}
-		web.JSON(w, http.StatusOK, accounts)
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Account data unavailable")
 		return
 	}
 
-	web.JSON(w, http.StatusOK, []Account{})
+	following, err := h.queries.GetFollowing(r.Context(), db.GetFollowingParams{
+		AccountID: id,
+		Limit:     int32(limit),
+		Offset:    0,
+	})
+	if err != nil {
+		web.JSON(w, http.StatusOK, []Account{})
+		return
+	}
+
+	accountsMap := serializeAccounts(r.Context(), h.queries, h.cfg, following, true)
+	accounts := make([]Account, 0, len(following))
+	for _, acc := range following {
+		if apiAcc, ok := accountsMap[acc.ID]; ok {
+			accounts = append(accounts, apiAcc)
+		}
+	}
+	web.JSON(w, http.StatusOK, accounts)
 }
 
 // FeaturedTags handles GET /api/v1/accounts/:id/featured_tags
@@ -843,8 +970,7 @@ func (h *AccountsHandler) FeaturedTags(w http.ResponseWriter, r *http.Request) {
 		web.JSON(w, http.StatusOK, resp)
 		return
 	}
-
-	web.JSON(w, http.StatusOK, []FeaturedTag{})
+	web.JSONError(w, http.StatusInternalServerError, "Account data unavailable")
 }
 
 // Endorsements handles GET /api/v1/accounts/:id/endorsements
@@ -868,9 +994,8 @@ func (h *AccountsHandler) Endorsements(w http.ResponseWriter, r *http.Request) {
 		web.JSON(w, http.StatusOK, []Account{})
 		return
 	}
-
 	if !h.useDB() {
-		web.JSON(w, http.StatusOK, []Account{})
+		web.JSONError(w, http.StatusInternalServerError, "Account data unavailable")
 		return
 	}
 
@@ -947,12 +1072,13 @@ func (h *AccountsHandler) IdentityProofs(w http.ResponseWriter, r *http.Request)
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
-
-	if h.useDB() {
-		if _, err := h.queries.GetAccountByID(r.Context(), targetID); err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Account data unavailable")
+		return
+	}
+	if _, err := h.queries.GetAccountByID(r.Context(), targetID); err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
 	}
 
 	web.JSON(w, http.StatusOK, []any{})
@@ -1408,6 +1534,10 @@ func (h *AccountsHandler) SetNote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Account data unavailable")
+		return
+	}
 
 	if h.useDB() {
 		// Verify target account exists
@@ -1436,13 +1566,6 @@ func (h *AccountsHandler) SetNote(w http.ResponseWriter, r *http.Request) {
 		web.JSON(w, http.StatusOK, rel)
 		return
 	}
-
-	// Mock fallback
-	web.JSON(w, http.StatusOK, Relationship{
-		ID:        web.Param(r, "id"),
-		Note:      req.Comment,
-		Languages: []any{},
-	})
 }
 
 // FamiliarFollowers handles GET /api/v1/accounts/familiar_followers
@@ -1472,6 +1595,10 @@ func (h *AccountsHandler) RemoveFromFollowers(w http.ResponseWriter, r *http.Req
 	}
 
 	ctx := r.Context()
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Account data unavailable")
+		return
+	}
 
 	if h.useDB() {
 		// Remove the target's follow on us (they follow us, we remove them)
@@ -1484,13 +1611,6 @@ func (h *AccountsHandler) RemoveFromFollowers(w http.ResponseWriter, r *http.Req
 		web.JSON(w, http.StatusOK, rel)
 		return
 	}
-
-	// Mock fallback
-	web.JSON(w, http.StatusOK, Relationship{
-		ID:         web.Param(r, "id"),
-		FollowedBy: false,
-		Languages:  []any{},
-	})
 }
 
 // Lookup handles GET /api/v1/accounts/lookup
@@ -1502,6 +1622,10 @@ func (h *AccountsHandler) Lookup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Account data unavailable")
+		return
+	}
 
 	if h.useDB() {
 		dbAcc, err := h.lookupAccount(ctx, acct)
@@ -1512,18 +1636,6 @@ func (h *AccountsHandler) Lookup(w http.ResponseWriter, r *http.Request) {
 		web.JSON(w, http.StatusOK, h.dbAccountWithStats(ctx, dbAcc))
 		return
 	}
-
-	// Mock fallback
-	discoverable := true
-	web.JSON(w, http.StatusOK, Account{
-		ID:           "1",
-		Username:     acct,
-		Acct:         acct,
-		DisplayName:  acct,
-		Discoverable: &discoverable,
-		Emojis:       []CustomEmoji{},
-		Fields:       []Field{},
-	})
 }
 
 func (h *AccountsHandler) lookupAccount(ctx context.Context, acct string) (db.Account, error) {

@@ -140,6 +140,10 @@ func NewInstanceHandler(queries instanceQuerier, cfg *config.Config) *InstanceHa
 
 // Get handles GET /api/v2/instance
 func (h *InstanceHandler) Get(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.queries == nil {
+		web.JSONError(w, http.StatusInternalServerError, "Instance info unavailable")
+		return
+	}
 	ctx := r.Context()
 	settings := h.loadInstanceSettings(ctx)
 

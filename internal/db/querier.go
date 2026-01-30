@@ -572,6 +572,8 @@ type Querier interface {
 	UpdateOAuthTokenLastUsed(ctx context.Context, arg UpdateOAuthTokenLastUsedParams) error
 	UpdatePreviewCard(ctx context.Context, arg UpdatePreviewCardParams) (PreviewCard, error)
 	UpdatePreviewCardProviderTrendable(ctx context.Context, arg UpdatePreviewCardProviderTrendableParams) (PreviewCardProvider, error)
+	UpdatePushSubscription(ctx context.Context, arg UpdatePushSubscriptionParams) (WebPushSubscription, error)
+	UpdatePushSubscriptionDetails(ctx context.Context, arg UpdatePushSubscriptionDetailsParams) (WebPushSubscription, error)
 	UpdateQuoteState(ctx context.Context, arg UpdateQuoteStateParams) (Quote, error)
 	UpdateRule(ctx context.Context, arg UpdateRuleParams) (Rule, error)
 	UpdateScheduledStatus(ctx context.Context, arg UpdateScheduledStatusParams) (ScheduledStatus, error)
@@ -588,6 +590,7 @@ type Querier interface {
 	UpdateStatusURI(ctx context.Context, arg UpdateStatusURIParams) error
 	UpdateStatusURL(ctx context.Context, arg UpdateStatusURLParams) error
 	UpdateTagTrendAllowed(ctx context.Context, arg UpdateTagTrendAllowedParams) (TagTrend, error)
+	UpdateUserConfirmationToken(ctx context.Context, arg UpdateUserConfirmationTokenParams) error
 	UpdateUserSettings(ctx context.Context, arg UpdateUserSettingsParams) error
 	UpdateWebAuthnCredentialNickname(ctx context.Context, arg UpdateWebAuthnCredentialNicknameParams) (WebauthnCredential, error)
 	UpdateWebAuthnCredentialSignCount(ctx context.Context, arg UpdateWebAuthnCredentialSignCountParams) (WebauthnCredential, error)

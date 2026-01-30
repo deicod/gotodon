@@ -6,8 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"sync"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -17,7 +15,6 @@ import (
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
-	"github.com/deicod/gotodon/pkg/snowflake"
 )
 
 // RepliesPolicy constants matching database enum
@@ -42,22 +39,14 @@ var stringToRepliesPolicy = map[string]int32{
 // ListsHandler handles list endpoints
 type ListsHandler struct {
 	queries *db.Queries
-	idGen   *snowflake.Generator
 	cfg     *config.Config
-	// In-memory fallback for tests when queries is nil
-	memLists       map[int64]map[int64]*List
-	memListMembers map[int64][]int64
-	mu             sync.RWMutex
 }
 
 // NewListsHandler creates a new lists handler with database
 func NewListsHandler(queries *db.Queries, cfg *config.Config) *ListsHandler {
 	return &ListsHandler{
-		queries:        queries,
-		idGen:          snowflake.NewGenerator(),
-		cfg:            cfg,
-		memLists:       make(map[int64]map[int64]*List),
-		memListMembers: make(map[int64][]int64),
+		queries: queries,
+		cfg:     cfg,
 	}
 }
 
@@ -101,28 +90,20 @@ func (h *ListsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.useDB() {
-		lists, err := h.queries.ListLists(context.Background(), accountID)
-		if err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-		result := make([]List, 0, len(lists))
-		for _, dbList := range lists {
-			result = append(result, h.dbListToAPI(dbList))
-		}
-		web.JSON(w, http.StatusOK, result)
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Lists unavailable")
 		return
 	}
 
-	// In-memory fallback
-	h.mu.RLock()
-	accountLists := h.memLists[accountID]
-	result := make([]List, 0, len(accountLists))
-	for _, list := range accountLists {
-		result = append(result, *list)
+	lists, err := h.queries.ListLists(context.Background(), accountID)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
-	h.mu.RUnlock()
+	result := make([]List, 0, len(lists))
+	for _, dbList := range lists {
+		result = append(result, h.dbListToAPI(dbList))
+	}
 	web.JSON(w, http.StatusOK, result)
 }
 
@@ -140,35 +121,22 @@ func (h *ListsHandler) GetListsForAccount(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if h.useDB() {
-		lists, err := h.queries.GetListsContainingAccount(r.Context(), db.GetListsContainingAccountParams{
-			AccountID:   accountID,
-			AccountID_2: targetID,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-		result := make([]List, 0, len(lists))
-		for _, dbList := range lists {
-			result = append(result, h.dbListToAPI(dbList))
-		}
-		web.JSON(w, http.StatusOK, result)
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Lists unavailable")
 		return
 	}
 
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	accountLists := h.memLists[accountID]
-	result := make([]List, 0)
-	for listID, list := range accountLists {
-		for _, memberID := range h.memListMembers[listID] {
-			if memberID == targetID {
-				result = append(result, *list)
-				break
-			}
-		}
+	lists, err := h.queries.GetListsContainingAccount(r.Context(), db.GetListsContainingAccountParams{
+		AccountID:   accountID,
+		AccountID_2: targetID,
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	result := make([]List, 0, len(lists))
+	for _, dbList := range lists {
+		result = append(result, h.dbListToAPI(dbList))
 	}
 	web.JSON(w, http.StatusOK, result)
 }
@@ -187,37 +155,20 @@ func (h *ListsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.useDB() {
-		dbList, err := h.queries.GetList(context.Background(), db.GetListParams{
-			ID:        listID,
-			AccountID: accountID,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-		web.JSON(w, http.StatusOK, h.dbListToAPI(dbList))
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Lists unavailable")
 		return
 	}
 
-	// In-memory fallback
-	h.mu.RLock()
-	accountLists := h.memLists[accountID]
-	var list *List
-	if accountLists != nil {
-		list = accountLists[listID]
-	}
-
-	if list == nil {
-		h.mu.RUnlock()
+	dbList, err := h.queries.GetList(context.Background(), db.GetListParams{
+		ID:        listID,
+		AccountID: accountID,
+	})
+	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
-	// Return a copy to avoid data races
-	safeList := *list
-	h.mu.RUnlock()
-
-	web.JSON(w, http.StatusOK, safeList)
+	web.JSON(w, http.StatusOK, h.dbListToAPI(dbList))
 }
 
 // Create handles POST /api/v1/lists
@@ -240,7 +191,6 @@ func (h *ListsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	policyInt := int32(RepliesPolicyList)
-	policyStr := "list"
 	if req.RepliesPolicy != "" {
 		p, valid := stringToRepliesPolicy[req.RepliesPolicy]
 		if !valid {
@@ -248,46 +198,28 @@ func (h *ListsHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		policyInt = p
-		policyStr = req.RepliesPolicy
 	}
 
 	exclusive := false
 	if req.Exclusive != nil {
 		exclusive = *req.Exclusive
 	}
-
-	if h.useDB() {
-		dbList, err := h.queries.CreateList(context.Background(), db.CreateListParams{
-			AccountID:     accountID,
-			Title:         req.Title,
-			RepliesPolicy: policyInt,
-			Exclusive:     exclusive,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Failed to create list")
-			return
-		}
-		web.JSON(w, http.StatusOK, h.dbListToAPI(dbList))
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Lists unavailable")
 		return
 	}
 
-	// In-memory fallback
-	listID := h.idGen.Generate()
-	list := &List{
-		ID:            strconv.FormatInt(listID, 10),
+	dbList, err := h.queries.CreateList(context.Background(), db.CreateListParams{
+		AccountID:     accountID,
 		Title:         req.Title,
-		RepliesPolicy: policyStr,
+		RepliesPolicy: policyInt,
 		Exclusive:     exclusive,
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to create list")
+		return
 	}
-
-	h.mu.Lock()
-	if h.memLists[accountID] == nil {
-		h.memLists[accountID] = make(map[int64]*List)
-	}
-	h.memLists[accountID][listID] = list
-	h.mu.Unlock()
-
-	web.JSON(w, http.StatusOK, list)
+	web.JSON(w, http.StatusOK, h.dbListToAPI(dbList))
 }
 
 // Update handles PUT /api/v1/lists/:id
@@ -310,58 +242,39 @@ func (h *ListsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.useDB() {
-		params := db.UpdateListParams{
-			ID:        listID,
-			AccountID: accountID,
-		}
-		if req.Title != "" {
-			params.Title = pgtype.Text{String: req.Title, Valid: true}
-		}
-		if req.RepliesPolicy != "" {
-			p, valid := stringToRepliesPolicy[req.RepliesPolicy]
-			if !valid {
-				web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Replies policy is invalid")
-				return
-			}
-			params.RepliesPolicy = pgtype.Int4{Int32: p, Valid: true}
-		}
-		if req.Exclusive != nil {
-			params.Exclusive = pgtype.Bool{Bool: *req.Exclusive, Valid: true}
-		}
-		dbList, err := h.queries.UpdateList(context.Background(), params)
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-		web.JSON(w, http.StatusOK, h.dbListToAPI(dbList))
-		return
-	}
-
-	// In-memory fallback
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	accountLists := h.memLists[accountID]
-	if accountLists == nil || accountLists[listID] == nil {
-		web.JSONError(w, http.StatusNotFound, "Record not found")
-		return
-	}
-	list := accountLists[listID]
-	if req.Title != "" {
-		list.Title = req.Title
-	}
+	var repliesPolicy pgtype.Int4
 	if req.RepliesPolicy != "" {
-		if _, valid := stringToRepliesPolicy[req.RepliesPolicy]; !valid {
+		p, valid := stringToRepliesPolicy[req.RepliesPolicy]
+		if !valid {
 			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Replies policy is invalid")
 			return
 		}
-		list.RepliesPolicy = req.RepliesPolicy
+		repliesPolicy = pgtype.Int4{Int32: p, Valid: true}
+	}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Lists unavailable")
+		return
+	}
+
+	params := db.UpdateListParams{
+		ID:        listID,
+		AccountID: accountID,
+	}
+	if req.Title != "" {
+		params.Title = pgtype.Text{String: req.Title, Valid: true}
+	}
+	if repliesPolicy.Valid {
+		params.RepliesPolicy = repliesPolicy
 	}
 	if req.Exclusive != nil {
-		list.Exclusive = *req.Exclusive
+		params.Exclusive = pgtype.Bool{Bool: *req.Exclusive, Valid: true}
 	}
-	web.JSON(w, http.StatusOK, list)
+	dbList, err := h.queries.UpdateList(context.Background(), params)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+	web.JSON(w, http.StatusOK, h.dbListToAPI(dbList))
 }
 
 // Delete handles DELETE /api/v1/lists/:id
@@ -378,29 +291,18 @@ func (h *ListsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.useDB() {
-		if err := h.queries.DeleteList(context.Background(), db.DeleteListParams{
-			ID:        listID,
-			AccountID: accountID,
-		}); err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-		web.JSON(w, http.StatusOK, map[string]any{})
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Lists unavailable")
 		return
 	}
 
-	// In-memory fallback
-	h.mu.Lock()
-	accountLists := h.memLists[accountID]
-	if accountLists == nil || accountLists[listID] == nil {
-		h.mu.Unlock()
+	if err := h.queries.DeleteList(context.Background(), db.DeleteListParams{
+		ID:        listID,
+		AccountID: accountID,
+	}); err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
-	delete(accountLists, listID)
-	delete(h.memListMembers, listID)
-	h.mu.Unlock()
 	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -418,68 +320,43 @@ func (h *ListsHandler) GetAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.useDB() {
-		_, err = h.queries.GetList(context.Background(), db.GetListParams{
-			ID:        listID,
-			AccountID: accountID,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-
-		limit, offset := web.ParsePagination(r)
-		if limit == 0 {
-			limit = 40
-		}
-
-		memberAccounts, err := h.queries.ListAccountsInList(context.Background(), db.ListAccountsInListParams{
-			ListID: listID,
-			Limit:  int32(limit),
-			Offset: int32(offset),
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-
-		serialized := serializeAccounts(r.Context(), h.queries, h.cfg, memberAccounts, true)
-		accounts := make([]Account, 0, len(memberAccounts))
-		for _, dbAcc := range memberAccounts {
-			if apiAcc, ok := serialized[dbAcc.ID]; ok {
-				accounts = append(accounts, apiAcc)
-				continue
-			}
-			accounts = append(accounts, SerializeAccount(h.cfg, dbAcc))
-		}
-		web.JSON(w, http.StatusOK, accounts)
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Lists unavailable")
 		return
 	}
 
-	// In-memory fallback
-	h.mu.RLock()
-	accountLists := h.memLists[accountID]
-	if accountLists == nil || accountLists[listID] == nil {
-		h.mu.RUnlock()
+	_, err = h.queries.GetList(context.Background(), db.GetListParams{
+		ID:        listID,
+		AccountID: accountID,
+	})
+	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
-	members := h.memListMembers[listID]
-	h.mu.RUnlock()
-	accounts := make([]Account, 0, len(members))
-	now := time.Now()
-	discoverable := true
-	for _, memberID := range members {
-		accounts = append(accounts, Account{
-			ID:           strconv.FormatInt(memberID, 10),
-			Username:     "user" + strconv.FormatInt(memberID, 10),
-			Acct:         "user" + strconv.FormatInt(memberID, 10),
-			DisplayName:  "User " + strconv.FormatInt(memberID, 10),
-			Discoverable: &discoverable,
-			CreatedAt:    now.Add(-24 * time.Hour),
-			Emojis:       []CustomEmoji{},
-			Fields:       []Field{},
-		})
+
+	limit, offset := web.ParsePagination(r)
+	if limit == 0 {
+		limit = 40
+	}
+
+	memberAccounts, err := h.queries.ListAccountsInList(context.Background(), db.ListAccountsInListParams{
+		ListID: listID,
+		Limit:  int32(limit),
+		Offset: int32(offset),
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+
+	serialized := serializeAccounts(r.Context(), h.queries, h.cfg, memberAccounts, true)
+	accounts := make([]Account, 0, len(memberAccounts))
+	for _, dbAcc := range memberAccounts {
+		if apiAcc, ok := serialized[dbAcc.ID]; ok {
+			accounts = append(accounts, apiAcc)
+			continue
+		}
+		accounts = append(accounts, SerializeAccount(h.cfg, dbAcc))
 	}
 	web.JSON(w, http.StatusOK, accounts)
 }
@@ -506,57 +383,16 @@ func (h *ListsHandler) AddAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.useDB() {
-		_, err = h.queries.GetList(context.Background(), db.GetListParams{
-			ID:        listID,
-			AccountID: accountID,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-		for _, idStr := range req.AccountIDs {
-			id, err := strconv.ParseInt(idStr, 10, 64)
-			if err != nil {
-				continue
-			}
-
-			// Verify we follow this account
-			follow, err := h.queries.GetFollow(context.Background(), db.GetFollowParams{
-				AccountID:       accountID,
-				TargetAccountID: id,
-			})
-			if err != nil {
-				if err == pgx.ErrNoRows {
-					continue // Must follow account to add to list
-				}
-				web.JSONError(w, http.StatusInternalServerError, "Database error")
-				return
-			}
-
-			err = h.queries.AddAccountToList(context.Background(), db.AddAccountToListParams{
-				ListID:    listID,
-				AccountID: id,
-				FollowID:  pgtype.Int8{Int64: follow.ID, Valid: true},
-			})
-			if err != nil {
-				if pgErr, ok := err.(*pgconn.PgError); ok && pgErr.Code == "23505" {
-					continue // Already in list
-				}
-				web.JSONError(w, http.StatusInternalServerError, "Database error")
-				return
-			}
-		}
-		web.JSON(w, http.StatusOK, map[string]any{})
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Lists unavailable")
 		return
 	}
 
-	// In-memory fallback
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	accountLists := h.memLists[accountID]
-	if accountLists == nil || accountLists[listID] == nil {
+	_, err = h.queries.GetList(context.Background(), db.GetListParams{
+		ID:        listID,
+		AccountID: accountID,
+	})
+	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
@@ -565,16 +401,31 @@ func (h *ListsHandler) AddAccounts(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		// Check for duplicates
-		exists := false
-		for _, memberID := range h.memListMembers[listID] {
-			if memberID == id {
-				exists = true
-				break
+
+		// Verify we follow this account
+		follow, err := h.queries.GetFollow(context.Background(), db.GetFollowParams{
+			AccountID:       accountID,
+			TargetAccountID: id,
+		})
+		if err != nil {
+			if err == pgx.ErrNoRows {
+				continue // Must follow account to add to list
 			}
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
 		}
-		if !exists {
-			h.memListMembers[listID] = append(h.memListMembers[listID], id)
+
+		err = h.queries.AddAccountToList(context.Background(), db.AddAccountToListParams{
+			ListID:    listID,
+			AccountID: id,
+			FollowID:  pgtype.Int8{Int64: follow.ID, Valid: true},
+		})
+		if err != nil {
+			if pgErr, ok := err.(*pgconn.PgError); ok && pgErr.Code == "23505" {
+				continue // Already in list
+			}
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
 		}
 	}
 	web.JSON(w, http.StatusOK, map[string]any{})
@@ -602,54 +453,33 @@ func (h *ListsHandler) RemoveAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.useDB() {
-		_, err = h.queries.GetList(context.Background(), db.GetListParams{
-			ID:        listID,
-			AccountID: accountID,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-		for _, idStr := range req.AccountIDs {
-			id, err := strconv.ParseInt(idStr, 10, 64)
-			if err != nil {
-				continue
-			}
-			err = h.queries.RemoveAccountFromList(context.Background(), db.RemoveAccountFromListParams{
-				ListID:    listID,
-				AccountID: id,
-			})
-			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-				web.JSONError(w, http.StatusInternalServerError, "Database error")
-				return
-			}
-		}
-		web.JSON(w, http.StatusOK, map[string]any{})
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Lists unavailable")
 		return
 	}
 
-	// In-memory fallback
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	accountLists := h.memLists[accountID]
-	if accountLists == nil || accountLists[listID] == nil {
+	_, err = h.queries.GetList(context.Background(), db.GetListParams{
+		ID:        listID,
+		AccountID: accountID,
+	})
+	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
-	toRemove := make(map[int64]bool)
 	for _, idStr := range req.AccountIDs {
-		id, _ := strconv.ParseInt(idStr, 10, 64)
-		toRemove[id] = true
-	}
-	newMembers := make([]int64, 0)
-	for _, memberID := range h.memListMembers[listID] {
-		if !toRemove[memberID] {
-			newMembers = append(newMembers, memberID)
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			continue
+		}
+		err = h.queries.RemoveAccountFromList(context.Background(), db.RemoveAccountFromListParams{
+			ListID:    listID,
+			AccountID: id,
+		})
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
 		}
 	}
-	h.memListMembers[listID] = newMembers
 	web.JSON(w, http.StatusOK, map[string]any{})
 }
 

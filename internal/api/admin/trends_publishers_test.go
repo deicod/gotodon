@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -11,26 +10,7 @@ import (
 	"github.com/deicod/gotodon/internal/db"
 )
 
-func TestTrendsHandler_GetLinkPublishers_MockMode(t *testing.T) {
-	h := NewTrendsHandler(nil, nil)
-
-	req, rec := mockAdminRequest(http.MethodGet, "/api/v1/admin/trends/links/publishers", "")
-	h.GetLinkPublishers(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var resp []AdminTrendLinkPublisher
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if len(resp) != 0 {
-		t.Fatalf("len = %d, want 0", len(resp))
-	}
-}
-
-func TestTrendsHandler_LinkPublishers_ApproveReject_NoDB(t *testing.T) {
+func TestTrendsHandler_LinkPublishers_NoDB(t *testing.T) {
 	h := NewTrendsHandler(nil, nil)
 
 	req, rec := mockAdminRequest(http.MethodPost, "/api/v1/admin/trends/links/publishers/1/approve", "")
@@ -38,6 +18,12 @@ func TestTrendsHandler_LinkPublishers_ApproveReject_NoDB(t *testing.T) {
 	h.ApproveLinkPublisher(rec, req)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("approve status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+
+	req, rec = mockAdminRequest(http.MethodGet, "/api/v1/admin/trends/links/publishers", "")
+	h.GetLinkPublishers(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("list status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 
 	req, rec = mockAdminRequest(http.MethodPost, "/api/v1/admin/trends/links/publishers/1/reject", "")

@@ -31,7 +31,7 @@ func mockTagsRequest(method, path string, accountID int64) (*http.Request, *http
 	return req, rec
 }
 
-func TestTagsHandler_Get_MockMode(t *testing.T) {
+func TestTagsHandler_Get_DBUnavailable(t *testing.T) {
 	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
 	h := NewTagsHandler(nil, cfg)
 
@@ -44,7 +44,7 @@ func TestTagsHandler_Get_MockMode(t *testing.T) {
 		{
 			name:     "valid tag returns tag info",
 			tagName:  "golang",
-			wantCode: http.StatusOK,
+			wantCode: http.StatusInternalServerError,
 			wantName: "golang",
 		},
 		{
@@ -78,7 +78,7 @@ func TestTagsHandler_Get_MockMode(t *testing.T) {
 	}
 }
 
-func TestTagsHandler_Follow_MockMode(t *testing.T) {
+func TestTagsHandler_Follow_DBUnavailable(t *testing.T) {
 	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
 	h := NewTagsHandler(nil, cfg)
 
@@ -92,7 +92,7 @@ func TestTagsHandler_Follow_MockMode(t *testing.T) {
 			name:      "authenticated user can follow tag",
 			tagName:   "mastodon",
 			accountID: 12345,
-			wantCode:  http.StatusOK,
+			wantCode:  http.StatusInternalServerError,
 		},
 		{
 			name:      "unauthenticated user gets 401",
@@ -122,7 +122,7 @@ func TestTagsHandler_Follow_MockMode(t *testing.T) {
 	}
 }
 
-func TestTagsHandler_Unfollow_MockMode(t *testing.T) {
+func TestTagsHandler_Unfollow_DBUnavailable(t *testing.T) {
 	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
 	h := NewTagsHandler(nil, cfg)
 
@@ -136,7 +136,7 @@ func TestTagsHandler_Unfollow_MockMode(t *testing.T) {
 			name:      "authenticated user can unfollow tag",
 			tagName:   "mastodon",
 			accountID: 12345,
-			wantCode:  http.StatusOK,
+			wantCode:  http.StatusInternalServerError,
 		},
 		{
 			name:      "unauthenticated user gets 401",
@@ -170,7 +170,7 @@ func TestTagsHandler_Unfollow_MockMode(t *testing.T) {
 	}
 }
 
-func TestTagsHandler_ListFollowed_MockMode(t *testing.T) {
+func TestTagsHandler_ListFollowed_DBUnavailable(t *testing.T) {
 	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
 	h := NewTagsHandler(nil, cfg)
 
@@ -182,7 +182,7 @@ func TestTagsHandler_ListFollowed_MockMode(t *testing.T) {
 		{
 			name:      "authenticated user gets empty list",
 			accountID: 12345,
-			wantCode:  http.StatusOK,
+			wantCode:  http.StatusInternalServerError,
 		},
 		{
 			name:      "unauthenticated user gets 401",
@@ -206,7 +206,6 @@ func TestTagsHandler_ListFollowed_MockMode(t *testing.T) {
 				if err := json.Unmarshal(rec.Body.Bytes(), &tags); err != nil {
 					t.Fatalf("Failed to unmarshal response: %v", err)
 				}
-				// Mock mode returns empty list
 				if len(tags) != 0 {
 					t.Errorf("expected 0 tags, got %d", len(tags))
 				}
@@ -245,7 +244,7 @@ func TestTagResponseStruct(t *testing.T) {
 	}
 }
 
-func TestTagsHandler_Feature_MockMode(t *testing.T) {
+func TestTagsHandler_Feature_DBUnavailable(t *testing.T) {
 	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
 	h := NewTagsHandler(nil, cfg)
 
@@ -254,12 +253,12 @@ func TestTagsHandler_Feature_MockMode(t *testing.T) {
 
 	h.Feature(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
-func TestTagsHandler_Unfeature_MockMode(t *testing.T) {
+func TestTagsHandler_Unfeature_DBUnavailable(t *testing.T) {
 	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}
 	h := NewTagsHandler(nil, cfg)
 
@@ -268,8 +267,8 @@ func TestTagsHandler_Unfeature_MockMode(t *testing.T) {
 
 	h.Unfeature(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 

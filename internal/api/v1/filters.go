@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -18,7 +17,6 @@ import (
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/streaming"
 	"github.com/deicod/gotodon/internal/web"
-	"github.com/deicod/gotodon/pkg/snowflake"
 )
 
 const (
@@ -38,20 +36,14 @@ var validFilterContexts = map[string]bool{
 type FiltersHandler struct {
 	queries   *db.Queries
 	pool      *pgxpool.Pool
-	idGen     *snowflake.Generator
 	publisher streaming.EventPublisher
-
-	// In-memory storage for fallback when queries is nil.
-	memFilters map[int64]map[int64]*FilterV1
 }
 
 // NewFiltersHandler creates a new v1 filters handler.
 func NewFiltersHandler(queries *db.Queries, pool *pgxpool.Pool) *FiltersHandler {
 	return &FiltersHandler{
-		queries:    queries,
-		pool:       pool,
-		idGen:      snowflake.NewGenerator(),
-		memFilters: make(map[int64]map[int64]*FilterV1),
+		queries: queries,
+		pool:    pool,
 	}
 }
 
@@ -203,44 +195,19 @@ func (h *FiltersHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.useDB() {
-		rows, err := h.queries.ListFilterKeywordsForAccount(r.Context(), accountID)
-		if err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Failed to list filters")
-			return
-		}
-
-		result := make([]FilterV1, len(rows))
-		for i, row := range rows {
-			result[i] = filterV1FromKeywordRow(row)
-		}
-		web.JSON(w, http.StatusOK, result)
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Filters unavailable")
+		return
+	}
+	rows, err := h.queries.ListFilterKeywordsForAccount(r.Context(), accountID)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to list filters")
 		return
 	}
 
-	accountFilters := h.memFilters[accountID]
-	if accountFilters == nil {
-		web.JSON(w, http.StatusOK, []FilterV1{})
-		return
-	}
-
-	ids := make([]int64, 0, len(accountFilters))
-	for id := range accountFilters {
-		ids = append(ids, id)
-	}
-	slices.SortFunc(ids, func(a, b int64) int {
-		if a > b {
-			return -1
-		}
-		if a < b {
-			return 1
-		}
-		return 0
-	})
-
-	result := make([]FilterV1, 0, len(ids))
-	for _, id := range ids {
-		result = append(result, *accountFilters[id])
+	result := make([]FilterV1, len(rows))
+	for i, row := range rows {
+		result[i] = filterV1FromKeywordRow(row)
 	}
 	web.JSON(w, http.StatusOK, result)
 }
@@ -259,36 +226,31 @@ func (h *FiltersHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.useDB() {
-		ctx := r.Context()
-		keyword, err := h.queries.GetFilterKeyword(ctx, db.GetFilterKeywordParams{
-			ID:        filterID,
-			AccountID: accountID,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-
-		filter, err := h.queries.GetFilter(ctx, db.GetFilterParams{
-			ID:        keyword.CustomFilterID,
-			AccountID: accountID,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-
-		web.JSON(w, http.StatusOK, filterV1FromDB(filter, keyword))
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Filters unavailable")
 		return
 	}
 
-	accountFilters := h.memFilters[accountID]
-	if accountFilters == nil || accountFilters[filterID] == nil {
+	ctx := r.Context()
+	keyword, err := h.queries.GetFilterKeyword(ctx, db.GetFilterKeywordParams{
+		ID:        filterID,
+		AccountID: accountID,
+	})
+	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
-	web.JSON(w, http.StatusOK, accountFilters[filterID])
+
+	filter, err := h.queries.GetFilter(ctx, db.GetFilterParams{
+		ID:        keyword.CustomFilterID,
+		AccountID: accountID,
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	web.JSON(w, http.StatusOK, filterV1FromDB(filter, keyword))
 }
 
 // Create handles POST /api/v1/filters
@@ -331,50 +293,14 @@ func (h *FiltersHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	expiresAt := computeExpiresAt(req.ExpiresIn)
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Filters unavailable")
+		return
+	}
 
-	if h.useDB() {
-		ctx := r.Context()
-		if h.pool == nil {
-			dbFilter, err := h.queries.CreateFilter(ctx, db.CreateFilterParams{
-				AccountID: accountID,
-				Phrase:    phrase,
-				Context:   contexts,
-				Action:    action,
-				ExpiresAt: expiresAt,
-			})
-			if err != nil {
-				web.JSONError(w, http.StatusInternalServerError, "Failed to create filter")
-				return
-			}
-			dbKeyword, err := h.queries.CreateFilterKeyword(ctx, db.CreateFilterKeywordParams{
-				CustomFilterID: dbFilter.ID,
-				Keyword:        phrase,
-				WholeWord:      wholeWord,
-			})
-			if err != nil {
-				_ = h.queries.DeleteFilter(ctx, db.DeleteFilterParams{
-					ID:        dbFilter.ID,
-					AccountID: accountID,
-				})
-				web.JSONError(w, http.StatusInternalServerError, "Failed to create filter")
-				return
-			}
-			web.JSON(w, http.StatusOK, filterV1FromDB(dbFilter, dbKeyword))
-			h.publishFiltersChanged(ctx, accountID)
-			return
-		}
-
-		tx, err := h.pool.Begin(ctx)
-		if err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Failed to create filter")
-			return
-		}
-		defer func() {
-			_ = tx.Rollback(ctx)
-		}()
-
-		qtx := h.queries.WithTx(tx)
-		dbFilter, err := qtx.CreateFilter(ctx, db.CreateFilterParams{
+	ctx := r.Context()
+	if h.pool == nil {
+		dbFilter, err := h.queries.CreateFilter(ctx, db.CreateFilterParams{
 			AccountID: accountID,
 			Phrase:    phrase,
 			Context:   contexts,
@@ -385,42 +311,63 @@ func (h *FiltersHandler) Create(w http.ResponseWriter, r *http.Request) {
 			web.JSONError(w, http.StatusInternalServerError, "Failed to create filter")
 			return
 		}
-
-		dbKeyword, err := qtx.CreateFilterKeyword(ctx, db.CreateFilterKeywordParams{
+		dbKeyword, err := h.queries.CreateFilterKeyword(ctx, db.CreateFilterKeywordParams{
 			CustomFilterID: dbFilter.ID,
 			Keyword:        phrase,
 			WholeWord:      wholeWord,
 		})
 		if err != nil {
+			_ = h.queries.DeleteFilter(ctx, db.DeleteFilterParams{
+				ID:        dbFilter.ID,
+				AccountID: accountID,
+			})
 			web.JSONError(w, http.StatusInternalServerError, "Failed to create filter")
 			return
 		}
-
-		if err := tx.Commit(ctx); err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Failed to create filter")
-			return
-		}
-
 		web.JSON(w, http.StatusOK, filterV1FromDB(dbFilter, dbKeyword))
 		h.publishFiltersChanged(ctx, accountID)
 		return
 	}
 
-	filterID := h.idGen.Generate()
-	filter := &FilterV1{
-		ID:           strconv.FormatInt(filterID, 10),
-		Phrase:       phrase,
-		Context:      contexts,
-		WholeWord:    wholeWord,
-		ExpiresAt:    expiresAtPtr(expiresAt),
-		Irreversible: action == filterActionHide,
+	tx, err := h.pool.Begin(ctx)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to create filter")
+		return
 	}
-	if h.memFilters[accountID] == nil {
-		h.memFilters[accountID] = make(map[int64]*FilterV1)
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	qtx := h.queries.WithTx(tx)
+	dbFilter, err := qtx.CreateFilter(ctx, db.CreateFilterParams{
+		AccountID: accountID,
+		Phrase:    phrase,
+		Context:   contexts,
+		Action:    action,
+		ExpiresAt: expiresAt,
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to create filter")
+		return
 	}
-	h.memFilters[accountID][filterID] = filter
-	web.JSON(w, http.StatusOK, filter)
-	h.publishFiltersChanged(r.Context(), accountID)
+
+	dbKeyword, err := qtx.CreateFilterKeyword(ctx, db.CreateFilterKeywordParams{
+		CustomFilterID: dbFilter.ID,
+		Keyword:        phrase,
+		WholeWord:      wholeWord,
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to create filter")
+		return
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to create filter")
+		return
+	}
+
+	web.JSON(w, http.StatusOK, filterV1FromDB(dbFilter, dbKeyword))
+	h.publishFiltersChanged(ctx, accountID)
 }
 
 // Update handles PUT /api/v1/filters/:id
@@ -461,138 +408,89 @@ func (h *FiltersHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.useDB() {
-		ctx := r.Context()
-		keyword, err := h.queries.GetFilterKeyword(ctx, db.GetFilterKeywordParams{
-			ID:        filterID,
-			AccountID: accountID,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Filters unavailable")
+		return
+	}
 
-		filter, err := h.queries.GetFilter(ctx, db.GetFilterParams{
-			ID:        keyword.CustomFilterID,
-			AccountID: accountID,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
+	ctx := r.Context()
+	keyword, err := h.queries.GetFilterKeyword(ctx, db.GetFilterKeywordParams{
+		ID:        filterID,
+		AccountID: accountID,
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
 
-		action := filter.Action
-		if req.Irreversible != nil {
-			if *req.Irreversible {
-				action = filterActionHide
-			} else {
-				action = filterActionWarn
-			}
-		}
+	filter, err := h.queries.GetFilter(ctx, db.GetFilterParams{
+		ID:        keyword.CustomFilterID,
+		AccountID: accountID,
+	})
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
 
-		expiresAt := filter.ExpiresAt
-		if req.ExpiresIn != nil {
-			expiresAt = computeExpiresAt(req.ExpiresIn)
+	action := filter.Action
+	if req.Irreversible != nil {
+		if *req.Irreversible {
+			action = filterActionHide
+		} else {
+			action = filterActionWarn
 		}
+	}
 
-		updatedPhrase := filter.Phrase
-		if req.Phrase != nil {
-			updatedPhrase = phrase
-		}
+	expiresAt := filter.ExpiresAt
+	if req.ExpiresIn != nil {
+		expiresAt = computeExpiresAt(req.ExpiresIn)
+	}
 
-		updatedContext := filter.Context
-		if req.Context != nil {
-			updatedContext = contexts
-		}
+	updatedPhrase := filter.Phrase
+	if req.Phrase != nil {
+		updatedPhrase = phrase
+	}
 
-		customFilterChanged := false
-		if updatedPhrase != filter.Phrase {
-			customFilterChanged = true
-		}
-		if req.Context != nil && !equalStringSlices(updatedContext, filter.Context) {
-			customFilterChanged = true
-		}
-		if req.Irreversible != nil && action != filter.Action {
-			customFilterChanged = true
-		}
-		if req.ExpiresIn != nil && !sameExpiresAt(expiresAt, filter.ExpiresAt) {
-			customFilterChanged = true
-		}
+	updatedContext := filter.Context
+	if req.Context != nil {
+		updatedContext = contexts
+	}
 
-		if customFilterChanged {
-			keywords, err := h.queries.ListFilterKeywords(ctx, filter.ID)
-			if err != nil {
-				web.JSONError(w, http.StatusInternalServerError, "Failed to update filter")
-				return
-			}
-			if len(keywords) > 1 {
-				web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Filter has multiple keywords")
-				return
-			}
-		}
+	customFilterChanged := false
+	if updatedPhrase != filter.Phrase {
+		customFilterChanged = true
+	}
+	if req.Context != nil && !equalStringSlices(updatedContext, filter.Context) {
+		customFilterChanged = true
+	}
+	if req.Irreversible != nil && action != filter.Action {
+		customFilterChanged = true
+	}
+	if req.ExpiresIn != nil && !sameExpiresAt(expiresAt, filter.ExpiresAt) {
+		customFilterChanged = true
+	}
 
-		keywordUpdate := req.Phrase != nil || req.WholeWord != nil
-		filterUpdate := req.Phrase != nil || req.Context != nil || req.Irreversible != nil || req.ExpiresIn != nil
-
-		if !keywordUpdate && !filterUpdate {
-			web.JSON(w, http.StatusOK, filterV1FromDB(filter, keyword))
-			return
-		}
-
-		if h.pool == nil {
-			updatedKeyword := keyword
-			if keywordUpdate {
-				params := db.UpdateFilterKeywordParams{
-					ID:        keyword.ID,
-					Keyword:   pgtype.Text{String: phrase, Valid: req.Phrase != nil},
-					WholeWord: pgtype.Bool{Bool: req.WholeWord != nil && *req.WholeWord, Valid: req.WholeWord != nil},
-				}
-				updatedKeyword, err = h.queries.UpdateFilterKeyword(ctx, params)
-				if err != nil {
-					web.JSONError(w, http.StatusInternalServerError, "Failed to update filter")
-					return
-				}
-			}
-
-			updatedFilter := filter
-			if filterUpdate {
-				params := db.UpdateFilterParams{
-					ID:        filter.ID,
-					AccountID: accountID,
-					Context:   updatedContext,
-					ExpiresAt: expiresAt,
-				}
-				if req.Phrase != nil {
-					params.Phrase = pgtype.Text{String: updatedPhrase, Valid: true}
-				}
-				if req.Irreversible != nil {
-					params.Action = pgtype.Int4{Int32: action, Valid: true}
-				}
-				if req.ExpiresIn != nil {
-					params.ExpiresAt = expiresAt
-				}
-				updatedFilter, err = h.queries.UpdateFilter(ctx, params)
-				if err != nil {
-					web.JSONError(w, http.StatusInternalServerError, "Failed to update filter")
-					return
-				}
-			}
-
-			web.JSON(w, http.StatusOK, filterV1FromDB(updatedFilter, updatedKeyword))
-			h.publishFiltersChanged(ctx, accountID)
-			return
-		}
-
-		tx, err := h.pool.Begin(ctx)
+	if customFilterChanged {
+		keywords, err := h.queries.ListFilterKeywords(ctx, filter.ID)
 		if err != nil {
 			web.JSONError(w, http.StatusInternalServerError, "Failed to update filter")
 			return
 		}
-		defer func() {
-			_ = tx.Rollback(ctx)
-		}()
+		if len(keywords) > 1 {
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Filter has multiple keywords")
+			return
+		}
+	}
 
-		qtx := h.queries.WithTx(tx)
+	keywordUpdate := req.Phrase != nil || req.WholeWord != nil
+	filterUpdate := req.Phrase != nil || req.Context != nil || req.Irreversible != nil || req.ExpiresIn != nil
+
+	if !keywordUpdate && !filterUpdate {
+		web.JSON(w, http.StatusOK, filterV1FromDB(filter, keyword))
+		return
+	}
+
+	if h.pool == nil {
 		updatedKeyword := keyword
 		if keywordUpdate {
 			params := db.UpdateFilterKeywordParams{
@@ -600,7 +498,7 @@ func (h *FiltersHandler) Update(w http.ResponseWriter, r *http.Request) {
 				Keyword:   pgtype.Text{String: phrase, Valid: req.Phrase != nil},
 				WholeWord: pgtype.Bool{Bool: req.WholeWord != nil && *req.WholeWord, Valid: req.WholeWord != nil},
 			}
-			updatedKeyword, err = qtx.UpdateFilterKeyword(ctx, params)
+			updatedKeyword, err = h.queries.UpdateFilterKeyword(ctx, params)
 			if err != nil {
 				web.JSONError(w, http.StatusInternalServerError, "Failed to update filter")
 				return
@@ -624,16 +522,11 @@ func (h *FiltersHandler) Update(w http.ResponseWriter, r *http.Request) {
 			if req.ExpiresIn != nil {
 				params.ExpiresAt = expiresAt
 			}
-			updatedFilter, err = qtx.UpdateFilter(ctx, params)
+			updatedFilter, err = h.queries.UpdateFilter(ctx, params)
 			if err != nil {
 				web.JSONError(w, http.StatusInternalServerError, "Failed to update filter")
 				return
 			}
-		}
-
-		if err := tx.Commit(ctx); err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Failed to update filter")
-			return
 		}
 
 		web.JSON(w, http.StatusOK, filterV1FromDB(updatedFilter, updatedKeyword))
@@ -641,32 +534,61 @@ func (h *FiltersHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accountFilters := h.memFilters[accountID]
-	if accountFilters == nil || accountFilters[filterID] == nil {
-		web.JSONError(w, http.StatusNotFound, "Record not found")
+	tx, err := h.pool.Begin(ctx)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to update filter")
+		return
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	qtx := h.queries.WithTx(tx)
+	updatedKeyword := keyword
+	if keywordUpdate {
+		params := db.UpdateFilterKeywordParams{
+			ID:        keyword.ID,
+			Keyword:   pgtype.Text{String: phrase, Valid: req.Phrase != nil},
+			WholeWord: pgtype.Bool{Bool: req.WholeWord != nil && *req.WholeWord, Valid: req.WholeWord != nil},
+		}
+		updatedKeyword, err = qtx.UpdateFilterKeyword(ctx, params)
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to update filter")
+			return
+		}
+	}
+
+	updatedFilter := filter
+	if filterUpdate {
+		params := db.UpdateFilterParams{
+			ID:        filter.ID,
+			AccountID: accountID,
+			Context:   updatedContext,
+			ExpiresAt: expiresAt,
+		}
+		if req.Phrase != nil {
+			params.Phrase = pgtype.Text{String: updatedPhrase, Valid: true}
+		}
+		if req.Irreversible != nil {
+			params.Action = pgtype.Int4{Int32: action, Valid: true}
+		}
+		if req.ExpiresIn != nil {
+			params.ExpiresAt = expiresAt
+		}
+		updatedFilter, err = qtx.UpdateFilter(ctx, params)
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to update filter")
+			return
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to update filter")
 		return
 	}
 
-	filter := accountFilters[filterID]
-	if req.Phrase != nil {
-		filter.Phrase = phrase
-	}
-	if req.Context != nil {
-		filter.Context = contexts
-	}
-	if req.WholeWord != nil {
-		filter.WholeWord = *req.WholeWord
-	}
-	if req.Irreversible != nil {
-		filter.Irreversible = *req.Irreversible
-	}
-	if req.ExpiresIn != nil {
-		expiresAt := computeExpiresAt(req.ExpiresIn)
-		filter.ExpiresAt = expiresAtPtr(expiresAt)
-	}
-
-	web.JSON(w, http.StatusOK, filter)
-	h.publishFiltersChanged(r.Context(), accountID)
+	web.JSON(w, http.StatusOK, filterV1FromDB(updatedFilter, updatedKeyword))
+	h.publishFiltersChanged(ctx, accountID)
 }
 
 // Delete handles DELETE /api/v1/filters/:id
@@ -683,33 +605,26 @@ func (h *FiltersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.useDB() {
-		ctx := r.Context()
-		keyword, err := h.queries.GetFilterKeyword(ctx, db.GetFilterKeywordParams{
-			ID:        filterID,
-			AccountID: accountID,
-		})
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-		if err := h.queries.DeleteFilterKeyword(ctx, keyword.ID); err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Failed to delete filter")
-			return
-		}
-		web.JSON(w, http.StatusOK, map[string]any{})
-		h.publishFiltersChanged(ctx, accountID)
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Filters unavailable")
 		return
 	}
 
-	accountFilters := h.memFilters[accountID]
-	if accountFilters == nil || accountFilters[filterID] == nil {
+	ctx := r.Context()
+	keyword, err := h.queries.GetFilterKeyword(ctx, db.GetFilterKeywordParams{
+		ID:        filterID,
+		AccountID: accountID,
+	})
+	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
-	delete(accountFilters, filterID)
+	if err := h.queries.DeleteFilterKeyword(ctx, keyword.ID); err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to delete filter")
+		return
+	}
 	web.JSON(w, http.StatusOK, map[string]any{})
-	h.publishFiltersChanged(r.Context(), accountID)
+	h.publishFiltersChanged(ctx, accountID)
 }
 
 // RegisterRoutes registers filter routes.

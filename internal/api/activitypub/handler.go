@@ -93,7 +93,7 @@ func (h *FederationHandler) GetActor(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !h.useDB() {
-		h.mockActor(w, username)
+		web.JSONError(w, http.StatusInternalServerError, "Actor unavailable")
 		return
 	}
 
@@ -152,35 +152,6 @@ func (h *FederationHandler) renderActor(w http.ResponseWriter, account db.Accoun
 	web.JSON(w, http.StatusOK, actor)
 }
 
-func (h *FederationHandler) mockActor(w http.ResponseWriter, username string) {
-	actorURI := fmt.Sprintf("https://%s/users/%s", h.domain, username)
-	discoverable := true
-
-	actor := activitypub.Actor{
-		Object: activitypub.Object{
-			Context: activitypub.MastodonContextFull(),
-			ID:      actorURI,
-			Type:    activitypub.TypePerson,
-			Name:    username,
-			URL:     fmt.Sprintf("https://%s/@%s", h.domain, username),
-		},
-		PreferredUsername: username,
-		Inbox:             fmt.Sprintf("%s/inbox", actorURI),
-		Outbox:            fmt.Sprintf("%s/outbox", actorURI),
-		Followers:         fmt.Sprintf("%s/followers", actorURI),
-		Following:         fmt.Sprintf("%s/following", actorURI),
-		Featured:          fmt.Sprintf("%s/collections/featured", actorURI),
-		FeaturedTags:      fmt.Sprintf("%s/collections/tags", actorURI),
-		Discoverable:      &discoverable,
-		Endpoints: &activitypub.Endpoints{
-			SharedInbox: fmt.Sprintf("https://%s/inbox", h.domain),
-		},
-	}
-
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, actor)
-}
-
 // GetOutbox handles GET /users/:username/outbox
 func (h *FederationHandler) GetOutbox(w http.ResponseWriter, r *http.Request) {
 	h.writeOutbox(w, r)
@@ -208,7 +179,7 @@ func (h *FederationHandler) GetInstanceActor(w http.ResponseWriter, r *http.Requ
 	}
 
 	if !h.useDB() {
-		h.mockInstanceActor(w)
+		web.JSONError(w, http.StatusInternalServerError, "Actor unavailable")
 		return
 	}
 
@@ -235,11 +206,7 @@ func (h *FederationHandler) GetInstanceOutbox(w http.ResponseWriter, r *http.Req
 
 	pageRequested, limit, maxID, minID, sinceID := parseOutboxRequest(r)
 	if !h.useDB() {
-		if pageRequested {
-			h.renderEmptyOutboxPage(w, fmt.Sprintf("%s/outbox", actorURI), limit, maxID, minID, sinceID)
-			return
-		}
-		h.renderEmptyOutboxCollection(w, fmt.Sprintf("%s/outbox", actorURI), limit)
+		web.JSONError(w, http.StatusInternalServerError, "Outbox unavailable")
 		return
 	}
 
@@ -608,28 +575,6 @@ func (h *FederationHandler) renderInstanceActor(w http.ResponseWriter, account d
 	}
 	if account.CreatedAt.Valid {
 		actor.Published = account.CreatedAt.Time.Format("2006-01-02T15:04:05Z")
-	}
-
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, actor)
-}
-
-func (h *FederationHandler) mockInstanceActor(w http.ResponseWriter) {
-	actorURI := h.instanceActorURI()
-	actor := activitypub.Actor{
-		Object: activitypub.Object{
-			Context: activitypub.MastodonContextFull(),
-			ID:      actorURI,
-			Type:    activitypub.TypeApplication,
-			URL:     h.instanceActorURL(),
-		},
-		PreferredUsername:         h.domain,
-		Inbox:                     actorURI + "/inbox",
-		Outbox:                    actorURI + "/outbox",
-		ManuallyApprovesFollowers: true,
-		Endpoints: &activitypub.Endpoints{
-			SharedInbox: fmt.Sprintf("https://%s/inbox", h.domain),
-		},
 	}
 
 	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)

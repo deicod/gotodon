@@ -494,7 +494,7 @@ func (h *TrendsHandler) GetTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.queries == nil {
-		web.JSON(w, http.StatusOK, []AdminTag{})
+		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
 	}
 
@@ -522,7 +522,7 @@ func (h *TrendsHandler) GetStatuses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.queries == nil {
-		web.JSON(w, http.StatusOK, []AdminTrendStatus{})
+		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
 	}
 
@@ -576,7 +576,7 @@ func (h *TrendsHandler) GetLinks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.queries == nil {
-		web.JSON(w, http.StatusOK, []AdminTrendLink{})
+		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
 	}
 
@@ -615,7 +615,7 @@ func (h *TrendsHandler) GetLinkPublishers(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if h.queries == nil {
-		web.JSON(w, http.StatusOK, []AdminTrendLinkPublisher{})
+		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
 	}
 
@@ -664,7 +664,7 @@ func (h *TrendsHandler) ApproveTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.queries == nil {
-		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
 	}
 
@@ -696,7 +696,7 @@ func (h *TrendsHandler) RejectTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.queries == nil {
-		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
 	}
 
@@ -728,7 +728,7 @@ func (h *TrendsHandler) ApproveStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.queries == nil {
-		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
 	}
 
@@ -761,7 +761,7 @@ func (h *TrendsHandler) RejectStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.queries == nil {
-		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
 	}
 
@@ -794,7 +794,7 @@ func (h *TrendsHandler) ApproveLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.queries == nil {
-		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
 	}
 
@@ -826,7 +826,7 @@ func (h *TrendsHandler) RejectLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.queries == nil {
-		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
 	}
 
@@ -858,7 +858,7 @@ func (h *TrendsHandler) ApproveLinkPublisher(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if h.queries == nil {
-		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
 	}
 
@@ -890,7 +890,7 @@ func (h *TrendsHandler) RejectLinkPublisher(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if h.queries == nil {
-		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
 	}
 

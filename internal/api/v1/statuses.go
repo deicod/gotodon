@@ -1163,8 +1163,11 @@ func (h *StatusesHandler) Index(w http.ResponseWriter, r *http.Request) {
 		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed")
 		return
 	}
-
-	if !h.useDB() || len(ids) == 0 {
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Status data unavailable")
+		return
+	}
+	if len(ids) == 0 {
 		web.JSON(w, http.StatusOK, []Status{})
 		return
 	}
@@ -1479,36 +1482,7 @@ func (h *StatusesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mock fallback
-	fallbackNow := time.Now()
-	statusID := strconv.FormatInt(fallbackNow.UnixNano(), 10)
-	discoverable := true
-
-	web.JSON(w, http.StatusOK, Status{
-		ID:          statusID,
-		CreatedAt:   fallbackNow,
-		Sensitive:   req.Sensitive,
-		SpoilerText: req.SpoilerText,
-		Visibility:  req.Visibility,
-		Language:    req.Language,
-		URI:         "https://example.com/users/user/statuses/" + statusID,
-		URL:         ptrStr("https://example.com/@user/" + statusID),
-		Content:     "<p>" + req.Status + "</p>",
-		Account: Account{
-			ID:           strconv.FormatInt(accountID, 10),
-			Username:     "user",
-			Acct:         "user",
-			DisplayName:  "Test User",
-			Discoverable: &discoverable,
-			CreatedAt:    fallbackNow.Add(-24 * time.Hour),
-			Emojis:       []CustomEmoji{},
-			Fields:       []Field{},
-		},
-		MediaAttachments: []MediaAttach{},
-		Mentions:         []Mention{},
-		Tags:             []Tag{},
-		Emojis:           []CustomEmoji{},
-	})
+	web.JSONError(w, http.StatusInternalServerError, "Status data unavailable")
 }
 
 // Get handles GET /api/v1/statuses/:id
@@ -1526,6 +1500,10 @@ func (h *StatusesHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Status data unavailable")
+		return
+	}
 
 	if h.useDB() {
 		dbStatus, err := h.queries.GetStatusByID(ctx, id)
@@ -1536,32 +1514,6 @@ func (h *StatusesHandler) Get(w http.ResponseWriter, r *http.Request) {
 		web.JSON(w, http.StatusOK, SerializeStatus(ctx, h.queries, h.cfg, dbStatus))
 		return
 	}
-
-	// Mock fallback
-	now := time.Now()
-	discoverable := true
-	web.JSON(w, http.StatusOK, Status{
-		ID:         idStr,
-		CreatedAt:  now.Add(-time.Hour),
-		Visibility: "public",
-		URI:        "https://example.com/users/user/statuses/" + idStr,
-		URL:        ptrStr("https://example.com/@user/" + idStr),
-		Content:    "<p>Hello, world!</p>",
-		Account: Account{
-			ID:           "1",
-			Username:     "user",
-			Acct:         "user",
-			DisplayName:  "Test User",
-			Discoverable: &discoverable,
-			CreatedAt:    now.Add(-24 * time.Hour),
-			Emojis:       []CustomEmoji{},
-			Fields:       []Field{},
-		},
-		MediaAttachments: []MediaAttach{},
-		Mentions:         []Mention{},
-		Tags:             []Tag{},
-		Emojis:           []CustomEmoji{},
-	})
 }
 
 // Delete handles DELETE /api/v1/statuses/:id
@@ -1773,10 +1725,7 @@ func (h *StatusesHandler) Favourite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status, _ := h.getStatusByID(idStr)
-	status.Favourited = true
-	status.FavouritesCount++
-	web.JSON(w, http.StatusOK, status)
+	web.JSONError(w, http.StatusInternalServerError, "Status data unavailable")
 }
 
 // Unfavourite handles POST /api/v1/statuses/:id/unfavourite
@@ -1842,9 +1791,7 @@ func (h *StatusesHandler) Unfavourite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status, _ := h.getStatusByID(idStr)
-	status.Favourited = false
-	web.JSON(w, http.StatusOK, status)
+	web.JSONError(w, http.StatusInternalServerError, "Status data unavailable")
 }
 
 // Reblog handles POST /api/v1/statuses/:id/reblog
@@ -1918,33 +1865,7 @@ func (h *StatusesHandler) Reblog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mock fallback
-	originalStatus, _ := h.getStatusByID(idStr)
-	originalStatus.ReblogsCount++
-
-	now := time.Now()
-	reblogID := strconv.FormatInt(now.UnixNano(), 10)
-	discoverable := true
-
-	web.JSON(w, http.StatusOK, Status{
-		ID:        reblogID,
-		CreatedAt: now,
-		Reblog:    &originalStatus,
-		Reblogged: true,
-		Account: Account{
-			ID:           strconv.FormatInt(accountID, 10),
-			Username:     "user",
-			Acct:         "user",
-			Discoverable: &discoverable,
-			CreatedAt:    now.Add(-24 * time.Hour),
-			Emojis:       []CustomEmoji{},
-			Fields:       []Field{},
-		},
-		MediaAttachments: []MediaAttach{},
-		Mentions:         []Mention{},
-		Tags:             []Tag{},
-		Emojis:           []CustomEmoji{},
-	})
+	web.JSONError(w, http.StatusInternalServerError, "Status data unavailable")
 }
 
 // Unreblog handles POST /api/v1/statuses/:id/unreblog
@@ -1999,9 +1920,7 @@ func (h *StatusesHandler) Unreblog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status, _ := h.getStatusByID(idStr)
-	status.Reblogged = false
-	web.JSON(w, http.StatusOK, status)
+	web.JSONError(w, http.StatusInternalServerError, "Status data unavailable")
 }
 
 // Bookmark handles POST /api/v1/statuses/:id/bookmark
@@ -2046,9 +1965,7 @@ func (h *StatusesHandler) Bookmark(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status, _ := h.getStatusByID(idStr)
-	status.Bookmarked = true
-	web.JSON(w, http.StatusOK, status)
+	web.JSONError(w, http.StatusInternalServerError, "Status data unavailable")
 }
 
 // Unbookmark handles POST /api/v1/statuses/:id/unbookmark
@@ -2089,9 +2006,7 @@ func (h *StatusesHandler) Unbookmark(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status, _ := h.getStatusByID(idStr)
-	status.Bookmarked = false
-	web.JSON(w, http.StatusOK, status)
+	web.JSONError(w, http.StatusInternalServerError, "Status data unavailable")
 }
 
 // Mute handles POST /api/v1/statuses/:id/mute
@@ -2141,9 +2056,7 @@ func (h *StatusesHandler) Mute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status, _ := h.getStatusByID(idStr)
-	status.Muted = true
-	web.JSON(w, http.StatusOK, status)
+	web.JSONError(w, http.StatusInternalServerError, "Status data unavailable")
 }
 
 // Unmute handles POST /api/v1/statuses/:id/unmute
@@ -2193,9 +2106,7 @@ func (h *StatusesHandler) Unmute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status, _ := h.getStatusByID(idStr)
-	status.Muted = false
-	web.JSON(w, http.StatusOK, status)
+	web.JSONError(w, http.StatusInternalServerError, "Status data unavailable")
 }
 
 // Context handles GET /api/v1/statuses/:id/context
@@ -2243,39 +2154,7 @@ func (h *StatusesHandler) Context(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	web.JSON(w, http.StatusOK, map[string][]Status{
-		"ancestors":   {},
-		"descendants": {},
-	})
-}
-
-// getStatusByID is a helper for mock fallback
-func (h *StatusesHandler) getStatusByID(id string) (Status, error) {
-	now := time.Now()
-	discoverable := true
-
-	return Status{
-		ID:         id,
-		CreatedAt:  now.Add(-time.Hour),
-		Visibility: "public",
-		URI:        "https://example.com/users/user/statuses/" + id,
-		URL:        ptrStr("https://example.com/@user/" + id),
-		Content:    "<p>Hello, world!</p>",
-		Account: Account{
-			ID:           "1",
-			Username:     "user",
-			Acct:         "user",
-			DisplayName:  "Test User",
-			Discoverable: &discoverable,
-			CreatedAt:    now.Add(-24 * time.Hour),
-			Emojis:       []CustomEmoji{},
-			Fields:       []Field{},
-		},
-		MediaAttachments: []MediaAttach{},
-		Mentions:         []Mention{},
-		Tags:             []Tag{},
-		Emojis:           []CustomEmoji{},
-	}, nil
+	web.JSONError(w, http.StatusInternalServerError, "Status data unavailable")
 }
 
 func parseStatusIDs(r *http.Request) []int64 {
@@ -3337,8 +3216,7 @@ func (h *StatusesHandler) History(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mock fallback - return empty array
-	web.JSON(w, http.StatusOK, []StatusEdit{})
+	web.JSONError(w, http.StatusInternalServerError, "Status data unavailable")
 }
 
 // Source handles GET /api/v1/statuses/:id/source
@@ -3385,12 +3263,7 @@ func (h *StatusesHandler) Source(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mock fallback
-	web.JSON(w, http.StatusOK, StatusSource{
-		ID:          idStr,
-		Text:        "Hello, world!",
-		SpoilerText: "",
-	})
+	web.JSONError(w, http.StatusInternalServerError, "Status data unavailable")
 }
 
 // Translation represents a translated status
@@ -3482,8 +3355,7 @@ func (h *StatusesHandler) Translate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mock fallback - translation not available without DB
-	web.JSONError(w, http.StatusUnprocessableEntity, "Translation is not enabled on this server")
+	web.JSONError(w, http.StatusInternalServerError, "Status data unavailable")
 }
 
 // Quotes handles GET /api/v1/statuses/:id/quotes
@@ -3536,8 +3408,7 @@ func (h *StatusesHandler) Quotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mock fallback
-	web.JSON(w, http.StatusOK, []Status{})
+	web.JSONError(w, http.StatusInternalServerError, "Status data unavailable")
 }
 
 // RevokeQuote handles POST /api/v1/statuses/:id/quotes/:quote_id/revoke
@@ -3565,6 +3436,10 @@ func (h *StatusesHandler) RevokeQuote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Status data unavailable")
+		return
+	}
 
 	if h.useDB() {
 		// Verify the status exists and belongs to the user

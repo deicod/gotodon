@@ -140,7 +140,7 @@ func (h *FederationHandler) loadContextConversation(ctx context.Context, rawID s
 		return db.Conversation{}, 0, 0, pgx.ErrNoRows
 	}
 	if !h.useDB() {
-		return db.Conversation{ID: 0}, parentAccountID, parentStatusID, nil
+		return db.Conversation{}, 0, 0, errors.New("context unavailable")
 	}
 
 	conversation, err := h.store.GetConversationByParentAccountAndStatus(ctx, db.GetConversationByParentAccountAndStatusParams{
@@ -154,8 +154,11 @@ func (h *FederationHandler) loadContextConversation(ctx context.Context, rawID s
 }
 
 func (h *FederationHandler) contextItems(ctx context.Context, conversation db.Conversation, minID int64) ([]any, int64, error) {
-	if !h.useDB() || conversation.ID == 0 {
-		return []any{}, 0, nil
+	if !h.useDB() {
+		return nil, 0, errors.New("context unavailable")
+	}
+	if conversation.ID == 0 {
+		return nil, 0, pgx.ErrNoRows
 	}
 
 	statuses, err := h.store.ListConversationStatuses(ctx, db.ListConversationStatusesParams{

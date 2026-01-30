@@ -46,26 +46,22 @@ func (h *AnnualReportsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	if h.useDB() {
-		dbReports, err := h.queries.ListAnnualReportsByAccount(ctx, accountID)
-		if err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-
-		reports := make([]AnnualReport, len(dbReports))
-		for i, r := range dbReports {
-			reports[i] = h.dbReportToAPI(r)
-		}
-		web.JSON(w, http.StatusOK, reports)
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Annual reports unavailable")
 		return
 	}
 
-	// Mock fallback - return current year placeholder
-	currentYear := time.Now().Year()
-	web.JSON(w, http.StatusOK, []AnnualReport{
-		{Year: currentYear - 1, Data: map[string]interface{}{}},
-	})
+	dbReports, err := h.queries.ListAnnualReportsByAccount(ctx, accountID)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+
+	reports := make([]AnnualReport, len(dbReports))
+	for i, r := range dbReports {
+		reports[i] = h.dbReportToAPI(r)
+	}
+	web.JSON(w, http.StatusOK, reports)
 }
 
 // Get handles GET /api/v1/annual_reports/:id
@@ -83,36 +79,26 @@ func (h *AnnualReportsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
-
-	ctx := r.Context()
-
-	if h.useDB() {
-		dbReport, err := h.queries.GetAnnualReportByAccountAndYear(ctx, db.GetAnnualReportByAccountAndYearParams{
-			AccountID: accountID,
-			Year:      int32(year),
-		})
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				web.JSONError(w, http.StatusNotFound, "Record not found")
-			} else {
-				web.JSONError(w, http.StatusInternalServerError, "Database error")
-			}
-			return
-		}
-		web.JSON(w, http.StatusOK, h.dbReportToAPI(dbReport))
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Annual reports unavailable")
 		return
 	}
 
-	// Mock fallback
-	web.JSON(w, http.StatusOK, AnnualReport{
-		Year: year,
-		Data: map[string]interface{}{
-			"statuses_count":   0,
-			"followers_gained": 0,
-			"following_gained": 0,
-			"top_hashtags":     []string{},
-		},
+	ctx := r.Context()
+
+	dbReport, err := h.queries.GetAnnualReportByAccountAndYear(ctx, db.GetAnnualReportByAccountAndYearParams{
+		AccountID: accountID,
+		Year:      int32(year),
 	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+		} else {
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+		}
+		return
+	}
+	web.JSON(w, http.StatusOK, h.dbReportToAPI(dbReport))
 }
 
 // MarkAsRead handles POST /api/v1/annual_reports/:id/read
@@ -130,42 +116,35 @@ func (h *AnnualReportsHandler) MarkAsRead(w http.ResponseWriter, r *http.Request
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
-
-	ctx := r.Context()
-
-	if h.useDB() {
-		// Get report by account and year to get the ID
-		dbReport, err := h.queries.GetAnnualReportByAccountAndYear(ctx, db.GetAnnualReportByAccountAndYearParams{
-			AccountID: accountID,
-			Year:      int32(year),
-		})
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				web.JSONError(w, http.StatusNotFound, "Record not found")
-			} else {
-				web.JSONError(w, http.StatusInternalServerError, "Database error")
-			}
-			return
-		}
-
-		// Mark as viewed
-		updated, err := h.queries.MarkAnnualReportViewed(ctx, dbReport.ID)
-		if err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Failed to mark as read")
-			return
-		}
-
-		web.JSON(w, http.StatusOK, h.dbReportToAPI(updated))
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Annual reports unavailable")
 		return
 	}
 
-	// Mock fallback
-	now := time.Now()
-	web.JSON(w, http.StatusOK, AnnualReport{
-		Year:     year,
-		Data:     map[string]interface{}{},
-		ViewedAt: &now,
+	ctx := r.Context()
+
+	// Get report by account and year to get the ID
+	dbReport, err := h.queries.GetAnnualReportByAccountAndYear(ctx, db.GetAnnualReportByAccountAndYearParams{
+		AccountID: accountID,
+		Year:      int32(year),
 	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+		} else {
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+		}
+		return
+	}
+
+	// Mark as viewed
+	updated, err := h.queries.MarkAnnualReportViewed(ctx, dbReport.ID)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to mark as read")
+		return
+	}
+
+	web.JSON(w, http.StatusOK, h.dbReportToAPI(updated))
 }
 
 func (h *AnnualReportsHandler) dbReportToAPI(r db.GeneratedAnnualReport) AnnualReport {

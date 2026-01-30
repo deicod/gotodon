@@ -12,38 +12,17 @@ import (
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
-	"github.com/deicod/gotodon/pkg/snowflake"
 )
 
 // PollsHandler handles poll endpoints
 type PollsHandler struct {
 	queries *db.Queries
-	idGen   *snowflake.Generator
-	// In-memory storage fallback
-	memPolls     map[int64]*PollData
-	memPollVotes map[int64]map[int64][]int // poll_id -> account_id -> choices
-}
-
-// PollData stores poll information (in-memory fallback)
-type PollData struct {
-	ID          int64
-	AccountID   int64
-	ExpiresAt   time.Time
-	Options     []string
-	Votes       []int
-	Multiple    bool
-	HideTotals  bool
-	VotesCount  int
-	VotersCount int
 }
 
 // NewPollsHandler creates a new polls handler
 func NewPollsHandler(queries *db.Queries) *PollsHandler {
 	return &PollsHandler{
-		queries:      queries,
-		idGen:        snowflake.NewGenerator(),
-		memPolls:     make(map[int64]*PollData),
-		memPollVotes: make(map[int64]map[int64][]int),
+		queries: queries,
 	}
 }
 
@@ -146,34 +125,17 @@ func (h *PollsHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	accountID, _ := middleware.GetAccountID(r.Context())
 	ctx := r.Context()
-
-	if h.useDB() {
-		dbPoll, err := h.queries.GetPoll(ctx, pollID)
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-		web.JSON(w, http.StatusOK, h.dbPollToAPI(ctx, dbPoll, accountID))
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Polls unavailable")
 		return
 	}
 
-	// In-memory fallback
-	poll, exists := h.memPolls[pollID]
-	if !exists {
+	dbPoll, err := h.queries.GetPoll(ctx, pollID)
+	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
-
-	var ownVotes []int
-	voted := false
-	if votes, exists := h.memPollVotes[pollID]; exists {
-		if v, exists := votes[accountID]; exists {
-			ownVotes = v
-			voted = true
-		}
-	}
-
-	web.JSON(w, http.StatusOK, h.buildMemPollResponse(poll, voted, ownVotes))
+	web.JSON(w, http.StatusOK, h.dbPollToAPI(ctx, dbPoll, accountID))
 }
 
 // Vote handles POST /api/v1/polls/:id/votes
@@ -204,187 +166,62 @@ func (h *PollsHandler) Vote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-
-	if h.useDB() {
-		dbPoll, err := h.queries.GetPoll(ctx, pollID)
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-
-		// Check expiration
-		if dbPoll.ExpiresAt.Valid && time.Now().After(dbPoll.ExpiresAt.Time) {
-			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Poll has ended")
-			return
-		}
-
-		// Check if already voted
-		existingVotes, err := h.queries.GetVotes(ctx, db.GetVotesParams{
-			PollID:    pollID,
-			AccountID: pgtype.Int8{Int64: accountID, Valid: true},
-		})
-		if err == nil && len(existingVotes) > 0 {
-			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: You have already voted on this poll")
-			return
-		}
-
-		// Validate choices
-		if !dbPoll.Multiple && len(req.Choices) > 1 {
-			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: You can only select one option")
-			return
-		}
-		for _, choice := range req.Choices {
-			if choice < 0 || choice >= len(dbPoll.Options) {
-				web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Invalid choice")
-				return
-			}
-		}
-
-		// Record votes
-		for _, choice := range req.Choices {
-			_ = h.queries.Vote(ctx, db.VoteParams{
-				PollID:    pollID,
-				AccountID: pgtype.Int8{Int64: accountID, Valid: true},
-				Choice:    int32(choice),
-			})
-			_ = h.queries.IncrementVoteCount(ctx, db.IncrementVoteCountParams{
-				ID:      pollID,
-				Column2: int32(choice),
-			})
-		}
-		_ = h.queries.IncrementVotersCount(ctx, pollID)
-
-		// Refresh and return
-		dbPoll, _ = h.queries.GetPoll(ctx, pollID)
-		web.JSON(w, http.StatusOK, h.dbPollToAPI(ctx, dbPoll, accountID))
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Polls unavailable")
 		return
 	}
 
-	// In-memory fallback
-	poll, exists := h.memPolls[pollID]
-	if !exists {
+	dbPoll, err := h.queries.GetPoll(ctx, pollID)
+	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
 
-	// Check if expired
-	if time.Now().After(poll.ExpiresAt) {
+	// Check expiration
+	if dbPoll.ExpiresAt.Valid && time.Now().After(dbPoll.ExpiresAt.Time) {
 		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Poll has ended")
 		return
 	}
 
 	// Check if already voted
-	if h.memPollVotes[pollID] == nil {
-		h.memPollVotes[pollID] = make(map[int64][]int)
-	}
-	if _, voted := h.memPollVotes[pollID][accountID]; voted {
+	existingVotes, err := h.queries.GetVotes(ctx, db.GetVotesParams{
+		PollID:    pollID,
+		AccountID: pgtype.Int8{Int64: accountID, Valid: true},
+	})
+	if err == nil && len(existingVotes) > 0 {
 		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: You have already voted on this poll")
 		return
 	}
 
 	// Validate choices
-	if !poll.Multiple && len(req.Choices) > 1 {
+	if !dbPoll.Multiple && len(req.Choices) > 1 {
 		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: You can only select one option")
 		return
 	}
 	for _, choice := range req.Choices {
-		if choice < 0 || choice >= len(poll.Options) {
+		if choice < 0 || choice >= len(dbPoll.Options) {
 			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Invalid choice")
 			return
 		}
 	}
 
 	// Record votes
-	h.memPollVotes[pollID][accountID] = req.Choices
-	poll.VotersCount++
 	for _, choice := range req.Choices {
-		poll.Votes[choice]++
-		poll.VotesCount++
-	}
-
-	web.JSON(w, http.StatusOK, h.buildMemPollResponse(poll, true, req.Choices))
-}
-
-// CreatePoll creates a poll for a status (internal use)
-func (h *PollsHandler) CreatePoll(accountID int64, options []string, expiresIn int, multiple, hideTotals bool) *PollData {
-	ctx := context.Background()
-
-	if h.useDB() {
-		// Create initial tallies
-		tallies := make([]int64, len(options))
-		memTallies := make([]int, len(options))
-
-		expiresAt := time.Now().Add(time.Duration(expiresIn) * time.Second)
-
-		dbPoll, err := h.queries.CreatePoll(ctx, db.CreatePollParams{
-			AccountID:     pgtype.Int8{Int64: accountID, Valid: true},
-			ExpiresAt:     pgtype.Timestamptz{Time: expiresAt, Valid: true},
-			Options:       options,
-			CachedTallies: tallies,
-			Multiple:      multiple,
-			HideTotals:    hideTotals,
+		_ = h.queries.Vote(ctx, db.VoteParams{
+			PollID:    pollID,
+			AccountID: pgtype.Int8{Int64: accountID, Valid: true},
+			Choice:    int32(choice),
 		})
-		if err == nil {
-			// Return memory representation for compatibility
-			return &PollData{
-				ID:          dbPoll.ID,
-				AccountID:   accountID,
-				ExpiresAt:   expiresAt,
-				Options:     options,
-				Votes:       memTallies,
-				Multiple:    multiple,
-				HideTotals:  hideTotals,
-				VotesCount:  0,
-				VotersCount: 0,
-			}
-		}
+		_ = h.queries.IncrementVoteCount(ctx, db.IncrementVoteCountParams{
+			ID:      pollID,
+			Column2: int32(choice),
+		})
 	}
+	_ = h.queries.IncrementVotersCount(ctx, pollID)
 
-	// In-memory fallback
-	pollID := h.idGen.Generate()
-	poll := &PollData{
-		ID:         pollID,
-		AccountID:  accountID,
-		ExpiresAt:  time.Now().Add(time.Duration(expiresIn) * time.Second),
-		Options:    options,
-		Votes:      make([]int, len(options)),
-		Multiple:   multiple,
-		HideTotals: hideTotals,
-	}
-	h.memPolls[pollID] = poll
-	return poll
-}
-
-func (h *PollsHandler) buildMemPollResponse(poll *PollData, voted bool, ownVotes []int) PollResponse {
-	options := make([]PollOption, len(poll.Options))
-	for i, opt := range poll.Options {
-		votes := poll.Votes[i]
-		options[i] = PollOption{
-			Title:      opt,
-			VotesCount: &votes,
-		}
-	}
-
-	expired := time.Now().After(poll.ExpiresAt)
-
-	resp := PollResponse{
-		ID:          strconv.FormatInt(poll.ID, 10),
-		ExpiresAt:   &poll.ExpiresAt,
-		Expired:     expired,
-		Multiple:    poll.Multiple,
-		VotesCount:  poll.VotesCount,
-		VotersCount: &poll.VotersCount,
-		Voted:       voted,
-		OwnVotes:    ownVotes,
-		Options:     options,
-		Emojis:      []CustomEmoji{},
-	}
-
-	if ownVotes == nil {
-		resp.OwnVotes = []int{}
-	}
-
-	return resp
+	// Refresh and return
+	dbPoll, _ = h.queries.GetPoll(ctx, pollID)
+	web.JSON(w, http.StatusOK, h.dbPollToAPI(ctx, dbPoll, accountID))
 }
 
 // RegisterRoutes registers poll routes

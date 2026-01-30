@@ -782,18 +782,7 @@ func (h *PushHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var data map[string]any
-	if len(sub.Data) > 0 {
-		_ = json.Unmarshal(sub.Data, &data)
-	}
-	alerts := make(map[string]bool)
-	if a, ok := data["alerts"].(map[string]any); ok {
-		for k, v := range a {
-			if b, ok := v.(bool); ok {
-				alerts[k] = b
-			}
-		}
-	}
+	alerts := pushAlertsFromData(sub.Data)
 
 	web.JSON(w, http.StatusOK, PushSubscription{
 		ID:        strconv.FormatInt(sub.ID, 10),
@@ -812,7 +801,11 @@ func (h *PushHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID, _ := middleware.GetUserID(r.Context())
-	tokenID, _ := r.Context().Value(middleware.ContextKeyTokenID).(int64)
+	tokenID, ok := r.Context().Value(middleware.ContextKeyTokenID).(int64)
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
 
 	var req struct {
 		Subscription struct {
@@ -831,18 +824,54 @@ func (h *PushHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := map[string]any{
-		"alerts": req.Data.Alerts,
+	endpoint := strings.TrimSpace(req.Subscription.Endpoint)
+	if endpoint == "" {
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Endpoint is required")
+		return
 	}
-	dataBytes, _ := json.Marshal(data)
+	p256dh := strings.TrimSpace(req.Subscription.Keys.P256DH)
+	authKey := strings.TrimSpace(req.Subscription.Keys.Auth)
+	if p256dh == "" || authKey == "" {
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Keys are required")
+		return
+	}
+
+	dataBytes, alerts, err := mergePushAlertData(nil, req.Data.Alerts)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to create subscription")
+		return
+	}
+
+	ctx := r.Context()
+	updated, err := h.queries.UpdatePushSubscriptionDetails(ctx, db.UpdatePushSubscriptionDetailsParams{
+		AccessTokenID: pgtype.Int8{Int64: tokenID, Valid: true},
+		Endpoint:      endpoint,
+		KeyP256dh:     pgtype.Text{String: p256dh, Valid: true},
+		KeyAuth:       pgtype.Text{String: authKey, Valid: true},
+		Data:          dataBytes,
+		UserID:        pgtype.Int8{Int64: userID, Valid: userID > 0},
+	})
+	if err == nil {
+		web.JSON(w, http.StatusOK, PushSubscription{
+			ID:        strconv.FormatInt(updated.ID, 10),
+			Endpoint:  updated.Endpoint,
+			ServerKey: h.cfg.Secrets.VAPIDPublic,
+			Alerts:    alerts,
+		})
+		return
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to create subscription")
+		return
+	}
 
 	// Save to DB
-	sub, err := h.queries.CreatePushSubscription(r.Context(), db.CreatePushSubscriptionParams{
-		Endpoint:      req.Subscription.Endpoint,
-		KeyP256dh:     pgtype.Text{String: req.Subscription.Keys.P256DH, Valid: true},
-		KeyAuth:       pgtype.Text{String: req.Subscription.Keys.Auth, Valid: true},
+	sub, err := h.queries.CreatePushSubscription(ctx, db.CreatePushSubscriptionParams{
+		Endpoint:      endpoint,
+		KeyP256dh:     pgtype.Text{String: p256dh, Valid: true},
+		KeyAuth:       pgtype.Text{String: authKey, Valid: true},
 		Data:          dataBytes,
-		UserID:        pgtype.Int8{Int64: userID, Valid: true},
+		UserID:        pgtype.Int8{Int64: userID, Valid: userID > 0},
 		AccessTokenID: pgtype.Int8{Int64: tokenID, Valid: true},
 	})
 	if err != nil {
@@ -854,13 +883,19 @@ func (h *PushHandler) Create(w http.ResponseWriter, r *http.Request) {
 		ID:        strconv.FormatInt(sub.ID, 10),
 		Endpoint:  sub.Endpoint,
 		ServerKey: h.cfg.Secrets.VAPIDPublic,
-		Alerts:    req.Data.Alerts,
+		Alerts:    alerts,
 	})
 }
 
 // Update handles PUT /api/v1/push/subscription
 func (h *PushHandler) Update(w http.ResponseWriter, r *http.Request) {
 	_, ok := middleware.GetAccountID(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	tokenID, ok := r.Context().Value(middleware.ContextKeyTokenID).(int64)
 	if !ok {
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
 		return
@@ -875,13 +910,49 @@ func (h *PushHandler) Update(w http.ResponseWriter, r *http.Request) {
 		web.JSONError(w, http.StatusBadRequest, "Invalid request")
 		return
 	}
+	if req.Data.Alerts == nil {
+		web.JSONError(w, http.StatusBadRequest, "Invalid request")
+		return
+	}
 
-	// Fallback: Return what we have
+	ctx := r.Context()
+	current, err := h.queries.GetPushSubscription(ctx, db.GetPushSubscriptionParams{
+		AccessTokenID: pgtype.Int8{Int64: tokenID, Valid: true},
+		UserID:        pgtype.Int8{Valid: false},
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+		web.JSONError(w, http.StatusInternalServerError, "Failed to update subscription")
+		return
+	}
+
+	dataBytes, alerts, err := mergePushAlertData(current.Data, req.Data.Alerts)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to update subscription")
+		return
+	}
+
+	updated, err := h.queries.UpdatePushSubscription(ctx, db.UpdatePushSubscriptionParams{
+		AccessTokenID: pgtype.Int8{Int64: tokenID, Valid: true},
+		Data:          dataBytes,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+		web.JSONError(w, http.StatusInternalServerError, "Failed to update subscription")
+		return
+	}
+
 	web.JSON(w, http.StatusOK, PushSubscription{
-		ID:        "1", // Mock ID
-		Endpoint:  "",
+		ID:        strconv.FormatInt(updated.ID, 10),
+		Endpoint:  updated.Endpoint,
 		ServerKey: h.cfg.Secrets.VAPIDPublic,
-		Alerts:    req.Data.Alerts, // Reflect back
+		Alerts:    alerts,
 	})
 }
 
@@ -893,13 +964,55 @@ func (h *PushHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tokenID, _ := r.Context().Value(middleware.ContextKeyTokenID).(int64)
+	tokenID, ok := r.Context().Value(middleware.ContextKeyTokenID).(int64)
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
 
 	if h.queries != nil {
 		_ = h.queries.DeletePushSubscription(r.Context(), pgtype.Int8{Int64: tokenID, Valid: true})
 	}
 
 	web.JSON(w, http.StatusOK, map[string]any{})
+}
+
+func pushAlertsFromData(data []byte) map[string]bool {
+	alerts := make(map[string]bool)
+	if len(data) == 0 {
+		return alerts
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return alerts
+	}
+	rawAlerts, ok := payload["alerts"].(map[string]any)
+	if !ok {
+		return alerts
+	}
+	for key, value := range rawAlerts {
+		if enabled, ok := value.(bool); ok {
+			alerts[key] = enabled
+		}
+	}
+	return alerts
+}
+
+func mergePushAlertData(existing []byte, updates map[string]bool) ([]byte, map[string]bool, error) {
+	payload := map[string]any{}
+	if len(existing) > 0 {
+		_ = json.Unmarshal(existing, &payload)
+	}
+	alerts := pushAlertsFromData(existing)
+	for key, value := range updates {
+		alerts[key] = value
+	}
+	payload["alerts"] = alerts
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	return data, alerts, nil
 }
 
 // RegisterRoutes registers push routes

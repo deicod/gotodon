@@ -103,7 +103,7 @@ func (h *FeaturedTagsHandler) Suggestions(w http.ResponseWriter, r *http.Request
 	}
 
 	if !h.useDB() {
-		web.JSON(w, http.StatusOK, []TagResponse{})
+		web.JSONError(w, http.StatusInternalServerError, "Featured tags unavailable")
 		return
 	}
 

@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestPeersHandler_Search_MockMode(t *testing.T) {
+func TestPeersHandler_Search_DBUnavailable(t *testing.T) {
 	h := NewPeersHandler(nil)
 
 	tests := []struct {
@@ -16,9 +16,9 @@ func TestPeersHandler_Search_MockMode(t *testing.T) {
 		wantCode int
 	}{
 		{
-			name:     "search with query returns empty list in mock mode",
+			name:     "search with query returns error when db unavailable",
 			query:    "mastodon",
-			wantCode: http.StatusOK,
+			wantCode: http.StatusInternalServerError,
 		},
 		{
 			name:     "empty query returns empty list",
@@ -42,9 +42,11 @@ func TestPeersHandler_Search_MockMode(t *testing.T) {
 				t.Errorf("status = %d, want %d", rec.Code, tt.wantCode)
 			}
 
-			var domains []string
-			if err := json.Unmarshal(rec.Body.Bytes(), &domains); err != nil {
-				t.Fatalf("Failed to unmarshal response: %v", err)
+			if rec.Code == http.StatusOK {
+				var domains []string
+				if err := json.Unmarshal(rec.Body.Bytes(), &domains); err != nil {
+					t.Fatalf("Failed to unmarshal response: %v", err)
+				}
 			}
 		})
 	}

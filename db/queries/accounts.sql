@@ -56,6 +56,7 @@ UPDATE accounts SET
     avatar_file_name = COALESCE(sqlc.narg('avatar_file_name'), avatar_file_name),
     header_file_name = COALESCE(sqlc.narg('header_file_name'), header_file_name),
     last_webfingered_at = COALESCE(sqlc.narg('last_webfingered_at'), last_webfingered_at),
+    attribution_domains = COALESCE(sqlc.narg('attribution_domains'), attribution_domains),
     updated_at = now()
 WHERE id = $1
 RETURNING *;

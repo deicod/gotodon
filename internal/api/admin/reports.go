@@ -4,10 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -20,15 +18,13 @@ import (
 
 // ReportsHandler handles admin report endpoints
 type ReportsHandler struct {
-	queries    *db.Queries
-	memReports map[int64]*memReport
+	queries *db.Queries
 }
 
 // NewReportsHandler creates a new admin reports handler
 func NewReportsHandler(queries *db.Queries) *ReportsHandler {
 	return &ReportsHandler{
-		queries:    queries,
-		memReports: make(map[int64]*memReport),
+		queries: queries,
 	}
 }
 
@@ -120,67 +116,6 @@ func accountFromDB(acc db.Account) *v1.Account {
 		domain = acc.Domain.String
 	}
 	return accountFromUsername(acc.ID, acc.Username, domain)
-}
-
-type memReport struct {
-	ID              int64
-	StatusIDs       []int64
-	RuleIDs         []int64
-	Comment         string
-	Forwarded       bool
-	Category        int32
-	AccountID       int64
-	TargetAccountID int64
-	AssignedAccount *v1.Account
-	ActionTakenBy   *v1.Account
-	ActionTakenAt   *time.Time
-	Account         *v1.Account
-	TargetAccount   *v1.Account
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-}
-
-func mapMemReport(report *memReport) AdminReport {
-	rep := AdminReport{
-		ID:              strconv.FormatInt(report.ID, 10),
-		ActionTaken:     report.ActionTakenAt != nil,
-		Category:        mapCategory(report.Category),
-		Comment:         report.Comment,
-		Forwarded:       report.Forwarded,
-		TargetAccountID: strconv.FormatInt(report.TargetAccountID, 10),
-		AccountID:       strconv.FormatInt(report.AccountID, 10),
-		CreatedAt:       report.CreatedAt.String(),
-		UpdatedAt:       report.UpdatedAt.String(),
-		StatusIDs:       idSliceToStrings(report.StatusIDs),
-		RuleIDs:         idSliceToStrings(report.RuleIDs),
-	}
-
-	if report.ActionTakenAt != nil {
-		t := report.ActionTakenAt.String()
-		rep.ActionTakenAt = &t
-	}
-
-	if report.Account != nil {
-		rep.Account = report.Account
-	} else {
-		rep.Account = accountFromID(report.AccountID)
-	}
-
-	if report.TargetAccount != nil {
-		rep.TargetAccount = report.TargetAccount
-	} else {
-		rep.TargetAccount = accountFromID(report.TargetAccountID)
-	}
-
-	if report.AssignedAccount != nil {
-		rep.AssignedAccount = report.AssignedAccount
-	}
-
-	if report.ActionTakenBy != nil {
-		rep.ActionTakenBy = report.ActionTakenBy
-	}
-
-	return rep
 }
 
 func (h *ReportsHandler) useDB() bool {
@@ -312,46 +247,7 @@ func (h *ReportsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
 		web.JSON(w, http.StatusOK, reports)
 		return
 	}
-
-	memReports := make([]*memReport, 0, len(h.memReports))
-	for _, report := range h.memReports {
-		if report == nil {
-			continue
-		}
-		if resolved && report.ActionTakenAt == nil {
-			continue
-		}
-		if !resolved && report.ActionTakenAt != nil {
-			continue
-		}
-		if accountID > 0 && report.AccountID != accountID {
-			continue
-		}
-		if targetAccountID > 0 && report.TargetAccountID != targetAccountID {
-			continue
-		}
-		memReports = append(memReports, report)
-	}
-
-	sort.Slice(memReports, func(i, j int) bool {
-		return memReports[i].CreatedAt.After(memReports[j].CreatedAt)
-	})
-
-	start := offset
-	if start > len(memReports) {
-		start = len(memReports)
-	}
-	end := start + limit
-	if end > len(memReports) {
-		end = len(memReports)
-	}
-
-	reports := make([]AdminReport, 0, end-start)
-	for _, report := range memReports[start:end] {
-		reports = append(reports, mapMemReport(report))
-	}
-
-	web.JSON(w, http.StatusOK, reports)
+	web.JSONError(w, http.StatusInternalServerError, "Report data unavailable")
 }
 
 // Get handles GET /api/v1/admin/reports/:id
@@ -367,12 +263,7 @@ func (h *ReportsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !h.useDB() {
-		report := h.memReports[id]
-		if report == nil {
-			web.JSONError(w, http.StatusNotFound, "Not found")
-			return
-		}
-		web.JSON(w, http.StatusOK, mapMemReport(report))
+		web.JSONError(w, http.StatusInternalServerError, "Report data unavailable")
 		return
 	}
 
@@ -466,10 +357,8 @@ func (h *ReportsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		category = pgtype.Int4{Int32: mapped, Valid: true}
 	}
 
-	ruleIDsProvided := false
 	var ruleIDs []int64
 	if raw, ok := payload["rule_ids"]; ok {
-		ruleIDsProvided = true
 		trimmed := strings.TrimSpace(string(raw))
 		if trimmed == "" || trimmed == "null" {
 			web.JSONError(w, http.StatusUnprocessableEntity, "Invalid rule_ids")
@@ -510,19 +399,7 @@ func (h *ReportsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !h.useDB() {
-		report := h.memReports[id]
-		if report == nil {
-			web.JSONError(w, http.StatusNotFound, "Not found")
-			return
-		}
-		if category.Valid {
-			report.Category = category.Int32
-		}
-		if ruleIDsProvided {
-			report.RuleIDs = ruleIDs
-		}
-		report.UpdatedAt = time.Now().UTC()
-		web.JSON(w, http.StatusOK, mapMemReport(report))
+		web.JSONError(w, http.StatusInternalServerError, "Report data unavailable")
 		return
 	}
 
@@ -558,14 +435,7 @@ func (h *ReportsHandler) AssignToSelf(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !h.useDB() {
-		report := h.memReports[id]
-		if report == nil {
-			web.JSONError(w, http.StatusNotFound, "Not found")
-			return
-		}
-		report.AssignedAccount = accountFromID(adminID)
-		report.UpdatedAt = time.Now().UTC()
-		web.JSON(w, http.StatusOK, mapMemReport(report))
+		web.JSONError(w, http.StatusInternalServerError, "Report data unavailable")
 		return
 	}
 
@@ -594,14 +464,7 @@ func (h *ReportsHandler) Unassign(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !h.useDB() {
-		report := h.memReports[id]
-		if report == nil {
-			web.JSONError(w, http.StatusNotFound, "Not found")
-			return
-		}
-		report.AssignedAccount = nil
-		report.UpdatedAt = time.Now().UTC()
-		web.JSON(w, http.StatusOK, mapMemReport(report))
+		web.JSONError(w, http.StatusInternalServerError, "Report data unavailable")
 		return
 	}
 
@@ -630,15 +493,7 @@ func (h *ReportsHandler) Reopen(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !h.useDB() {
-		report := h.memReports[id]
-		if report == nil {
-			web.JSONError(w, http.StatusNotFound, "Not found")
-			return
-		}
-		report.ActionTakenAt = nil
-		report.ActionTakenBy = nil
-		report.UpdatedAt = time.Now().UTC()
-		web.JSON(w, http.StatusOK, mapMemReport(report))
+		web.JSONError(w, http.StatusInternalServerError, "Report data unavailable")
 		return
 	}
 
@@ -665,16 +520,7 @@ func (h *ReportsHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !h.useDB() {
-		report := h.memReports[id]
-		if report == nil {
-			web.JSONError(w, http.StatusNotFound, "Not found")
-			return
-		}
-		now := time.Now().UTC()
-		report.ActionTakenAt = &now
-		report.ActionTakenBy = accountFromID(adminID)
-		report.UpdatedAt = now
-		web.JSON(w, http.StatusOK, mapMemReport(report))
+		web.JSONError(w, http.StatusInternalServerError, "Report data unavailable")
 		return
 	}
 

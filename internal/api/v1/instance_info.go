@@ -201,12 +201,7 @@ func formatTermsContent(text, domain string) string {
 // Rules handles GET /api/v1/instance/rules
 func (h *InstanceInfoHandler) Rules(w http.ResponseWriter, r *http.Request) {
 	if h.queries == nil {
-		// Mock fallback
-		web.JSON(w, http.StatusOK, []RuleResponse{
-			{ID: "1", Text: "Be respectful to others."},
-			{ID: "2", Text: "No spam or advertising."},
-			{ID: "3", Text: "No illegal content."},
-		})
+		web.JSONError(w, http.StatusInternalServerError, "Instance info unavailable")
 		return
 	}
 
@@ -232,8 +227,7 @@ func (h *InstanceInfoHandler) Rules(w http.ResponseWriter, r *http.Request) {
 // Peers handles GET /api/v1/instance/peers
 func (h *InstanceInfoHandler) Peers(w http.ResponseWriter, r *http.Request) {
 	if h.queries == nil {
-		// Mock fallback - return empty list
-		web.JSON(w, http.StatusOK, []string{})
+		web.JSONError(w, http.StatusInternalServerError, "Instance info unavailable")
 		return
 	}
 
@@ -259,6 +253,10 @@ func (h *InstanceInfoHandler) Peers(w http.ResponseWriter, r *http.Request) {
 
 // Activity handles GET /api/v1/instance/activity
 func (h *InstanceInfoHandler) Activity(w http.ResponseWriter, r *http.Request) {
+	if h.queries == nil {
+		web.JSONError(w, http.StatusInternalServerError, "Instance info unavailable")
+		return
+	}
 	// Return last 12 weeks of activity
 	// In a production system, this would query aggregated statistics
 
@@ -314,12 +312,20 @@ func (h *InstanceInfoHandler) Activity(w http.ResponseWriter, r *http.Request) {
 
 // ExtendedDescription handles GET /api/v1/instance/extended_description
 func (h *InstanceInfoHandler) ExtendedDescriptionHandler(w http.ResponseWriter, r *http.Request) {
+	if h.queries == nil {
+		web.JSONError(w, http.StatusInternalServerError, "Instance info unavailable")
+		return
+	}
 	desc := extendedDescriptionFromSettings(r.Context(), h.queries)
 	web.JSON(w, http.StatusOK, desc)
 }
 
 // PrivacyPolicy handles GET /api/v1/instance/privacy_policy
 func (h *InstanceInfoHandler) PrivacyPolicyHandler(w http.ResponseWriter, r *http.Request) {
+	if h.queries == nil {
+		web.JSONError(w, http.StatusInternalServerError, "Instance info unavailable")
+		return
+	}
 	domain := instanceFederationDomain(h.cfg)
 	policy := privacyPolicyFromSettings(r.Context(), h.queries, domain)
 	web.JSON(w, http.StatusOK, policy)
@@ -337,8 +343,18 @@ func (h *InstanceInfoHandler) TermsOfServiceByDate(w http.ResponseWriter, r *htt
 }
 
 func (h *InstanceInfoHandler) termsOfService(w http.ResponseWriter, r *http.Request, date string) {
+	var parsed *time.Time
+	if date != "" {
+		parsedDate, parseErr := time.Parse("2006-01-02", date)
+		if parseErr != nil {
+			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+		parsed = &parsedDate
+	}
+
 	if h.queries == nil {
-		web.JSONError(w, http.StatusNotFound, "Record not found")
+		web.JSONError(w, http.StatusInternalServerError, "Instance info unavailable")
 		return
 	}
 
@@ -346,13 +362,8 @@ func (h *InstanceInfoHandler) termsOfService(w http.ResponseWriter, r *http.Requ
 	var tos db.TermsOfService
 	var err error
 
-	if date != "" {
-		parsed, parseErr := time.Parse("2006-01-02", date)
-		if parseErr != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-		tos, err = h.queries.GetTermsOfServiceByEffectiveDate(ctx, pgtype.Date{Time: parsed, Valid: true})
+	if parsed != nil {
+		tos, err = h.queries.GetTermsOfServiceByEffectiveDate(ctx, pgtype.Date{Time: *parsed, Valid: true})
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				web.JSONError(w, http.StatusNotFound, "Record not found")
@@ -608,6 +619,10 @@ func (h *InstanceInfoHandler) Languages(w http.ResponseWriter, r *http.Request) 
 func (h *InstanceInfoHandler) DomainBlocksPublic(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	accountID, authenticated := middleware.GetAccountID(ctx)
+	if h.queries == nil {
+		web.JSONError(w, http.StatusInternalServerError, "Instance info unavailable")
+		return
+	}
 
 	showBlocks, showRationale := instanceDomainBlockSettings(ctx, h.queries)
 	allowed := false

@@ -112,3 +112,80 @@ func (q *Queries) GetPushSubscriptionByEndpoint(ctx context.Context, endpoint st
 	)
 	return i, err
 }
+
+const updatePushSubscription = `-- name: UpdatePushSubscription :one
+UPDATE web_push_subscriptions
+SET data = $2,
+    updated_at = now()
+WHERE access_token_id = $1
+RETURNING id, endpoint, key_p256dh, key_auth, data, created_at, updated_at, access_token_id, user_id, standard
+`
+
+type UpdatePushSubscriptionParams struct {
+	AccessTokenID pgtype.Int8 `db:"access_token_id" json:"access_token_id"`
+	Data          []byte      `db:"data" json:"data"`
+}
+
+func (q *Queries) UpdatePushSubscription(ctx context.Context, arg UpdatePushSubscriptionParams) (WebPushSubscription, error) {
+	row := q.db.QueryRow(ctx, updatePushSubscription, arg.AccessTokenID, arg.Data)
+	var i WebPushSubscription
+	err := row.Scan(
+		&i.ID,
+		&i.Endpoint,
+		&i.KeyP256dh,
+		&i.KeyAuth,
+		&i.Data,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AccessTokenID,
+		&i.UserID,
+		&i.Standard,
+	)
+	return i, err
+}
+
+const updatePushSubscriptionDetails = `-- name: UpdatePushSubscriptionDetails :one
+UPDATE web_push_subscriptions
+SET endpoint = $2,
+    key_p256dh = $3,
+    key_auth = $4,
+    data = $5,
+    user_id = $6,
+    updated_at = now()
+WHERE access_token_id = $1
+RETURNING id, endpoint, key_p256dh, key_auth, data, created_at, updated_at, access_token_id, user_id, standard
+`
+
+type UpdatePushSubscriptionDetailsParams struct {
+	AccessTokenID pgtype.Int8 `db:"access_token_id" json:"access_token_id"`
+	Endpoint      string      `db:"endpoint" json:"endpoint"`
+	KeyP256dh     pgtype.Text `db:"key_p256dh" json:"key_p256dh"`
+	KeyAuth       pgtype.Text `db:"key_auth" json:"key_auth"`
+	Data          []byte      `db:"data" json:"data"`
+	UserID        pgtype.Int8 `db:"user_id" json:"user_id"`
+}
+
+func (q *Queries) UpdatePushSubscriptionDetails(ctx context.Context, arg UpdatePushSubscriptionDetailsParams) (WebPushSubscription, error) {
+	row := q.db.QueryRow(ctx, updatePushSubscriptionDetails,
+		arg.AccessTokenID,
+		arg.Endpoint,
+		arg.KeyP256dh,
+		arg.KeyAuth,
+		arg.Data,
+		arg.UserID,
+	)
+	var i WebPushSubscription
+	err := row.Scan(
+		&i.ID,
+		&i.Endpoint,
+		&i.KeyP256dh,
+		&i.KeyAuth,
+		&i.Data,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AccessTokenID,
+		&i.UserID,
+		&i.Standard,
+	)
+	return i, err
+}

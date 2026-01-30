@@ -2,7 +2,6 @@ package v1
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -52,23 +51,15 @@ func TestStatusesHandler_Mute_MissingScope(t *testing.T) {
 	}
 }
 
-func TestStatusesHandler_Mute_MockMode(t *testing.T) {
+func TestStatusesHandler_Mute_DBUnavailable(t *testing.T) {
 	h := NewStatusesHandler(nil, nil, nil, nil, nil)
 	req, rec := mockAccountRequest(http.MethodPost, "/api/v1/statuses/123/mute", "")
 	req.SetPathValue("id", "123")
 
 	h.Mute(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var status Status
-	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
-	}
-	if !status.Muted {
-		t.Fatalf("muted = false, want true")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
@@ -114,22 +105,14 @@ func TestStatusesHandler_Unmute_MissingScope(t *testing.T) {
 	}
 }
 
-func TestStatusesHandler_Unmute_MockMode(t *testing.T) {
+func TestStatusesHandler_Unmute_DBUnavailable(t *testing.T) {
 	h := NewStatusesHandler(nil, nil, nil, nil, nil)
 	req, rec := mockAccountRequest(http.MethodPost, "/api/v1/statuses/123/unmute", "")
 	req.SetPathValue("id", "123")
 
 	h.Unmute(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var status Status
-	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
-	}
-	if status.Muted {
-		t.Fatalf("muted = true, want false")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }

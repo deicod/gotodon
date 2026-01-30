@@ -2,7 +2,6 @@ package v1
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,23 +11,15 @@ import (
 	"github.com/deicod/gotodon/internal/api/middleware"
 )
 
-func TestStatusesHandler_Index_NoIDs_MockMode(t *testing.T) {
+func TestStatusesHandler_Index_NoIDs_DBUnavailable(t *testing.T) {
 	h := NewStatusesHandler(nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/statuses", nil)
 	rec := httptest.NewRecorder()
 
 	h.Index(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var statuses []Status
-	if err := json.Unmarshal(rec.Body.Bytes(), &statuses); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
-	}
-	if len(statuses) != 0 {
-		t.Fatalf("statuses length = %d, want 0", len(statuses))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
@@ -71,7 +62,7 @@ func TestStatusesHandler_Index_AllowsReadScope(t *testing.T) {
 
 	h.Index(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }

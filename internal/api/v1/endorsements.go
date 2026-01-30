@@ -1,10 +1,9 @@
 package v1
 
 import (
+	"context"
 	"net/http"
 	"strconv"
-	"sync"
-	"time"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
@@ -13,22 +12,23 @@ import (
 )
 
 type EndorsementsHandler struct {
-	queries *db.Queries
+	queries endorsementsQuerier
 	cfg     *config.Config
-	mu      sync.RWMutex
-	memPins map[int64][]int64
 }
 
-func NewEndorsementsHandler(queries *db.Queries, cfg *config.Config) *EndorsementsHandler {
-	return &EndorsementsHandler{
-		queries: queries,
-		cfg:     cfg,
-		memPins: make(map[int64][]int64),
+type endorsementsQuerier interface {
+	AccountDataQuerier
+	ListAccountPins(ctx context.Context, accountID int64) ([]db.ListAccountPinsRow, error)
+	CreateAccountPin(ctx context.Context, arg db.CreateAccountPinParams) (db.AccountPin, error)
+	DeleteAccountPin(ctx context.Context, arg db.DeleteAccountPinParams) error
+	GetAccountByID(ctx context.Context, id int64) (db.Account, error)
+}
+
+func NewEndorsementsHandler(queries endorsementsQuerier, cfg *config.Config) *EndorsementsHandler {
+	if cfg == nil {
+		cfg = &config.Config{}
 	}
-}
-
-func (h *EndorsementsHandler) useDB() bool {
-	return h.queries != nil
+	return &EndorsementsHandler{queries: queries, cfg: cfg}
 }
 
 // List handles GET /api/v1/endorsements
@@ -39,16 +39,8 @@ func (h *EndorsementsHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.useDB() {
-		h.mu.RLock()
-		targets := h.memPins[accountID]
-		h.mu.RUnlock()
-
-		resp := make([]Account, 0, len(targets))
-		for _, targetID := range targets {
-			resp = append(resp, mockAccountFromID(targetID))
-		}
-		web.JSON(w, http.StatusOK, resp)
+	if h.queries == nil {
+		web.JSONError(w, http.StatusInternalServerError, "Endorsements unavailable")
 		return
 	}
 
@@ -109,25 +101,8 @@ func (h *EndorsementsHandler) Pin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.useDB() {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-
-		targets := h.memPins[accountID]
-		for _, existing := range targets {
-			if existing == targetID {
-				web.JSON(w, http.StatusOK, map[string]any{
-					"id":       strconv.FormatInt(targetID, 10),
-					"username": "user" + strconv.FormatInt(targetID, 10),
-				})
-				return
-			}
-		}
-		h.memPins[accountID] = append(targets, targetID)
-		web.JSON(w, http.StatusOK, map[string]any{
-			"id":       strconv.FormatInt(targetID, 10),
-			"username": "user" + strconv.FormatInt(targetID, 10),
-		})
+	if h.queries == nil {
+		web.JSONError(w, http.StatusInternalServerError, "Endorsements unavailable")
 		return
 	}
 
@@ -166,21 +141,8 @@ func (h *EndorsementsHandler) Unpin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.useDB() {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-
-		targets := h.memPins[accountID]
-		for i, existing := range targets {
-			if existing == targetID {
-				h.memPins[accountID] = append(targets[:i], targets[i+1:]...)
-				break
-			}
-		}
-		web.JSON(w, http.StatusOK, map[string]any{
-			"id":       strconv.FormatInt(targetID, 10),
-			"username": "user" + strconv.FormatInt(targetID, 10),
-		})
+	if h.queries == nil {
+		web.JSONError(w, http.StatusInternalServerError, "Endorsements unavailable")
 		return
 	}
 
@@ -214,36 +176,6 @@ func (h *EndorsementsHandler) RegisterRoutes(mux *http.ServeMux) {
 
 func boolPtr(b bool) *bool {
 	return &b
-}
-
-func mockAccountFromID(id int64) Account {
-	idStr := strconv.FormatInt(id, 10)
-	username := "user" + idStr
-	return Account{
-		ID:             idStr,
-		Username:       username,
-		Acct:           username,
-		DisplayName:    "User " + idStr,
-		Locked:         false,
-		Bot:            false,
-		Discoverable:   boolPtr(true),
-		Indexable:      true,
-		Group:          false,
-		CreatedAt:      time.Now().Add(-24 * time.Hour),
-		Note:           "",
-		URL:            "https://example.com/@" + username,
-		URI:            "https://example.com/users/" + username,
-		Avatar:         "https://example.com/avatars/original/missing.png",
-		AvatarStatic:   "https://example.com/avatars/original/missing.png",
-		Header:         "https://example.com/headers/original/missing.png",
-		HeaderStatic:   "https://example.com/headers/original/missing.png",
-		FollowersCount: 0,
-		FollowingCount: 0,
-		StatusesCount:  0,
-		LastStatusAt:   nil,
-		Emojis:         []CustomEmoji{},
-		Fields:         []Field{},
-	}
 }
 
 func accountFromPinRow(pin db.ListAccountPinsRow) Account {

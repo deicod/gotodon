@@ -31,7 +31,7 @@ func mockAccountsRequest(method, path string, body string, accountID int64) (*ht
 	return req, rec
 }
 
-func TestAccountsHandler_SetNote_MockMode(t *testing.T) {
+func TestAccountsHandler_SetNote_DBUnavailable(t *testing.T) {
 	h := NewAccountsHandler(nil, nil, nil, nil)
 
 	tests := []struct {
@@ -46,7 +46,7 @@ func TestAccountsHandler_SetNote_MockMode(t *testing.T) {
 			targetID:  "12345",
 			comment:   "This is my private note",
 			accountID: 67890,
-			wantCode:  http.StatusOK,
+			wantCode:  http.StatusInternalServerError,
 		},
 		{
 			name:      "unauthenticated user gets 401",
@@ -60,7 +60,7 @@ func TestAccountsHandler_SetNote_MockMode(t *testing.T) {
 			targetID:  "12345",
 			comment:   "",
 			accountID: 67890,
-			wantCode:  http.StatusOK,
+			wantCode:  http.StatusInternalServerError,
 		},
 		{
 			name:      "invalid target ID returns not found",
@@ -153,7 +153,7 @@ func TestAccountsHandler_SetNote_RequiresAuth(t *testing.T) {
 	}
 }
 
-func TestAccountsHandler_RemoveFromFollowers_MockMode(t *testing.T) {
+func TestAccountsHandler_RemoveFromFollowers_DBUnavailable(t *testing.T) {
 	h := NewAccountsHandler(nil, nil, nil, nil)
 
 	tests := []struct {
@@ -166,7 +166,7 @@ func TestAccountsHandler_RemoveFromFollowers_MockMode(t *testing.T) {
 			name:      "authenticated user can remove follower",
 			targetID:  "12345",
 			accountID: 67890,
-			wantCode:  http.StatusOK,
+			wantCode:  http.StatusInternalServerError,
 		},
 		{
 			name:      "unauthenticated user gets 401",
@@ -206,7 +206,7 @@ func TestAccountsHandler_RemoveFromFollowers_MockMode(t *testing.T) {
 	}
 }
 
-func TestAccountsHandler_Lookup_MockMode(t *testing.T) {
+func TestAccountsHandler_Lookup_DBUnavailable(t *testing.T) {
 	h := NewAccountsHandler(nil, nil, nil, nil)
 
 	tests := []struct {
@@ -217,7 +217,7 @@ func TestAccountsHandler_Lookup_MockMode(t *testing.T) {
 		{
 			name:     "valid acct returns account",
 			acct:     "testuser",
-			wantCode: http.StatusOK,
+			wantCode: http.StatusInternalServerError,
 		},
 		{
 			name:     "empty acct returns not found",

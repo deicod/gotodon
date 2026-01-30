@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -17,17 +16,14 @@ import (
 
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
-	"github.com/deicod/gotodon/pkg/snowflake"
 )
 
 const emailDomainHistoryDays = 7
 
 // EmailDomainBlocksHandler handles admin email domain block endpoints.
 type EmailDomainBlocksHandler struct {
-	queries   *db.Queries
-	redis     *redis.Client
-	idGen     *snowflake.Generator
-	memBlocks map[int64]*emailDomainBlockEntry
+	queries *db.Queries
+	redis   *redis.Client
 }
 
 type emailDomainBlockEntry struct {
@@ -49,10 +45,8 @@ type EmailDomainBlock struct {
 // NewEmailDomainBlocksHandler creates a new email domain blocks handler.
 func NewEmailDomainBlocksHandler(queries *db.Queries, redisClient *redis.Client) *EmailDomainBlocksHandler {
 	return &EmailDomainBlocksHandler{
-		queries:   queries,
-		redis:     redisClient,
-		idGen:     snowflake.NewGenerator(),
-		memBlocks: make(map[int64]*emailDomainBlockEntry),
+		queries: queries,
+		redis:   redisClient,
 	}
 }
 
@@ -168,23 +162,7 @@ func (h *EmailDomainBlocksHandler) GetAll(w http.ResponseWriter, r *http.Request
 		web.JSON(w, http.StatusOK, blocks)
 		return
 	}
-
-	ids := make([]int64, 0, len(h.memBlocks))
-	for id := range h.memBlocks {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] > ids[j] })
-
-	blocks := make([]EmailDomainBlock, 0, len(ids))
-	for _, id := range ids {
-		entry := h.memBlocks[id]
-		if entry == nil {
-			continue
-		}
-		blocks = append(blocks, mapEmailDomainBlock(*entry, emailDomainBlockHistory(r.Context(), h.redis, id)))
-	}
-
-	web.JSON(w, http.StatusOK, blocks)
+	web.JSONError(w, http.StatusInternalServerError, "Email domain blocks unavailable")
 }
 
 // Get handles GET /api/v1/admin/email_domain_blocks/{id}.
@@ -219,14 +197,7 @@ func (h *EmailDomainBlocksHandler) Get(w http.ResponseWriter, r *http.Request) {
 		web.JSON(w, http.StatusOK, mapEmailDomainBlock(entry, emailDomainBlockHistory(r.Context(), h.redis, row.ID)))
 		return
 	}
-
-	entry := h.memBlocks[blockID]
-	if entry == nil {
-		web.JSONError(w, http.StatusNotFound, "Record not found")
-		return
-	}
-
-	web.JSON(w, http.StatusOK, mapEmailDomainBlock(*entry, emailDomainBlockHistory(r.Context(), h.redis, entry.ID)))
+	web.JSONError(w, http.StatusInternalServerError, "Email domain blocks unavailable")
 }
 
 // Create handles POST /api/v1/admin/email_domain_blocks.
@@ -284,24 +255,7 @@ func (h *EmailDomainBlocksHandler) Create(w http.ResponseWriter, r *http.Request
 		web.JSON(w, http.StatusOK, mapEmailDomainBlock(entry, emailDomainBlockHistory(r.Context(), h.redis, created.ID)))
 		return
 	}
-
-	for _, entry := range h.memBlocks {
-		if entry != nil && entry.Domain == domain {
-			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Domain has already been taken")
-			return
-		}
-	}
-
-	blockID := h.idGen.Generate()
-	entry := &emailDomainBlockEntry{
-		ID:                blockID,
-		Domain:            domain,
-		CreatedAt:         time.Now().UTC(),
-		AllowWithApproval: req.AllowWithApproval,
-	}
-	h.memBlocks[blockID] = entry
-
-	web.JSON(w, http.StatusOK, mapEmailDomainBlock(*entry, emailDomainBlockHistory(r.Context(), h.redis, entry.ID)))
+	web.JSONError(w, http.StatusInternalServerError, "Email domain blocks unavailable")
 }
 
 // Delete handles DELETE /api/v1/admin/email_domain_blocks/{id}.
@@ -324,9 +278,7 @@ func (h *EmailDomainBlocksHandler) Delete(w http.ResponseWriter, r *http.Request
 		web.JSON(w, http.StatusOK, map[string]any{})
 		return
 	}
-
-	delete(h.memBlocks, blockID)
-	web.JSON(w, http.StatusOK, map[string]any{})
+	web.JSONError(w, http.StatusInternalServerError, "Email domain blocks unavailable")
 }
 
 // RegisterRoutes registers email domain block routes.

@@ -2,25 +2,30 @@
 package v1
 
 import (
+	"context"
 	"net/http"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 )
 
+type emailQuerier interface {
+	GetUserByAccountID(ctx context.Context, accountID int64) (db.User, error)
+	UpdateUserConfirmationToken(ctx context.Context, arg db.UpdateUserConfirmationTokenParams) error
+}
+
 // EmailsHandler handles email-related endpoints
 type EmailsHandler struct {
-	queries *db.Queries
+	queries emailQuerier
 }
 
 // NewEmailsHandler creates a new emails handler
-func NewEmailsHandler(queries *db.Queries) *EmailsHandler {
+func NewEmailsHandler(queries emailQuerier) *EmailsHandler {
 	return &EmailsHandler{queries: queries}
-}
-
-func (h *EmailsHandler) useDB() bool {
-	return h.queries != nil
 }
 
 // Confirmations handles POST /api/v1/emails/confirmations
@@ -32,30 +37,38 @@ func (h *EmailsHandler) Confirmations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
-
-	if h.useDB() {
-		// Get user by account ID
-		user, err := h.queries.GetUserByAccountID(ctx, accountID)
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-
-		// Check if already confirmed
-		if user.ConfirmedAt.Valid {
-			web.JSONError(w, http.StatusForbidden, "Already confirmed")
-			return
-		}
-
-		// In a real implementation, we would:
-		// 1. Generate a new confirmation token
-		// 2. Save it to the user record
-		// 3. Send the confirmation email
-		// For now, return success as we don't have email sending configured
+	if h.queries == nil {
+		web.JSONError(w, http.StatusInternalServerError, "Email confirmation unavailable")
+		return
 	}
 
-	// Return empty success response
+	ctx := r.Context()
+
+	user, err := h.queries.GetUserByAccountID(ctx, accountID)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	if user.ConfirmedAt.Valid {
+		web.JSONError(w, http.StatusForbidden, "Already confirmed")
+		return
+	}
+
+	token, err := auth.GenerateConfirmationToken()
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to generate confirmation token")
+		return
+	}
+
+	if err := h.queries.UpdateUserConfirmationToken(ctx, db.UpdateUserConfirmationTokenParams{
+		ID:                user.ID,
+		ConfirmationToken: pgtype.Text{String: token, Valid: true},
+	}); err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to update confirmation")
+		return
+	}
+
 	web.JSON(w, http.StatusOK, map[string]interface{}{})
 }
 
@@ -68,19 +81,19 @@ func (h *EmailsHandler) CheckConfirmation(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	ctx := r.Context()
-	confirmed := true // Default to true for mock mode
-
-	if h.useDB() {
-		user, err := h.queries.GetUserByAccountID(ctx, accountID)
-		if err != nil {
-			web.JSONError(w, http.StatusNotFound, "Record not found")
-			return
-		}
-		confirmed = user.ConfirmedAt.Valid
+	if h.queries == nil {
+		web.JSONError(w, http.StatusInternalServerError, "Email confirmation unavailable")
+		return
 	}
 
-	web.JSON(w, http.StatusOK, map[string]bool{"confirmed": confirmed})
+	ctx := r.Context()
+	user, err := h.queries.GetUserByAccountID(ctx, accountID)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
+
+	web.JSON(w, http.StatusOK, map[string]bool{"confirmed": user.ConfirmedAt.Valid})
 }
 
 // RegisterRoutes registers the emails routes

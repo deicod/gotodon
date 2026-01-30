@@ -2,6 +2,7 @@ package activitypub
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -17,6 +18,8 @@ import (
 )
 
 const statusRepliesLimit = 60
+
+var errStoreUnavailable = errors.New("activitypub store unavailable")
 
 // GetStatus handles GET /users/:username/statuses/:statusID
 func (h *FederationHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
@@ -39,6 +42,10 @@ func (h *FederationHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
+		if errors.Is(err, errStoreUnavailable) {
+			web.JSONError(w, http.StatusInternalServerError, "Status unavailable")
+			return
+		}
 		web.JSONError(w, http.StatusNotFound, "Status not found")
 		return
 	}
@@ -72,6 +79,10 @@ func (h *FederationHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 func (h *FederationHandler) GetStatusActivity(w http.ResponseWriter, r *http.Request) {
 	account, status, err := h.loadAccountStatus(r)
 	if err != nil {
+		if errors.Is(err, errStoreUnavailable) {
+			web.JSONError(w, http.StatusInternalServerError, "Status unavailable")
+			return
+		}
 		web.JSONError(w, http.StatusNotFound, "Status not found")
 		return
 	}
@@ -99,6 +110,10 @@ func (h *FederationHandler) GetStatusActivity(w http.ResponseWriter, r *http.Req
 func (h *FederationHandler) GetStatusReplies(w http.ResponseWriter, r *http.Request) {
 	account, status, err := h.loadAccountStatus(r)
 	if err != nil {
+		if errors.Is(err, errStoreUnavailable) {
+			web.JSONError(w, http.StatusInternalServerError, "Status unavailable")
+			return
+		}
 		web.JSONError(w, http.StatusNotFound, "Status not found")
 		return
 	}
@@ -178,6 +193,10 @@ func (h *FederationHandler) GetStatusShares(w http.ResponseWriter, r *http.Reque
 func (h *FederationHandler) renderStatusCounter(w http.ResponseWriter, r *http.Request, kind string) {
 	account, status, err := h.loadAccountStatus(r)
 	if err != nil {
+		if errors.Is(err, errStoreUnavailable) {
+			web.JSONError(w, http.StatusInternalServerError, "Status unavailable")
+			return
+		}
 		web.JSONError(w, http.StatusNotFound, "Status not found")
 		return
 	}
@@ -215,7 +234,7 @@ func (h *FederationHandler) renderStatusCounter(w http.ResponseWriter, r *http.R
 
 func (h *FederationHandler) loadAccountStatus(r *http.Request) (db.Account, db.Status, error) {
 	if !h.useDB() {
-		return db.Account{}, db.Status{}, pgx.ErrNoRows
+		return db.Account{}, db.Status{}, errStoreUnavailable
 	}
 	statusID, err := web.Int64Param(r, "statusID")
 	if err != nil {

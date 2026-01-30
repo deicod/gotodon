@@ -24,7 +24,7 @@ func mockAnnualReportsRequest(method, path string, accountID int64) (*http.Reque
 	return req, rec
 }
 
-func TestAnnualReportsHandler_List_MockMode(t *testing.T) {
+func TestAnnualReportsHandler_List_DBUnavailable(t *testing.T) {
 	h := NewAnnualReportsHandler(nil)
 
 	tests := []struct {
@@ -33,9 +33,9 @@ func TestAnnualReportsHandler_List_MockMode(t *testing.T) {
 		wantCode  int
 	}{
 		{
-			name:      "authenticated user gets list",
+			name:      "authenticated user gets error",
 			accountID: 12345,
-			wantCode:  http.StatusOK,
+			wantCode:  http.StatusInternalServerError,
 		},
 		{
 			name:      "unauthenticated user gets 401",
@@ -64,7 +64,7 @@ func TestAnnualReportsHandler_List_MockMode(t *testing.T) {
 	}
 }
 
-func TestAnnualReportsHandler_Get_MockMode(t *testing.T) {
+func TestAnnualReportsHandler_Get_DBUnavailable(t *testing.T) {
 	h := NewAnnualReportsHandler(nil)
 
 	tests := []struct {
@@ -74,10 +74,10 @@ func TestAnnualReportsHandler_Get_MockMode(t *testing.T) {
 		wantCode  int
 	}{
 		{
-			name:      "authenticated user gets report",
+			name:      "authenticated user gets error",
 			year:      "2023",
 			accountID: 12345,
-			wantCode:  http.StatusOK,
+			wantCode:  http.StatusInternalServerError,
 		},
 		{
 			name:      "unauthenticated user gets 401",
@@ -117,7 +117,7 @@ func TestAnnualReportsHandler_Get_MockMode(t *testing.T) {
 	}
 }
 
-func TestAnnualReportsHandler_MarkAsRead_MockMode(t *testing.T) {
+func TestAnnualReportsHandler_MarkAsRead_DBUnavailable(t *testing.T) {
 	h := NewAnnualReportsHandler(nil)
 
 	tests := []struct {
@@ -127,10 +127,10 @@ func TestAnnualReportsHandler_MarkAsRead_MockMode(t *testing.T) {
 		wantCode  int
 	}{
 		{
-			name:      "authenticated user can mark as read",
+			name:      "authenticated user gets error",
 			year:      "2023",
 			accountID: 12345,
-			wantCode:  http.StatusOK,
+			wantCode:  http.StatusInternalServerError,
 		},
 		{
 			name:      "unauthenticated user gets 401",

@@ -2,7 +2,6 @@ package v2
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -35,22 +34,14 @@ func mockNotificationRequest(method, path, body string, accountID int64) (*http.
 	return req, rec
 }
 
-func TestNotificationsHandler_List_MockMode(t *testing.T) {
+func TestNotificationsHandler_List_NoDB(t *testing.T) {
 	h := NewNotificationsHandler(nil, nil)
 
 	req, rec := mockNotificationRequest(http.MethodGet, "/api/v2/notifications", "", 12345)
 	h.List(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var resp GroupedNotificationsResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
-	}
-	if resp.NotificationGroups == nil {
-		t.Error("expected notification_groups field in response")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 
 	req, rec = mockNotificationRequest(http.MethodGet, "/api/v2/notifications", "", 0)
@@ -60,22 +51,14 @@ func TestNotificationsHandler_List_MockMode(t *testing.T) {
 	}
 }
 
-func TestNotificationsHandler_UnreadCount_MockMode(t *testing.T) {
+func TestNotificationsHandler_UnreadCount_NoDB(t *testing.T) {
 	h := NewNotificationsHandler(nil, nil)
 
 	req, rec := mockNotificationRequest(http.MethodGet, "/api/v2/notifications/unread_count", "", 12345)
 	h.UnreadCount(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var result map[string]int64
-	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
-	}
-	if _, ok := result["count"]; !ok {
-		t.Error("expected 'count' field in response")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 
 	req, rec = mockNotificationRequest(http.MethodGet, "/api/v2/notifications/unread_count", "", 0)
@@ -85,29 +68,14 @@ func TestNotificationsHandler_UnreadCount_MockMode(t *testing.T) {
 	}
 }
 
-func TestNotificationsHandler_GetPolicy_MockMode(t *testing.T) {
+func TestNotificationsHandler_GetPolicy_NoDB(t *testing.T) {
 	h := NewNotificationsHandler(nil, nil)
 
 	req, rec := mockNotificationRequest(http.MethodGet, "/api/v2/notifications/policy", "", 12345)
 	h.GetPolicy(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var policy NotificationPolicy
-	if err := json.Unmarshal(rec.Body.Bytes(), &policy); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
-	}
-
-	if policy.ForNotFollowing != "accept" {
-		t.Errorf("for_not_following = %q, want 'accept'", policy.ForNotFollowing)
-	}
-	if policy.ForPrivateMentions != "filter" {
-		t.Errorf("for_private_mentions = %q, want 'filter'", policy.ForPrivateMentions)
-	}
-	if policy.Summary.PendingRequestsCount != 0 {
-		t.Errorf("pending_requests_count = %d, want 0", policy.Summary.PendingRequestsCount)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 
 	req, rec = mockNotificationRequest(http.MethodGet, "/api/v2/notifications/policy", "", 0)
@@ -117,27 +85,15 @@ func TestNotificationsHandler_GetPolicy_MockMode(t *testing.T) {
 	}
 }
 
-func TestNotificationsHandler_UpdatePolicy_MockMode(t *testing.T) {
+func TestNotificationsHandler_UpdatePolicy_NoDB(t *testing.T) {
 	h := NewNotificationsHandler(nil, nil)
 
 	body := `{"for_not_following":"filter","for_new_accounts":"drop"}`
 	req, rec := mockNotificationRequest(http.MethodPut, "/api/v2/notifications/policy", body, 12345)
 	h.UpdatePolicy(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var policy NotificationPolicy
-	if err := json.Unmarshal(rec.Body.Bytes(), &policy); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
-	}
-
-	if policy.ForNotFollowing != "filter" {
-		t.Errorf("for_not_following = %q, want 'filter'", policy.ForNotFollowing)
-	}
-	if policy.ForNewAccounts != "drop" {
-		t.Errorf("for_new_accounts = %q, want 'drop'", policy.ForNewAccounts)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
@@ -147,12 +103,12 @@ func TestNotificationsHandler_UpdatePolicy_InvalidValue(t *testing.T) {
 	req, rec := mockNotificationRequest(http.MethodPut, "/api/v2/notifications/policy", `{"for_not_following":"nope"}`, 12345)
 	h.UpdatePolicy(rec, req)
 
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
-func TestNotificationsHandler_Get_MockMode(t *testing.T) {
+func TestNotificationsHandler_Get_NoDB(t *testing.T) {
 	h := NewNotificationsHandler(nil, nil)
 
 	req, rec := mockNotificationRequest(http.MethodGet, "/api/v2/notifications/mention:Status:123", "", 12345)
@@ -160,20 +116,12 @@ func TestNotificationsHandler_Get_MockMode(t *testing.T) {
 
 	h.Get(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var resp GroupedNotificationsResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
-	}
-	if len(resp.NotificationGroups) == 0 || resp.NotificationGroups[0].GroupKey != "mention:Status:123" {
-		t.Error("expected group_key in response")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
-func TestNotificationsHandler_Dismiss_MockMode(t *testing.T) {
+func TestNotificationsHandler_Dismiss_NoDB(t *testing.T) {
 	h := NewNotificationsHandler(nil, nil)
 
 	req, rec := mockNotificationRequest(http.MethodPost, "/api/v2/notifications/mention:Status:123/dismiss", "", 12345)
@@ -181,19 +129,19 @@ func TestNotificationsHandler_Dismiss_MockMode(t *testing.T) {
 
 	h.Dismiss(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
-func TestNotificationsHandler_Clear_MockMode(t *testing.T) {
+func TestNotificationsHandler_Clear_NoDB(t *testing.T) {
 	h := NewNotificationsHandler(nil, nil)
 
 	req, rec := mockNotificationRequest(http.MethodPost, "/api/v2/notifications/clear", "", 12345)
 	h.Clear(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 
 	req, rec = mockNotificationRequest(http.MethodPost, "/api/v2/notifications/clear", "", 0)
@@ -204,7 +152,7 @@ func TestNotificationsHandler_Clear_MockMode(t *testing.T) {
 	}
 }
 
-func TestNotificationsHandler_Accounts_MockMode(t *testing.T) {
+func TestNotificationsHandler_Accounts_NoDB(t *testing.T) {
 	h := NewNotificationsHandler(nil, nil)
 
 	req, rec := mockNotificationRequest(http.MethodGet, "/api/v2/notifications/mention:Status:123/accounts", "", 12345)
@@ -212,13 +160,8 @@ func TestNotificationsHandler_Accounts_MockMode(t *testing.T) {
 
 	h.Accounts(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var accounts []map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &accounts); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 

@@ -2,15 +2,12 @@ package v1
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
-	"github.com/deicod/gotodon/internal/streaming"
 )
 
 func mockFilterRequest(method, path, body string, accountID int64) (*http.Request, *httptest.ResponseRecorder) {
@@ -33,7 +30,7 @@ func mockFilterRequest(method, path, body string, accountID int64) (*http.Reques
 	return req, rec
 }
 
-func TestFiltersHandler_Create_MockMode(t *testing.T) {
+func TestFiltersHandler_Create_DBUnavailable(t *testing.T) {
 	h := NewFiltersHandler(nil, nil)
 
 	body := `{"phrase":"spoilers","context":["home"]}`
@@ -41,118 +38,45 @@ func TestFiltersHandler_Create_MockMode(t *testing.T) {
 
 	h.Create(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var filter FilterV1
-	if err := json.Unmarshal(rec.Body.Bytes(), &filter); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
-	}
-	if filter.Phrase != "spoilers" {
-		t.Errorf("phrase = %q, want %q", filter.Phrase, "spoilers")
-	}
-	if len(filter.Context) != 1 || filter.Context[0] != "home" {
-		t.Errorf("context = %v, want [home]", filter.Context)
-	}
-	if !filter.WholeWord {
-		t.Errorf("whole_word = %v, want true", filter.WholeWord)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
-func TestFiltersHandler_List_MockMode(t *testing.T) {
+func TestFiltersHandler_List_DBUnavailable(t *testing.T) {
 	h := NewFiltersHandler(nil, nil)
 
-	body := `{"phrase":"one","context":["home"]}`
-	req, rec := mockFilterRequest(http.MethodPost, "/api/v1/filters", body, 12345)
-	h.Create(rec, req)
-
-	body = `{"phrase":"two","context":["public"]}`
-	req, rec = mockFilterRequest(http.MethodPost, "/api/v1/filters", body, 12345)
-	h.Create(rec, req)
-
-	req, rec = mockFilterRequest(http.MethodGet, "/api/v1/filters", "", 12345)
+	req, rec := mockFilterRequest(http.MethodGet, "/api/v1/filters", "", 12345)
 	h.List(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var filters []FilterV1
-	if err := json.Unmarshal(rec.Body.Bytes(), &filters); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
-	}
-	if len(filters) != 2 {
-		t.Fatalf("filters length = %d, want 2", len(filters))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
-func TestFiltersHandler_Get_Update_Delete_MockMode(t *testing.T) {
+func TestFiltersHandler_Get_Update_Delete_DBUnavailable(t *testing.T) {
 	h := NewFiltersHandler(nil, nil)
 
-	body := `{"phrase":"initial","context":["home"]}`
-	req, rec := mockFilterRequest(http.MethodPost, "/api/v1/filters", body, 12345)
-	h.Create(rec, req)
-
-	var created FilterV1
-	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
-	}
-
-	req, rec = mockFilterRequest(http.MethodGet, "/api/v1/filters/"+created.ID, "", 12345)
-	req.SetPathValue("id", created.ID)
+	req, rec := mockFilterRequest(http.MethodGet, "/api/v1/filters/123", "", 12345)
+	req.SetPathValue("id", "123")
 	h.Get(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("get status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 
 	updateBody := `{"phrase":"updated","context":["public"],"whole_word":false,"irreversible":true,"expires_in":3600}`
-	req, rec = mockFilterRequest(http.MethodPut, "/api/v1/filters/"+created.ID, updateBody, 12345)
-	req.SetPathValue("id", created.ID)
+	req, rec = mockFilterRequest(http.MethodPut, "/api/v1/filters/123", updateBody, 12345)
+	req.SetPathValue("id", "123")
 	h.Update(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("update status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 
-	var updated FilterV1
-	if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
-	}
-	if updated.Phrase != "updated" {
-		t.Errorf("phrase = %q, want %q", updated.Phrase, "updated")
-	}
-	if len(updated.Context) != 1 || updated.Context[0] != "public" {
-		t.Errorf("context = %v, want [public]", updated.Context)
-	}
-	if updated.WholeWord {
-		t.Errorf("whole_word = %v, want false", updated.WholeWord)
-	}
-	if !updated.Irreversible {
-		t.Errorf("irreversible = %v, want true", updated.Irreversible)
-	}
-	if updated.ExpiresAt == nil {
-		t.Errorf("expires_at = nil, want value")
-	}
-
-	req, rec = mockFilterRequest(http.MethodDelete, "/api/v1/filters/"+created.ID, "", 12345)
-	req.SetPathValue("id", created.ID)
+	req, rec = mockFilterRequest(http.MethodDelete, "/api/v1/filters/123", "", 12345)
+	req.SetPathValue("id", "123")
 	h.Delete(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("delete status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	req, rec = mockFilterRequest(http.MethodGet, "/api/v1/filters", "", 12345)
-	h.List(rec, req)
-
-	var filters []FilterV1
-	if err := json.Unmarshal(rec.Body.Bytes(), &filters); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
-	}
-	if len(filters) != 0 {
-		t.Fatalf("filters length = %d, want 0", len(filters))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("delete status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
@@ -204,15 +128,10 @@ func TestFiltersHandler_PublishesFiltersChanged(t *testing.T) {
 
 	h.Create(rec, req)
 
-	if len(publisher.events) != 1 {
-		t.Fatalf("events = %d, want 1", len(publisher.events))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
-	event := publisher.events[0]
-	if event.eventType != streaming.EventFiltersChanged {
-		t.Fatalf("eventType = %q, want %q", event.eventType, streaming.EventFiltersChanged)
-	}
-	wantStreams := []string{streaming.UserStreamKey(12345)}
-	if !reflect.DeepEqual(event.streams, wantStreams) {
-		t.Fatalf("streams = %#v, want %#v", event.streams, wantStreams)
+	if len(publisher.events) != 0 {
+		t.Fatalf("events = %d, want 0", len(publisher.events))
 	}
 }

@@ -27,6 +27,10 @@ func NewTagsHandler(queries *db.Queries, cfg *config.Config) *TagsHandler {
 	return &TagsHandler{queries: queries, cfg: cfg}
 }
 
+func (h *TagsHandler) useDB() bool {
+	return h.queries != nil
+}
+
 // TagResponse represents a tag in API responses
 type TagResponse struct {
 	Name      string        `json:"name"`
@@ -65,14 +69,8 @@ func (h *TagsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-
-	if h.queries == nil {
-		// Mock fallback
-		web.JSON(w, http.StatusOK, TagResponse{
-			Name:    tagName,
-			URL:     "https://example.com/tags/" + tagName,
-			History: []TagDayCount{},
-		})
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Tags unavailable")
 		return
 	}
 
@@ -114,14 +112,8 @@ func (h *TagsHandler) Follow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-
-	if h.queries == nil {
-		// Mock fallback
-		web.JSON(w, http.StatusOK, TagResponse{
-			Name:    tagName,
-			URL:     "https://example.com/tags/" + tagName,
-			History: []TagDayCount{},
-		})
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Tags unavailable")
 		return
 	}
 
@@ -177,16 +169,8 @@ func (h *TagsHandler) Unfollow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-
-	if h.queries == nil {
-		// Mock fallback
-		f := false
-		web.JSON(w, http.StatusOK, TagResponse{
-			Name:      tagName,
-			URL:       "https://example.com/tags/" + tagName,
-			History:   []TagDayCount{},
-			Following: &f,
-		})
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Tags unavailable")
 		return
 	}
 
@@ -237,9 +221,8 @@ func (h *TagsHandler) ListFollowed(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.queries == nil {
-		// Mock fallback
-		web.JSON(w, http.StatusOK, []TagResponse{})
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Tags unavailable")
 		return
 	}
 
@@ -282,14 +265,8 @@ func (h *TagsHandler) Feature(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-
-	if h.queries == nil {
-		// Mock fallback
-		web.JSON(w, http.StatusOK, TagResponse{
-			Name:    tagName,
-			URL:     "https://example.com/tags/" + tagName,
-			History: []TagDayCount{},
-		})
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Tags unavailable")
 		return
 	}
 
@@ -354,14 +331,8 @@ func (h *TagsHandler) Unfeature(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-
-	if h.queries == nil {
-		// Mock fallback
-		web.JSON(w, http.StatusOK, TagResponse{
-			Name:    tagName,
-			URL:     "https://example.com/tags/" + tagName,
-			History: []TagDayCount{},
-		})
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Tags unavailable")
 		return
 	}
 

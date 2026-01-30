@@ -35,7 +35,7 @@ func mockNotificationRequest(method, path string, body string, accountID int64) 
 	return req, rec
 }
 
-func TestNotificationsHandler_UnreadCount_MockMode(t *testing.T) {
+func TestNotificationsHandler_UnreadCount_DBUnavailable(t *testing.T) {
 	h := NewNotificationsHandler(nil, nil, nil, nil)
 
 	tests := []struct {
@@ -46,7 +46,7 @@ func TestNotificationsHandler_UnreadCount_MockMode(t *testing.T) {
 		{
 			name:      "authenticated user gets count",
 			accountID: 12345,
-			wantCode:  http.StatusOK,
+			wantCode:  http.StatusInternalServerError,
 		},
 		{
 			name:      "unauthenticated user gets 401",
@@ -78,52 +78,30 @@ func TestNotificationsHandler_UnreadCount_MockMode(t *testing.T) {
 	}
 }
 
-func TestNotificationsHandler_GetPolicy_MockMode(t *testing.T) {
+func TestNotificationsHandler_GetPolicy_DBUnavailable(t *testing.T) {
 	h := NewNotificationsHandler(nil, nil, nil, nil)
 
 	req, rec := mockNotificationRequest(http.MethodGet, "/api/v1/notifications/policy", "", 12345)
 	h.GetPolicy(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var policy NotificationPolicy
-	if err := json.Unmarshal(rec.Body.Bytes(), &policy); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
-	}
-
-	// Check default values
-	if policy.ForNotFollowing != "accept" {
-		t.Errorf("for_not_following = %q, want 'accept'", policy.ForNotFollowing)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
-func TestNotificationsHandler_UpdatePolicy_MockMode(t *testing.T) {
+func TestNotificationsHandler_UpdatePolicy_DBUnavailable(t *testing.T) {
 	h := NewNotificationsHandler(nil, nil, nil, nil)
 
 	body := `{"for_not_following":"filter","for_new_accounts":"drop"}`
 	req, rec := mockNotificationRequest(http.MethodPut, "/api/v1/notifications/policy", body, 12345)
 	h.UpdatePolicy(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var policy NotificationPolicy
-	if err := json.Unmarshal(rec.Body.Bytes(), &policy); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
-	}
-
-	if policy.ForNotFollowing != "filter" {
-		t.Errorf("for_not_following = %q, want 'filter'", policy.ForNotFollowing)
-	}
-	if policy.ForNewAccounts != "drop" {
-		t.Errorf("for_new_accounts = %q, want 'drop'", policy.ForNewAccounts)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
-func TestNotificationsHandler_ListRequests_MockMode(t *testing.T) {
+func TestNotificationsHandler_ListRequests_DBUnavailable(t *testing.T) {
 	h := NewNotificationsHandler(nil, nil, nil, nil)
 
 	tests := []struct {
@@ -134,7 +112,7 @@ func TestNotificationsHandler_ListRequests_MockMode(t *testing.T) {
 		{
 			name:      "authenticated user gets empty list",
 			accountID: 12345,
-			wantCode:  http.StatusOK,
+			wantCode:  http.StatusInternalServerError,
 		},
 		{
 			name:      "unauthenticated user gets 401",
@@ -156,7 +134,7 @@ func TestNotificationsHandler_ListRequests_MockMode(t *testing.T) {
 	}
 }
 
-func TestNotificationsHandler_AcceptRequest_MockMode(t *testing.T) {
+func TestNotificationsHandler_AcceptRequest_DBUnavailable(t *testing.T) {
 	h := NewNotificationsHandler(nil, nil, nil, nil)
 
 	req, rec := mockNotificationRequest(http.MethodPost, "/api/v1/notifications/requests/123/accept", "", 12345)
@@ -164,12 +142,12 @@ func TestNotificationsHandler_AcceptRequest_MockMode(t *testing.T) {
 
 	h.AcceptRequest(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
-func TestNotificationsHandler_DismissRequest_MockMode(t *testing.T) {
+func TestNotificationsHandler_DismissRequest_DBUnavailable(t *testing.T) {
 	h := NewNotificationsHandler(nil, nil, nil, nil)
 
 	req, rec := mockNotificationRequest(http.MethodPost, "/api/v1/notifications/requests/123/dismiss", "", 12345)
@@ -177,12 +155,12 @@ func TestNotificationsHandler_DismissRequest_MockMode(t *testing.T) {
 
 	h.DismissRequest(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
-func TestNotificationsHandler_AcceptRequests_MockMode(t *testing.T) {
+func TestNotificationsHandler_AcceptRequests_DBUnavailable(t *testing.T) {
 	h := NewNotificationsHandler(nil, nil, nil, nil)
 
 	body := `{"id":["123","456"]}`
@@ -190,8 +168,8 @@ func TestNotificationsHandler_AcceptRequests_MockMode(t *testing.T) {
 
 	h.AcceptRequests(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
@@ -220,7 +198,7 @@ func TestNotificationsHandler_AcceptRequests_InvalidBody(t *testing.T) {
 	}
 }
 
-func TestNotificationsHandler_DismissRequests_MockMode(t *testing.T) {
+func TestNotificationsHandler_DismissRequests_DBUnavailable(t *testing.T) {
 	h := NewNotificationsHandler(nil, nil, nil, nil)
 
 	body := `{"id":["123","456"]}`
@@ -228,8 +206,8 @@ func TestNotificationsHandler_DismissRequests_MockMode(t *testing.T) {
 
 	h.DismissRequests(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
@@ -258,23 +236,15 @@ func TestNotificationsHandler_DismissRequests_InvalidBody(t *testing.T) {
 	}
 }
 
-func TestNotificationsHandler_RequestsMerged_MockMode(t *testing.T) {
+func TestNotificationsHandler_RequestsMerged_DBUnavailable(t *testing.T) {
 	h := NewNotificationsHandler(nil, nil, nil, nil)
 
 	req, rec := mockNotificationRequest(http.MethodGet, "/api/v1/notifications/requests/merged", "", 12345)
 
 	h.RequestsMerged(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var resp map[string]bool
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
-	}
-	if merged, ok := resp["merged"]; !ok || !merged {
-		t.Errorf("merged = %v, want true", resp["merged"])
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
@@ -290,7 +260,7 @@ func TestNotificationsHandler_RequestsMerged_Unauthorized(t *testing.T) {
 	}
 }
 
-func TestNotificationsHandler_GetRequest_MockMode(t *testing.T) {
+func TestNotificationsHandler_GetRequest_DBUnavailable(t *testing.T) {
 	h := NewNotificationsHandler(nil, nil, nil, nil)
 
 	req, rec := mockNotificationRequest(http.MethodGet, "/api/v1/notifications/requests/123", "", 12345)
@@ -298,16 +268,8 @@ func TestNotificationsHandler_GetRequest_MockMode(t *testing.T) {
 
 	h.GetRequest(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var request NotificationRequest
-	if err := json.Unmarshal(rec.Body.Bytes(), &request); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
-	}
-	if request.ID != "123" {
-		t.Errorf("id = %q, want %q", request.ID, "123")
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 

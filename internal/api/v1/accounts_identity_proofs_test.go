@@ -1,7 +1,6 @@
 package v1
 
 import (
-	"encoding/json"
 	"net/http"
 	"testing"
 )
@@ -30,22 +29,14 @@ func TestAccountsHandler_IdentityProofs_InvalidID(t *testing.T) {
 	}
 }
 
-func TestAccountsHandler_IdentityProofs_MockMode(t *testing.T) {
+func TestAccountsHandler_IdentityProofs_DBUnavailable(t *testing.T) {
 	h := NewAccountsHandler(nil, nil, nil, nil)
 
 	req, rec := mockAccountsRequest(http.MethodGet, "/api/v1/accounts/123/identity_proofs", "", 1)
 	req.SetPathValue("id", "123")
 	h.IdentityProofs(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	var proofs []any
-	if err := json.Unmarshal(rec.Body.Bytes(), &proofs); err != nil {
-		t.Fatalf("Failed to unmarshal: %v", err)
-	}
-	if len(proofs) != 0 {
-		t.Fatalf("proofs length = %d, want 0", len(proofs))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }

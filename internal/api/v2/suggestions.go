@@ -59,7 +59,7 @@ func (h *SuggestionsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.queries == nil {
-		web.JSON(w, http.StatusOK, []SuggestionV2{})
+		web.JSONError(w, http.StatusInternalServerError, "Suggestions unavailable")
 		return
 	}
 
@@ -117,7 +117,7 @@ func (h *SuggestionsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.queries == nil {
-		web.JSON(w, http.StatusOK, map[string]any{})
+		web.JSONError(w, http.StatusInternalServerError, "Suggestions unavailable")
 		return
 	}
 

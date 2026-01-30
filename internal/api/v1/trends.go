@@ -57,9 +57,8 @@ func (h *TrendsHandler) Index(w http.ResponseWriter, r *http.Request) {
 // Tags handles GET /api/v1/trends/tags
 func (h *TrendsHandler) Tags(w http.ResponseWriter, r *http.Request) {
 	limit := parseTrendLimit(web.QueryParam(r, "limit"), 10, 20)
-
 	if h.queries == nil {
-		web.JSON(w, http.StatusOK, []TrendingTag{})
+		web.JSONError(w, http.StatusInternalServerError, "Trends unavailable")
 		return
 	}
 
@@ -90,9 +89,8 @@ func (h *TrendsHandler) Tags(w http.ResponseWriter, r *http.Request) {
 // Statuses handles GET /api/v1/trends/statuses
 func (h *TrendsHandler) Statuses(w http.ResponseWriter, r *http.Request) {
 	limit := parseTrendLimit(web.QueryParam(r, "limit"), 20, 40)
-
 	if h.queries == nil {
-		web.JSON(w, http.StatusOK, []Status{})
+		web.JSONError(w, http.StatusInternalServerError, "Trends unavailable")
 		return
 	}
 
@@ -147,9 +145,8 @@ func (h *TrendsHandler) Statuses(w http.ResponseWriter, r *http.Request) {
 func (h *TrendsHandler) Links(w http.ResponseWriter, r *http.Request) {
 	limit := parseTrendLimit(web.QueryParam(r, "limit"), 10, 20)
 	offset := parseTrendOffset(web.QueryParam(r, "offset"))
-
 	if h.queries == nil {
-		web.JSON(w, http.StatusOK, []TrendingLink{})
+		web.JSONError(w, http.StatusInternalServerError, "Trends unavailable")
 		return
 	}
 
