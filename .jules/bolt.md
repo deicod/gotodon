@@ -39,3 +39,11 @@
 ## 2026-03-10 - [Flattening Slice Allocations]
 **Learning:** Storing slices of data per item in batch processing (e.g., `map[int64][]string`) causes N heap allocations. Flattening this into a single large slice `[]string` and using a `map[int64]struct{start, end int}` to track ranges reduces GC pressure significantly.
 **Action:** Replace maps of slices with flat buffers and range maps in hot batch processing paths.
+
+## 2026-03-24 - [In-Place Slice Filtering]
+**Learning:** Functions that filter slices (e.g. `extractTextEntities`) often allocate a new result slice (`filtered := make(...)`), which puts pressure on GC even for short-lived slices. In-place filtering using a read/write index approach avoids this allocation entirely for value types.
+**Action:** Use in-place filtering for slice processing functions where the result is a subset of the input, especially in hot paths.
+
+## 2026-03-24 - [Precise Regex Pre-checks]
+**Learning:** Using broad checks like `strings.Contains(s, ":")` to guard regexes (like URL detection) is insufficient because common text (e.g. "Title: Subtitle") triggers false positives, causing expensive regex execution.
+**Action:** Use more specific pre-checks that match the regex requirements (e.g. `strings.Contains(s, "://") || strings.Contains(s, "xmpp:")`) to effectively skip regex overhead for the majority of inputs.

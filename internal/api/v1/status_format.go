@@ -246,10 +246,12 @@ func extractTextEntities(text string) []textEntity {
 	var entities []textEntity
 
 	// Optimization: Pre-check for URL indicators.
-	// The regex explicitly requires "://" or "xmpp:", both of which contain ":".
+	// The regex explicitly requires "://" or "xmpp:".
+	// We check for these specifically to avoid running regex on text like "Title: Description"
+	// which contains a colon but no URL scheme.
 	// If the regex is ever updated to support schemeless URLs (e.g. "www.example.com"),
 	// this check must be updated or removed.
-	if strings.Contains(text, ":") {
+	if strings.Contains(text, "://") || strings.Contains(text, "xmpp:") {
 		for _, match := range statusURLRegex.FindAllStringIndex(text, -1) {
 			start, end := match[0], match[1]
 			end, urlValue := trimURLSuffix(text, start, end)
@@ -311,16 +313,21 @@ func extractTextEntities(text string) []textEntity {
 		})
 	}
 
-	filtered := make([]textEntity, 0, len(entities))
+	// Filter overlapping entities in-place to avoid allocating a new slice
+	writeIdx := 0
 	cursor := 0
-	for _, entity := range entities {
+	for i := 0; i < len(entities); i++ {
+		entity := entities[i]
 		if entity.start < cursor {
 			continue
 		}
-		filtered = append(filtered, entity)
+		if i != writeIdx {
+			entities[writeIdx] = entity
+		}
+		writeIdx++
 		cursor = entity.end
 	}
-	return filtered
+	return entities[:writeIdx]
 }
 
 func trimURLSuffix(text string, start, end int) (int, string) {
