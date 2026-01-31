@@ -1,19 +1,20 @@
 # Gotodon <-> Mastodon 4.5.3 Compatibility Plan
 
-Last updated: 2025-12-29
+Last updated: 2026-01-30
 Target: Mastodon 4.5.3
 Scope: Server-side compatibility (schema, API v1/v2/admin, federation, streaming, OAuth/OIDC, background jobs/services, tests).
-Out of scope for now: Web UI parity and /api/web endpoints.
+Out of scope for now: full Web UI parity outside `/api/web` endpoints.
 Assumptions: No database provisioned yet, so new migrations can be authored but do not need to be applied.
 
 ## Evidence sources
 - Mastodon routes: `mastodon/config/routes/api.rb`
 - Schema diff: `SCHEMA_DIFF.md`
+- Route diff: `ROUTE_DIFF.md` (api.rb vs Go routes, 2026-01-30)
 - Gotodon routes: `cmd/serve.go` and `internal/api/**`
 - Implementation notes: inline comments and mock fallbacks in handlers
 
 ## Current parity snapshot (by subsystem)
-- Schema: High. Tables and columns align; one extra table remains (`preferences`) and many index name/shape mismatches remain in `SCHEMA_DIFF.md`.
+- Schema: High. `SCHEMA_DIFF.md` reports index mismatches only (no missing tables/columns).
 - API v1: Medium. Core handlers exist, but several endpoints are missing and some responses are static or minimal.
 - API v2: Medium-low. Core endpoints exist, but filters/notifications/admin coverage is incomplete and several responses are static or mock.
 - Admin API: Medium-low. Core CRUD exists, but report workflow, email domain blocks, instance config, metrics, roles, and audit logging are incomplete.
@@ -23,12 +24,19 @@ Assumptions: No database provisioned yet, so new migrations can be authored but 
 - Jobs/Services: Medium-low. Delivery, media processing, link crawling, and cleanup exist; many Mastodon background features are missing.
 - Tests/Compatibility: Partial. Unit tests exist, but integration and compatibility suites are missing.
 
+## Route parity snapshot (api.rb vs Go routes)
+Last updated: 2026-01-30 (see `ROUTE_DIFF.md`)
+
+- Missing routes (0).
+- Extras (0).
+
 ---
 
 ## Schema & Data Model
 Status: High (parity with remaining gaps).
 
 Gaps
+- [ ] `SCHEMA_DIFF.md` still reports index mismatches; address gaps and regenerate the diff.
 - [x] Extra `preferences` table (Mastodon uses `users.settings` / `web_settings`).
 - [x] Index name/shape mismatches listed in `SCHEMA_DIFF.md`.
 - [x] Conversation unread tracking (persistent read state).
@@ -39,6 +47,7 @@ Plan
 3) [x] Add read/unread tracking for conversations (align with Mastodon logic; likely `conversation_mutes` or new table).
 4) Regenerate sqlc (`sqlc generate`) and update query usage after each schema change.
 5) [x] Add schema parity tests (create tables + verify index names/uniqueness).
+6) Regenerate `SCHEMA_DIFF.md` after migrations to confirm index parity.
 
 ---
 
@@ -155,11 +164,13 @@ Gaps
 - Token refresh/expiry and revocation semantics are incomplete.
 
 Plan
-1) Choose OAuth/OIDC server implementation (use ory/fosite if appropriate).
-2) Implement full authorization code + PKCE flow with sessions and persisted grants.
-3) Implement bcrypt password verification and proper token lifecycle.
-4) Add /oauth/userinfo and discovery metadata.
-5) Add tests for OAuth flows (grant types, PKCE, refresh, revoke).
+1) Adopt `github.com/ory/fosite` as the OAuth/OIDC core and route `/oauth/authorize`, `/oauth/token`, and `/oauth/revoke` through fosite handlers.
+2) Implement a fosite storage layer on top of `oauth_applications`, `oauth_access_grants`, and `oauth_access_tokens` with PKCE support via `code_challenge` fields.
+3) Align token handling to Mastodon semantics: hashed access/refresh token storage, scoped tokens, `last_used_at/ip` updates, and revocation.
+4) Support grant types needed by Mastodon clients (authorization_code + PKCE, refresh_token, client_credentials); keep password grant only for legacy clients behind config.
+5) Expose `/.well-known/oauth-authorization-server` and `/oauth/userinfo` payloads aligned with Mastodon; add OIDC discovery only if required by clients.
+6) Migration plan: dual-validate legacy tokens and fosite tokens during cutover, backfill hashes for existing tokens, then remove legacy paths.
+7) Add tests for code+PKCE, refresh, revoke, userinfo, discovery metadata, and expiry/rotation behavior.
 
 ---
 
@@ -226,4 +237,4 @@ Plan
 ---
 
 ## Deferred (explicitly out of scope for now)
-- Web UI parity and /api/web endpoints.
+- Web UI parity beyond `/api/web` endpoints.
