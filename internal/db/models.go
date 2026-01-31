@@ -171,6 +171,12 @@ type AccountStatusesCleanupPolicy struct {
 	UpdatedAt        pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
+type AccountSummary struct {
+	AccountID int64       `db:"account_id" json:"account_id"`
+	Language  interface{} `db:"language" json:"language"`
+	Sensitive interface{} `db:"sensitive" json:"sensitive"`
+}
+
 type AccountWarning struct {
 	ID              int64              `db:"id" json:"id"`
 	AccountID       pgtype.Int8        `db:"account_id" json:"account_id"`
@@ -550,6 +556,12 @@ type GeneratedAnnualReport struct {
 	UpdatedAt     pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
+type GlobalFollowRecommendation struct {
+	AccountID int64       `db:"account_id" json:"account_id"`
+	Rank      int64       `db:"rank" json:"rank"`
+	Reason    interface{} `db:"reason" json:"reason"`
+}
+
 type Identity struct {
 	ID        int64              `db:"id" json:"id"`
 	Provider  string             `db:"provider" json:"provider"`
@@ -557,6 +569,11 @@ type Identity struct {
 	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	UserID    pgtype.Int8        `db:"user_id" json:"user_id"`
+}
+
+type Instance struct {
+	Domain        pgtype.Text `db:"domain" json:"domain"`
+	AccountsCount int64       `db:"accounts_count" json:"accounts_count"`
 }
 
 type InstanceModerationNote struct {
@@ -1186,6 +1203,12 @@ type UserInviteRequest struct {
 	Text      pgtype.Text        `db:"text" json:"text"`
 	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type UserIp struct {
+	UserID int64       `db:"user_id" json:"user_id"`
+	Ip     *netip.Addr `db:"ip" json:"ip"`
+	UsedAt interface{} `db:"used_at" json:"used_at"`
 }
 
 type UserRole struct {

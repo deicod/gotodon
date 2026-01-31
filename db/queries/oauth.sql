@@ -33,9 +33,17 @@ ORDER BY created_at DESC;
 SELECT * FROM oauth_access_tokens 
 WHERE token = $1 AND revoked_at IS NULL;
 
+-- name: GetOAuthAccessTokenByTokenIncludingRevoked :one
+SELECT * FROM oauth_access_tokens
+WHERE token = $1;
+
 -- name: GetOAuthAccessTokenByRefresh :one
 SELECT * FROM oauth_access_tokens 
 WHERE refresh_token = $1 AND revoked_at IS NULL;
+
+-- name: GetOAuthAccessTokenByRefreshIncludingRevoked :one
+SELECT * FROM oauth_access_tokens
+WHERE refresh_token = $1;
 
 -- name: CreateOAuthAccessToken :one
 INSERT INTO oauth_access_tokens (
@@ -44,8 +52,14 @@ INSERT INTO oauth_access_tokens (
     $1, $2, $3, $4, $5, $6
 ) RETURNING *;
 
+-- name: UpdateOAuthAccessTokenRefreshToken :exec
+UPDATE oauth_access_tokens SET refresh_token = $2 WHERE token = $1;
+
 -- name: RevokeOAuthAccessToken :exec
 UPDATE oauth_access_tokens SET revoked_at = now() WHERE token = $1;
+
+-- name: RevokeOAuthAccessTokenByRefresh :exec
+UPDATE oauth_access_tokens SET revoked_at = now() WHERE refresh_token = $1;
 
 -- name: RevokeOAuthAccessTokensByApplication :exec
 UPDATE oauth_access_tokens SET revoked_at = now() 
@@ -54,6 +68,14 @@ WHERE application_id = $1 AND resource_owner_id = $2 AND revoked_at IS NULL;
 -- name: RevokeOAuthAccessTokensByUser :exec
 UPDATE oauth_access_tokens SET revoked_at = now() 
 WHERE resource_owner_id = $1 AND revoked_at IS NULL;
+
+-- name: ListOAuthAccessTokenIDsByGrant :many
+SELECT id FROM oauth_access_tokens
+WHERE application_id = $1 AND resource_owner_id IS NOT DISTINCT FROM $2 AND scopes = $3 AND revoked_at IS NULL;
+
+-- name: RevokeOAuthAccessTokensByGrant :exec
+UPDATE oauth_access_tokens SET revoked_at = now()
+WHERE application_id = $1 AND resource_owner_id IS NOT DISTINCT FROM $2 AND scopes = $3 AND revoked_at IS NULL;
 
 -- name: UpdateOAuthTokenLastUsed :exec
 UPDATE oauth_access_tokens SET 
@@ -78,6 +100,16 @@ INSERT INTO oauth_access_grants (
 -- name: GetOAuthAccessGrantByToken :one
 SELECT * FROM oauth_access_grants
 WHERE token = $1 AND revoked_at IS NULL;
+
+-- name: GetOAuthAccessGrantByTokenIncludingRevoked :one
+SELECT * FROM oauth_access_grants
+WHERE token = $1;
+
+-- name: UpdateOAuthAccessGrantPKCE :exec
+UPDATE oauth_access_grants
+SET code_challenge = $2,
+    code_challenge_method = $3
+WHERE token = $1;
 
 -- name: RevokeOAuthAccessGrant :exec
 UPDATE oauth_access_grants SET revoked_at = now() WHERE token = $1;

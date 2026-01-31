@@ -186,6 +186,30 @@ func (q *Queries) GetOAuthAccessGrantByToken(ctx context.Context, token string) 
 	return i, err
 }
 
+const getOAuthAccessGrantByTokenIncludingRevoked = `-- name: GetOAuthAccessGrantByTokenIncludingRevoked :one
+SELECT id, token, expires_in, redirect_uri, created_at, revoked_at, scopes, application_id, resource_owner_id, code_challenge, code_challenge_method FROM oauth_access_grants
+WHERE token = $1
+`
+
+func (q *Queries) GetOAuthAccessGrantByTokenIncludingRevoked(ctx context.Context, token string) (OauthAccessGrant, error) {
+	row := q.db.QueryRow(ctx, getOAuthAccessGrantByTokenIncludingRevoked, token)
+	var i OauthAccessGrant
+	err := row.Scan(
+		&i.ID,
+		&i.Token,
+		&i.ExpiresIn,
+		&i.RedirectUri,
+		&i.CreatedAt,
+		&i.RevokedAt,
+		&i.Scopes,
+		&i.ApplicationID,
+		&i.ResourceOwnerID,
+		&i.CodeChallenge,
+		&i.CodeChallengeMethod,
+	)
+	return i, err
+}
+
 const getOAuthAccessToken = `-- name: GetOAuthAccessToken :one
 SELECT id, token, refresh_token, expires_in, revoked_at, created_at, scopes, application_id, resource_owner_id, last_used_at, last_used_ip FROM oauth_access_tokens 
 WHERE token = $1 AND revoked_at IS NULL
@@ -217,6 +241,54 @@ WHERE refresh_token = $1 AND revoked_at IS NULL
 
 func (q *Queries) GetOAuthAccessTokenByRefresh(ctx context.Context, refreshToken pgtype.Text) (OauthAccessToken, error) {
 	row := q.db.QueryRow(ctx, getOAuthAccessTokenByRefresh, refreshToken)
+	var i OauthAccessToken
+	err := row.Scan(
+		&i.ID,
+		&i.Token,
+		&i.RefreshToken,
+		&i.ExpiresIn,
+		&i.RevokedAt,
+		&i.CreatedAt,
+		&i.Scopes,
+		&i.ApplicationID,
+		&i.ResourceOwnerID,
+		&i.LastUsedAt,
+		&i.LastUsedIp,
+	)
+	return i, err
+}
+
+const getOAuthAccessTokenByRefreshIncludingRevoked = `-- name: GetOAuthAccessTokenByRefreshIncludingRevoked :one
+SELECT id, token, refresh_token, expires_in, revoked_at, created_at, scopes, application_id, resource_owner_id, last_used_at, last_used_ip FROM oauth_access_tokens
+WHERE refresh_token = $1
+`
+
+func (q *Queries) GetOAuthAccessTokenByRefreshIncludingRevoked(ctx context.Context, refreshToken pgtype.Text) (OauthAccessToken, error) {
+	row := q.db.QueryRow(ctx, getOAuthAccessTokenByRefreshIncludingRevoked, refreshToken)
+	var i OauthAccessToken
+	err := row.Scan(
+		&i.ID,
+		&i.Token,
+		&i.RefreshToken,
+		&i.ExpiresIn,
+		&i.RevokedAt,
+		&i.CreatedAt,
+		&i.Scopes,
+		&i.ApplicationID,
+		&i.ResourceOwnerID,
+		&i.LastUsedAt,
+		&i.LastUsedIp,
+	)
+	return i, err
+}
+
+const getOAuthAccessTokenByTokenIncludingRevoked = `-- name: GetOAuthAccessTokenByTokenIncludingRevoked :one
+SELECT id, token, refresh_token, expires_in, revoked_at, created_at, scopes, application_id, resource_owner_id, last_used_at, last_used_ip FROM oauth_access_tokens
+WHERE token = $1
+`
+
+func (q *Queries) GetOAuthAccessTokenByTokenIncludingRevoked(ctx context.Context, token string) (OauthAccessToken, error) {
+	row := q.db.QueryRow(ctx, getOAuthAccessTokenByTokenIncludingRevoked, token)
 	var i OauthAccessToken
 	err := row.Scan(
 		&i.ID,
@@ -282,6 +354,37 @@ func (q *Queries) GetOAuthApplicationByUID(ctx context.Context, uid string) (Oau
 		&i.Confidential,
 	)
 	return i, err
+}
+
+const listOAuthAccessTokenIDsByGrant = `-- name: ListOAuthAccessTokenIDsByGrant :many
+SELECT id FROM oauth_access_tokens
+WHERE application_id = $1 AND resource_owner_id IS NOT DISTINCT FROM $2 AND scopes = $3 AND revoked_at IS NULL
+`
+
+type ListOAuthAccessTokenIDsByGrantParams struct {
+	ApplicationID   pgtype.Int8 `db:"application_id" json:"application_id"`
+	ResourceOwnerID pgtype.Int8 `db:"resource_owner_id" json:"resource_owner_id"`
+	Scopes          pgtype.Text `db:"scopes" json:"scopes"`
+}
+
+func (q *Queries) ListOAuthAccessTokenIDsByGrant(ctx context.Context, arg ListOAuthAccessTokenIDsByGrantParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listOAuthAccessTokenIDsByGrant, arg.ApplicationID, arg.ResourceOwnerID, arg.Scopes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listOAuthApplicationsByOwner = `-- name: ListOAuthApplicationsByOwner :many
@@ -405,6 +508,15 @@ func (q *Queries) RevokeOAuthAccessToken(ctx context.Context, token string) erro
 	return err
 }
 
+const revokeOAuthAccessTokenByRefresh = `-- name: RevokeOAuthAccessTokenByRefresh :exec
+UPDATE oauth_access_tokens SET revoked_at = now() WHERE refresh_token = $1
+`
+
+func (q *Queries) RevokeOAuthAccessTokenByRefresh(ctx context.Context, refreshToken pgtype.Text) error {
+	_, err := q.db.Exec(ctx, revokeOAuthAccessTokenByRefresh, refreshToken)
+	return err
+}
+
 const revokeOAuthAccessTokensByApplication = `-- name: RevokeOAuthAccessTokensByApplication :exec
 UPDATE oauth_access_tokens SET revoked_at = now() 
 WHERE application_id = $1 AND resource_owner_id = $2 AND revoked_at IS NULL
@@ -420,6 +532,22 @@ func (q *Queries) RevokeOAuthAccessTokensByApplication(ctx context.Context, arg 
 	return err
 }
 
+const revokeOAuthAccessTokensByGrant = `-- name: RevokeOAuthAccessTokensByGrant :exec
+UPDATE oauth_access_tokens SET revoked_at = now()
+WHERE application_id = $1 AND resource_owner_id IS NOT DISTINCT FROM $2 AND scopes = $3 AND revoked_at IS NULL
+`
+
+type RevokeOAuthAccessTokensByGrantParams struct {
+	ApplicationID   pgtype.Int8 `db:"application_id" json:"application_id"`
+	ResourceOwnerID pgtype.Int8 `db:"resource_owner_id" json:"resource_owner_id"`
+	Scopes          pgtype.Text `db:"scopes" json:"scopes"`
+}
+
+func (q *Queries) RevokeOAuthAccessTokensByGrant(ctx context.Context, arg RevokeOAuthAccessTokensByGrantParams) error {
+	_, err := q.db.Exec(ctx, revokeOAuthAccessTokensByGrant, arg.ApplicationID, arg.ResourceOwnerID, arg.Scopes)
+	return err
+}
+
 const revokeOAuthAccessTokensByUser = `-- name: RevokeOAuthAccessTokensByUser :exec
 UPDATE oauth_access_tokens SET revoked_at = now() 
 WHERE resource_owner_id = $1 AND revoked_at IS NULL
@@ -427,6 +555,38 @@ WHERE resource_owner_id = $1 AND revoked_at IS NULL
 
 func (q *Queries) RevokeOAuthAccessTokensByUser(ctx context.Context, resourceOwnerID pgtype.Int8) error {
 	_, err := q.db.Exec(ctx, revokeOAuthAccessTokensByUser, resourceOwnerID)
+	return err
+}
+
+const updateOAuthAccessGrantPKCE = `-- name: UpdateOAuthAccessGrantPKCE :exec
+UPDATE oauth_access_grants
+SET code_challenge = $2,
+    code_challenge_method = $3
+WHERE token = $1
+`
+
+type UpdateOAuthAccessGrantPKCEParams struct {
+	Token               string      `db:"token" json:"token"`
+	CodeChallenge       pgtype.Text `db:"code_challenge" json:"code_challenge"`
+	CodeChallengeMethod pgtype.Text `db:"code_challenge_method" json:"code_challenge_method"`
+}
+
+func (q *Queries) UpdateOAuthAccessGrantPKCE(ctx context.Context, arg UpdateOAuthAccessGrantPKCEParams) error {
+	_, err := q.db.Exec(ctx, updateOAuthAccessGrantPKCE, arg.Token, arg.CodeChallenge, arg.CodeChallengeMethod)
+	return err
+}
+
+const updateOAuthAccessTokenRefreshToken = `-- name: UpdateOAuthAccessTokenRefreshToken :exec
+UPDATE oauth_access_tokens SET refresh_token = $2 WHERE token = $1
+`
+
+type UpdateOAuthAccessTokenRefreshTokenParams struct {
+	Token        string      `db:"token" json:"token"`
+	RefreshToken pgtype.Text `db:"refresh_token" json:"refresh_token"`
+}
+
+func (q *Queries) UpdateOAuthAccessTokenRefreshToken(ctx context.Context, arg UpdateOAuthAccessTokenRefreshTokenParams) error {
+	_, err := q.db.Exec(ctx, updateOAuthAccessTokenRefreshToken, arg.Token, arg.RefreshToken)
 	return err
 }
 

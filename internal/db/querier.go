@@ -261,6 +261,7 @@ type Querier interface {
 	DeleteOAuthApplication(ctx context.Context, id int64) error
 	DeletePreviewCard(ctx context.Context, id int64) error
 	DeletePushSubscription(ctx context.Context, accessTokenID pgtype.Int8) error
+	DeletePushSubscriptionByID(ctx context.Context, id int64) error
 	DeleteQuote(ctx context.Context, id int64) error
 	DeleteRule(ctx context.Context, id int64) error
 	DeleteRuleTranslation(ctx context.Context, arg DeleteRuleTranslationParams) error
@@ -371,8 +372,11 @@ type Querier interface {
 	GetNotificationRequest(ctx context.Context, id int64) (NotificationRequest, error)
 	GetNotificationRequestByAccounts(ctx context.Context, arg GetNotificationRequestByAccountsParams) (NotificationRequest, error)
 	GetOAuthAccessGrantByToken(ctx context.Context, token string) (OauthAccessGrant, error)
+	GetOAuthAccessGrantByTokenIncludingRevoked(ctx context.Context, token string) (OauthAccessGrant, error)
 	GetOAuthAccessToken(ctx context.Context, token string) (OauthAccessToken, error)
 	GetOAuthAccessTokenByRefresh(ctx context.Context, refreshToken pgtype.Text) (OauthAccessToken, error)
+	GetOAuthAccessTokenByRefreshIncludingRevoked(ctx context.Context, refreshToken pgtype.Text) (OauthAccessToken, error)
+	GetOAuthAccessTokenByTokenIncludingRevoked(ctx context.Context, token string) (OauthAccessToken, error)
 	GetOAuthApplication(ctx context.Context, id int64) (OauthApplication, error)
 	GetOAuthApplicationByUID(ctx context.Context, uid string) (OauthApplication, error)
 	GetPinnedStatuses(ctx context.Context, accountID int64) ([]Status, error)
@@ -392,6 +396,7 @@ type Querier interface {
 	GetPublicTimeline(ctx context.Context, arg GetPublicTimelineParams) ([]Status, error)
 	GetPushSubscription(ctx context.Context, arg GetPushSubscriptionParams) (WebPushSubscription, error)
 	GetPushSubscriptionByEndpoint(ctx context.Context, endpoint string) (WebPushSubscription, error)
+	GetPushSubscriptionByID(ctx context.Context, id int64) (WebPushSubscription, error)
 	// Quotes queries
 	GetQuote(ctx context.Context, id int64) (Quote, error)
 	GetQuoteByActivityURI(ctx context.Context, activityUri pgtype.Text) (Quote, error)
@@ -453,6 +458,7 @@ type Querier interface {
 	// WebAuthn Credentials queries
 	GetWebAuthnCredential(ctx context.Context, id int64) (WebauthnCredential, error)
 	GetWebAuthnCredentialByExternalID(ctx context.Context, externalID string) (WebauthnCredential, error)
+	GetWebSettingByUserID(ctx context.Context, userID int64) (WebSetting, error)
 	HardDeleteRule(ctx context.Context, id int64) error
 	HasNotificationPermission(ctx context.Context, arg HasNotificationPermissionParams) (bool, error)
 	IncrementNotificationRequestCount(ctx context.Context, arg IncrementNotificationRequestCountParams) (NotificationRequest, error)
@@ -511,6 +517,7 @@ type Querier interface {
 	ListNotifications(ctx context.Context, arg ListNotificationsParams) ([]Notification, error)
 	ListNotificationsByGroupKey(ctx context.Context, arg ListNotificationsByGroupKeyParams) ([]Notification, error)
 	ListNotificationsByTypeAndActivity(ctx context.Context, arg ListNotificationsByTypeAndActivityParams) ([]Notification, error)
+	ListOAuthAccessTokenIDsByGrant(ctx context.Context, arg ListOAuthAccessTokenIDsByGrantParams) ([]int64, error)
 	ListOAuthApplicationsByOwner(ctx context.Context, arg ListOAuthApplicationsByOwnerParams) ([]OauthApplication, error)
 	ListOrphanedMediaAttachments(ctx context.Context, arg ListOrphanedMediaAttachmentsParams) ([]MediaAttachment, error)
 	ListPendingTrendingStatuses(ctx context.Context, arg ListPendingTrendingStatusesParams) ([]Status, error)
@@ -544,7 +551,9 @@ type Querier interface {
 	RemoveStatusTags(ctx context.Context, arg RemoveStatusTagsParams) error
 	RevokeOAuthAccessGrant(ctx context.Context, token string) error
 	RevokeOAuthAccessToken(ctx context.Context, token string) error
+	RevokeOAuthAccessTokenByRefresh(ctx context.Context, refreshToken pgtype.Text) error
 	RevokeOAuthAccessTokensByApplication(ctx context.Context, arg RevokeOAuthAccessTokensByApplicationParams) error
+	RevokeOAuthAccessTokensByGrant(ctx context.Context, arg RevokeOAuthAccessTokensByGrantParams) error
 	RevokeOAuthAccessTokensByUser(ctx context.Context, resourceOwnerID pgtype.Int8) error
 	SearchAccounts(ctx context.Context, arg SearchAccountsParams) ([]Account, error)
 	SearchAccountsFollowing(ctx context.Context, arg SearchAccountsFollowingParams) ([]Account, error)
@@ -568,11 +577,14 @@ type Querier interface {
 	UpdateMediaProcessing(ctx context.Context, arg UpdateMediaProcessingParams) (MediaAttachment, error)
 	UpdateNotificationPolicy(ctx context.Context, arg UpdateNotificationPolicyParams) (NotificationPolicy, error)
 	UpdateNotificationRequest(ctx context.Context, arg UpdateNotificationRequestParams) (NotificationRequest, error)
+	UpdateOAuthAccessGrantPKCE(ctx context.Context, arg UpdateOAuthAccessGrantPKCEParams) error
+	UpdateOAuthAccessTokenRefreshToken(ctx context.Context, arg UpdateOAuthAccessTokenRefreshTokenParams) error
 	UpdateOAuthApplication(ctx context.Context, arg UpdateOAuthApplicationParams) (OauthApplication, error)
 	UpdateOAuthTokenLastUsed(ctx context.Context, arg UpdateOAuthTokenLastUsedParams) error
 	UpdatePreviewCard(ctx context.Context, arg UpdatePreviewCardParams) (PreviewCard, error)
 	UpdatePreviewCardProviderTrendable(ctx context.Context, arg UpdatePreviewCardProviderTrendableParams) (PreviewCardProvider, error)
 	UpdatePushSubscription(ctx context.Context, arg UpdatePushSubscriptionParams) (WebPushSubscription, error)
+	UpdatePushSubscriptionByID(ctx context.Context, arg UpdatePushSubscriptionByIDParams) (WebPushSubscription, error)
 	UpdatePushSubscriptionDetails(ctx context.Context, arg UpdatePushSubscriptionDetailsParams) (WebPushSubscription, error)
 	UpdateQuoteState(ctx context.Context, arg UpdateQuoteStateParams) (Quote, error)
 	UpdateRule(ctx context.Context, arg UpdateRuleParams) (Rule, error)
@@ -605,6 +617,7 @@ type Querier interface {
 	UpsertStatusTrend(ctx context.Context, arg UpsertStatusTrendParams) (StatusTrend, error)
 	UpsertTagTrend(ctx context.Context, arg UpsertTagTrendParams) (TagTrend, error)
 	UpsertTags(ctx context.Context, dollar_1 []string) error
+	UpsertWebSetting(ctx context.Context, arg UpsertWebSettingParams) (WebSetting, error)
 	Vote(ctx context.Context, arg VoteParams) error
 }
 

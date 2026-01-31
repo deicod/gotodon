@@ -13,9 +13,9 @@ import (
 
 const createPushSubscription = `-- name: CreatePushSubscription :one
 INSERT INTO web_push_subscriptions (
-    endpoint, key_p256dh, key_auth, data, user_id, access_token_id
+    endpoint, key_p256dh, key_auth, data, user_id, access_token_id, standard
 ) VALUES (
-    $1, $2, $3, $4, $5, $6
+    $1, $2, $3, $4, $5, $6, $7
 ) RETURNING id, endpoint, key_p256dh, key_auth, data, created_at, updated_at, access_token_id, user_id, standard
 `
 
@@ -26,6 +26,7 @@ type CreatePushSubscriptionParams struct {
 	Data          []byte      `db:"data" json:"data"`
 	UserID        pgtype.Int8 `db:"user_id" json:"user_id"`
 	AccessTokenID pgtype.Int8 `db:"access_token_id" json:"access_token_id"`
+	Standard      bool        `db:"standard" json:"standard"`
 }
 
 func (q *Queries) CreatePushSubscription(ctx context.Context, arg CreatePushSubscriptionParams) (WebPushSubscription, error) {
@@ -36,6 +37,7 @@ func (q *Queries) CreatePushSubscription(ctx context.Context, arg CreatePushSubs
 		arg.Data,
 		arg.UserID,
 		arg.AccessTokenID,
+		arg.Standard,
 	)
 	var i WebPushSubscription
 	err := row.Scan(
@@ -59,6 +61,15 @@ DELETE FROM web_push_subscriptions WHERE access_token_id = $1
 
 func (q *Queries) DeletePushSubscription(ctx context.Context, accessTokenID pgtype.Int8) error {
 	_, err := q.db.Exec(ctx, deletePushSubscription, accessTokenID)
+	return err
+}
+
+const deletePushSubscriptionByID = `-- name: DeletePushSubscriptionByID :exec
+DELETE FROM web_push_subscriptions WHERE id = $1
+`
+
+func (q *Queries) DeletePushSubscriptionByID(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, deletePushSubscriptionByID, id)
 	return err
 }
 
@@ -113,6 +124,28 @@ func (q *Queries) GetPushSubscriptionByEndpoint(ctx context.Context, endpoint st
 	return i, err
 }
 
+const getPushSubscriptionByID = `-- name: GetPushSubscriptionByID :one
+SELECT id, endpoint, key_p256dh, key_auth, data, created_at, updated_at, access_token_id, user_id, standard FROM web_push_subscriptions WHERE id = $1
+`
+
+func (q *Queries) GetPushSubscriptionByID(ctx context.Context, id int64) (WebPushSubscription, error) {
+	row := q.db.QueryRow(ctx, getPushSubscriptionByID, id)
+	var i WebPushSubscription
+	err := row.Scan(
+		&i.ID,
+		&i.Endpoint,
+		&i.KeyP256dh,
+		&i.KeyAuth,
+		&i.Data,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AccessTokenID,
+		&i.UserID,
+		&i.Standard,
+	)
+	return i, err
+}
+
 const updatePushSubscription = `-- name: UpdatePushSubscription :one
 UPDATE web_push_subscriptions
 SET data = $2,
@@ -144,6 +177,37 @@ func (q *Queries) UpdatePushSubscription(ctx context.Context, arg UpdatePushSubs
 	return i, err
 }
 
+const updatePushSubscriptionByID = `-- name: UpdatePushSubscriptionByID :one
+UPDATE web_push_subscriptions
+SET data = $2,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, endpoint, key_p256dh, key_auth, data, created_at, updated_at, access_token_id, user_id, standard
+`
+
+type UpdatePushSubscriptionByIDParams struct {
+	ID   int64  `db:"id" json:"id"`
+	Data []byte `db:"data" json:"data"`
+}
+
+func (q *Queries) UpdatePushSubscriptionByID(ctx context.Context, arg UpdatePushSubscriptionByIDParams) (WebPushSubscription, error) {
+	row := q.db.QueryRow(ctx, updatePushSubscriptionByID, arg.ID, arg.Data)
+	var i WebPushSubscription
+	err := row.Scan(
+		&i.ID,
+		&i.Endpoint,
+		&i.KeyP256dh,
+		&i.KeyAuth,
+		&i.Data,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AccessTokenID,
+		&i.UserID,
+		&i.Standard,
+	)
+	return i, err
+}
+
 const updatePushSubscriptionDetails = `-- name: UpdatePushSubscriptionDetails :one
 UPDATE web_push_subscriptions
 SET endpoint = $2,
@@ -151,6 +215,7 @@ SET endpoint = $2,
     key_auth = $4,
     data = $5,
     user_id = $6,
+    standard = $7,
     updated_at = now()
 WHERE access_token_id = $1
 RETURNING id, endpoint, key_p256dh, key_auth, data, created_at, updated_at, access_token_id, user_id, standard
@@ -163,6 +228,7 @@ type UpdatePushSubscriptionDetailsParams struct {
 	KeyAuth       pgtype.Text `db:"key_auth" json:"key_auth"`
 	Data          []byte      `db:"data" json:"data"`
 	UserID        pgtype.Int8 `db:"user_id" json:"user_id"`
+	Standard      bool        `db:"standard" json:"standard"`
 }
 
 func (q *Queries) UpdatePushSubscriptionDetails(ctx context.Context, arg UpdatePushSubscriptionDetailsParams) (WebPushSubscription, error) {
@@ -173,6 +239,7 @@ func (q *Queries) UpdatePushSubscriptionDetails(ctx context.Context, arg UpdateP
 		arg.KeyAuth,
 		arg.Data,
 		arg.UserID,
+		arg.Standard,
 	)
 	var i WebPushSubscription
 	err := row.Scan(
