@@ -311,16 +311,18 @@ func extractTextEntities(text string) []textEntity {
 		})
 	}
 
-	filtered := make([]textEntity, 0, len(entities))
+	// Optimization: Filter in-place to avoid allocating a new slice
+	writeIdx := 0
 	cursor := 0
 	for _, entity := range entities {
 		if entity.start < cursor {
 			continue
 		}
-		filtered = append(filtered, entity)
+		entities[writeIdx] = entity
+		writeIdx++
 		cursor = entity.end
 	}
-	return filtered
+	return entities[:writeIdx]
 }
 
 func trimURLSuffix(text string, start, end int) (int, string) {

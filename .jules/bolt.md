@@ -39,3 +39,7 @@
 ## 2026-03-10 - [Flattening Slice Allocations]
 **Learning:** Storing slices of data per item in batch processing (e.g., `map[int64][]string`) causes N heap allocations. Flattening this into a single large slice `[]string` and using a `map[int64]struct{start, end int}` to track ranges reduces GC pressure significantly.
 **Action:** Replace maps of slices with flat buffers and range maps in hot batch processing paths.
+
+## 2026-03-24 - [In-place Slice Filtering]
+**Learning:** Using 'filtered := make(...)' to filter a slice allocates unnecessary memory when the source slice can be reused. In hot paths (like text entity extraction), filtering in-place using a write index eliminates this allocation.
+**Action:** Use in-place filtering (write index pattern) for slice transformation functions where the input slice ownership allows modification.
