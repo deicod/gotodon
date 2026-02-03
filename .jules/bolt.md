@@ -43,3 +43,11 @@
 ## 2026-03-24 - [In-place Slice Filtering]
 **Learning:** Using 'filtered := make(...)' to filter a slice allocates unnecessary memory when the source slice can be reused. In hot paths (like text entity extraction), filtering in-place using a write index eliminates this allocation.
 **Action:** Use in-place filtering (write index pattern) for slice transformation functions where the input slice ownership allows modification.
+
+## 2026-04-01 - [Slices for Small Sets]
+**Learning:** Using `map[string]map[string]struct{}` for small nested sets (e.g., domains per username in mentions) creates excessive allocations (N inner maps). Since the set size is typically very small (1-2), using `map[string][]string` and linear scan is significantly faster and allocates less.
+**Action:** Prefer slices over maps for small nested collections where N is small (<5).
+
+## 2026-04-01 - [Efficient Regex Guards]
+**Learning:** Guarding expensive regex matching with `strings.Contains` is critical. However, checking for a single character (e.g., `:`) can be too broad and still trigger the regex frequently. Using more specific substrings (e.g., `://`, `xmpp:`) or multiple specific checks is better.
+**Action:** Use specific substrings in `strings.Contains` guards for regexes to filter out common false positives.

@@ -98,7 +98,7 @@ func linkifyAndFormatText(cfg *config.Config, text string, opts statusContentOpt
 	}
 
 	var mentionLookup map[string]mentionAccount
-	var usernameDomains map[string]map[string]struct{}
+	var usernameDomains map[string][]string
 	if hasMentions {
 		mentionLookup, usernameDomains = buildMentionLookup(opts.author, opts.mentions, cfg)
 	}
@@ -211,7 +211,7 @@ func linkifyTextWithOptions(cfg *config.Config, text string, opts statusContentO
 	}
 
 	var mentionLookup map[string]mentionAccount
-	var usernameDomains map[string]map[string]struct{}
+	var usernameDomains map[string][]string
 	// Optimization: Skip expensive map build if no mentions are present
 	if hasMentions {
 		mentionLookup, usernameDomains = buildMentionLookup(opts.author, opts.mentions, cfg)
@@ -249,7 +249,7 @@ func extractTextEntities(text string) []textEntity {
 	// The regex explicitly requires "://" or "xmpp:", both of which contain ":".
 	// If the regex is ever updated to support schemeless URLs (e.g. "www.example.com"),
 	// this check must be updated or removed.
-	if strings.Contains(text, ":") {
+	if strings.Contains(text, "://") || strings.Contains(text, "xmpp:") || strings.Contains(text, "XMPP:") {
 		for _, match := range statusURLRegex.FindAllStringIndex(text, -1) {
 			start, end := match[0], match[1]
 			end, urlValue := trimURLSuffix(text, start, end)
@@ -404,9 +404,9 @@ type mentionAccount struct {
 	Domain   string
 }
 
-func buildMentionLookup(author *Account, mentions []Mention, cfg *config.Config) (map[string]mentionAccount, map[string]map[string]struct{}) {
+func buildMentionLookup(author *Account, mentions []Mention, cfg *config.Config) (map[string]mentionAccount, map[string][]string) {
 	lookup := make(map[string]mentionAccount)
-	usernameDomains := make(map[string]map[string]struct{})
+	usernameDomains := make(map[string][]string)
 
 	addAccount := func(acc mentionAccount) {
 		key := statusMentionKey(acc.Username, acc.Domain)
@@ -414,10 +414,18 @@ func buildMentionLookup(author *Account, mentions []Mention, cfg *config.Config)
 			lookup[key] = acc
 		}
 		userKey := strings.ToLower(acc.Username)
-		if _, ok := usernameDomains[userKey]; !ok {
-			usernameDomains[userKey] = make(map[string]struct{})
+		domains := usernameDomains[userKey]
+		// Check for duplicate domain using linear scan (N is very small, typically 1)
+		found := false
+		for _, d := range domains {
+			if d == acc.Domain {
+				found = true
+				break
+			}
 		}
-		usernameDomains[userKey][acc.Domain] = struct{}{}
+		if !found {
+			usernameDomains[userKey] = append(domains, acc.Domain)
+		}
 	}
 
 	if author != nil {
@@ -470,13 +478,13 @@ func normalizeDomain(domain string) string {
 	return strings.ToLower(domain)
 }
 
-func formatMention(screenName string, lookup map[string]mentionAccount, usernameDomains map[string]map[string]struct{}, cfg *config.Config, withDomains bool) string {
+func formatMention(screenName string, lookup map[string]mentionAccount, usernameDomains map[string][]string, cfg *config.Config, withDomains bool) string {
 	var b strings.Builder
 	writeMention(&b, screenName, lookup, usernameDomains, cfg, withDomains)
 	return b.String()
 }
 
-func writeMention(b *strings.Builder, screenName string, lookup map[string]mentionAccount, usernameDomains map[string]map[string]struct{}, cfg *config.Config, withDomains bool) {
+func writeMention(b *strings.Builder, screenName string, lookup map[string]mentionAccount, usernameDomains map[string][]string, cfg *config.Config, withDomains bool) {
 	username, domain := splitAcct(screenName, screenName)
 	domain = normalizeDomain(domain)
 	if domain != "" && isLocalMentionDomain(domain, cfg) {
