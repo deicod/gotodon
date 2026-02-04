@@ -2,6 +2,7 @@ package v1
 
 import (
 	"context"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -386,14 +387,53 @@ func serializeStatusesInternal(ctx context.Context, q statusSerializerQuerier, c
 	accountsMap := serializeAccounts(ctx, q, cfg, dbAccounts, true)
 	statusEmojis := buildStatusEmojis(ctx, q, dbStatuses, accountsMap)
 
-	var mediaMap map[int64][]MediaAttach
+	type indexRange struct {
+		start, end int
+	}
+
+	var allMedia []MediaAttach
+	var mediaRanges map[int64]indexRange
+
 	if len(dbMedias) > 0 {
-		mediaMap = make(map[int64][]MediaAttach)
+		slices.SortFunc(dbMedias, func(a, b db.MediaAttachment) int {
+			if !a.StatusID.Valid {
+				if !b.StatusID.Valid {
+					return 0
+				}
+				return 1
+			}
+			if !b.StatusID.Valid {
+				return -1
+			}
+			if a.StatusID.Int64 < b.StatusID.Int64 {
+				return -1
+			}
+			if a.StatusID.Int64 > b.StatusID.Int64 {
+				return 1
+			}
+			return 0
+		})
+
+		allMedia = make([]MediaAttach, 0, len(dbMedias))
+		mediaRanges = make(map[int64]indexRange)
+
+		var currentSID int64 = -1
+		start := 0
+
 		for _, m := range dbMedias {
 			if !m.StatusID.Valid {
 				continue
 			}
 			sid := m.StatusID.Int64
+
+			if sid != currentSID {
+				if currentSID != -1 {
+					mediaRanges[currentSID] = indexRange{start: start, end: len(allMedia)}
+				}
+				currentSID = sid
+				start = len(allMedia)
+			}
+
 			mediaType := "image"
 			if m.Type == MediaTypeVideo {
 				mediaType = "video"
@@ -422,7 +462,7 @@ func serializeStatusesInternal(ctx context.Context, q statusSerializerQuerier, c
 			// Existing code used raw m.RemoteUrl or m.ThumbnailRemoteUrl.
 			// For local files, we might need to prepend valid URLs but let's stick to DB values for now unless empty.
 
-			mediaMap[sid] = append(mediaMap[sid], MediaAttach{
+			allMedia = append(allMedia, MediaAttach{
 				ID:          strconv.FormatInt(m.ID, 10),
 				Type:        mediaType,
 				URL:         m.RemoteUrl,
@@ -432,16 +472,20 @@ func serializeStatusesInternal(ctx context.Context, q statusSerializerQuerier, c
 				Blurhash:    blurhash,
 			})
 		}
+		if currentSID != -1 {
+			mediaRanges[currentSID] = indexRange{start: start, end: len(allMedia)}
+		}
 	}
 
-	var mentionsMap map[int64][]Mention
+	var allMentions []Mention
+	var mentionRanges map[int64]indexRange
+
 	// For mentions, we need the mentioned account usernames.
 	// The bulk query GetMentionsByStatusIDs gives us the Mention records.
 	// We need to fetch the Accounts for these mentions to populate Username/Acct/URL.
 	// This is valid: [P1] N+1 fix.
 
 	if len(dbMentions) > 0 {
-		mentionsMap = make(map[int64][]Mention)
 		// Collect mentioned account IDs
 		mentionedAccountIDs := make([]int64, 0, len(dbMentions))
 		mentionedAccountIDSeen := make(map[int64]bool, len(dbMentions))
@@ -453,18 +497,47 @@ func serializeStatusesInternal(ctx context.Context, q statusSerializerQuerier, c
 		}
 
 		// Fetch mentioned accounts
+		var mentionedAccountsMap map[int64]Account
 		if len(mentionedAccountIDs) > 0 {
 			mentionedDbAccounts, _ := q.GetAccountsByIDs(ctx, mentionedAccountIDs)
-			mentionedAccountsMap := serializeAccounts(ctx, q, cfg, mentionedDbAccounts, true)
+			mentionedAccountsMap = serializeAccounts(ctx, q, cfg, mentionedDbAccounts, true)
+		}
 
-			for _, m := range dbMentions {
+		slices.SortFunc(dbMentions, func(a, b db.Mention) int {
+			if a.StatusID < b.StatusID {
+				return -1
+			}
+			if a.StatusID > b.StatusID {
+				return 1
+			}
+			return 0
+		})
+
+		allMentions = make([]Mention, 0, len(dbMentions))
+		mentionRanges = make(map[int64]indexRange)
+
+		var currentSID int64 = -1
+		start := 0
+
+		for _, m := range dbMentions {
+			sid := m.StatusID
+
+			if sid != currentSID {
+				if currentSID != -1 {
+					mentionRanges[currentSID] = indexRange{start: start, end: len(allMentions)}
+				}
+				currentSID = sid
+				start = len(allMentions)
+			}
+
+			if mentionedAccountsMap != nil {
 				acc, ok := mentionedAccountsMap[m.AccountID]
 				if ok {
 					url := acc.URL
 					if strings.TrimSpace(url) == "" {
 						url = acc.URI
 					}
-					mentionsMap[m.StatusID] = append(mentionsMap[m.StatusID], Mention{
+					allMentions = append(allMentions, Mention{
 						ID:       acc.ID,
 						Username: acc.Username,
 						Acct:     acc.Acct,
@@ -473,18 +546,51 @@ func serializeStatusesInternal(ctx context.Context, q statusSerializerQuerier, c
 				}
 			}
 		}
+		if currentSID != -1 {
+			mentionRanges[currentSID] = indexRange{start: start, end: len(allMentions)}
+		}
 	}
 
 	// Fetch tags
 	dbTags, _ := q.GetTagsByStatusIDs(ctx, statusIDs)
-	var tagsMap map[int64][]Tag
+	var allTags []Tag
+	var tagRanges map[int64]indexRange
+
 	if len(dbTags) > 0 {
-		tagsMap = make(map[int64][]Tag)
+		slices.SortFunc(dbTags, func(a, b db.GetTagsByStatusIDsRow) int {
+			if a.StatusID < b.StatusID {
+				return -1
+			}
+			if a.StatusID > b.StatusID {
+				return 1
+			}
+			return 0
+		})
+
+		allTags = make([]Tag, 0, len(dbTags))
+		tagRanges = make(map[int64]indexRange)
+
+		var currentSID int64 = -1
+		start := 0
+
 		for _, t := range dbTags {
-			tagsMap[t.StatusID] = append(tagsMap[t.StatusID], Tag{
+			sid := t.StatusID
+
+			if sid != currentSID {
+				if currentSID != -1 {
+					tagRanges[currentSID] = indexRange{start: start, end: len(allTags)}
+				}
+				currentSID = sid
+				start = len(allTags)
+			}
+
+			allTags = append(allTags, Tag{
 				Name: t.Name,
 				URL:  "https://" + cfg.Instance.LocalDomain + "/tags/" + t.Name, // Construct local tag URL
 			})
+		}
+		if currentSID != -1 {
+			tagRanges[currentSID] = indexRange{start: start, end: len(allTags)}
 		}
 	}
 
@@ -624,18 +730,24 @@ func serializeStatusesInternal(ctx context.Context, q statusSerializerQuerier, c
 			account = Account{ID: strconv.FormatInt(dbStatus.AccountID, 10), Username: "unknown"}
 		}
 
-		mediaAttachments := mediaMap[dbStatus.ID]
-		if mediaAttachments == nil {
+		var mediaAttachments []MediaAttach
+		if rng, ok := mediaRanges[dbStatus.ID]; ok {
+			mediaAttachments = allMedia[rng.start:rng.end]
+		} else {
 			mediaAttachments = []MediaAttach{}
 		}
 
-		mentions := mentionsMap[dbStatus.ID]
-		if mentions == nil {
+		var mentions []Mention
+		if rng, ok := mentionRanges[dbStatus.ID]; ok {
+			mentions = allMentions[rng.start:rng.end]
+		} else {
 			mentions = []Mention{}
 		}
 
-		statusTags := tagsMap[dbStatus.ID]
-		if statusTags == nil {
+		var statusTags []Tag
+		if rng, ok := tagRanges[dbStatus.ID]; ok {
+			statusTags = allTags[rng.start:rng.end]
+		} else {
 			statusTags = []Tag{}
 		}
 
