@@ -250,53 +250,47 @@ func extractTextEntities(text string) []textEntity {
 	// If the regex is ever updated to support schemeless URLs (e.g. "www.example.com"),
 	// this check must be updated or removed.
 	if strings.Contains(text, "://") || strings.Contains(text, "xmpp:") || strings.Contains(text, "XMPP:") {
-		for _, match := range statusURLRegex.FindAllStringIndex(text, -1) {
-			start, end := match[0], match[1]
-			end, urlValue := trimURLSuffix(text, start, end)
-			if urlValue == "" {
-				continue
+		// statusURLRegex uses \b, so we must enable manual boundary check
+		findMatches(text, statusURLRegex, true, func(start, end int) {
+			trimmedEnd, urlValue := trimURLSuffix(text, start, end)
+			if urlValue != "" {
+				entities = append(entities, textEntity{
+					start: start,
+					end:   trimmedEnd,
+					kind:  entityURL,
+					value: urlValue,
+				})
 			}
-			entities = append(entities, textEntity{
-				start: start,
-				end:   end,
-				kind:  entityURL,
-				value: urlValue,
-			})
-		}
+		})
 	}
 
 	if strings.Contains(text, "@") {
-		for _, match := range statusMentionRegex.FindAllStringIndex(text, -1) {
-			start, end := match[0], match[1]
-			if !validMentionBoundary(text, start) {
-				continue
+		findMatches(text, statusMentionRegex, false, func(start, end int) {
+			if validMentionBoundary(text, start) {
+				entities = append(entities, textEntity{
+					start: start,
+					end:   end,
+					kind:  entityMention,
+					value: text[start+1 : end],
+				})
 			}
-			entities = append(entities, textEntity{
-				start: start,
-				end:   end,
-				kind:  entityMention,
-				value: text[start+1 : end],
-			})
-		}
+		})
 	}
 
 	if strings.Contains(text, "#") || strings.Contains(text, "\uff03") {
-		for _, match := range statusHashtagRegex.FindAllStringIndex(text, -1) {
-			start, end := match[0], match[1]
-			if !validHashtagBoundary(text, start) {
-				continue
+		findMatches(text, statusHashtagRegex, false, func(start, end int) {
+			if validHashtagBoundary(text, start) {
+				tag := extractHashtag(text[start:end])
+				if tag != "" {
+					entities = append(entities, textEntity{
+						start: start,
+						end:   end,
+						kind:  entityHashtag,
+						value: tag,
+					})
+				}
 			}
-			tag := extractHashtag(text[start:end])
-			if tag == "" {
-				continue
-			}
-			entities = append(entities, textEntity{
-				start: start,
-				end:   end,
-				kind:  entityHashtag,
-				value: tag,
-			})
-		}
+		})
 	}
 
 	if len(entities) > 1 {
@@ -323,6 +317,39 @@ func extractTextEntities(text string) []textEntity {
 		cursor = entity.end
 	}
 	return entities[:writeIdx]
+}
+
+// findMatches iterates over all matches of re in text without allocating a result slice.
+// If checkWordBoundary is true, it manually verifies \b matches at the start of sliced strings.
+func findMatches(text string, re *regexp.Regexp, checkWordBoundary bool, cb func(start, end int)) {
+	cursor := 0
+	for cursor < len(text) {
+		match := re.FindStringIndex(text[cursor:])
+		if match == nil {
+			break
+		}
+		start := cursor + match[0]
+		end := cursor + match[1]
+
+		// Manual boundary check for \b because of slicing.
+		// Go's regexp \b is ASCII-only (matches between [0-9A-Za-z_] and non-word char).
+		// If match starts at beginning of slice (match[0] == 0) and we are not at start of text,
+		// we must check the preceding character. If it is a word char, \b should NOT have matched.
+		if checkWordBoundary {
+			if match[0] == 0 && cursor > 0 && isASCIIWordByte(text[cursor-1]) {
+				// False positive due to slicing context. Advance and retry.
+				cursor++
+				continue
+			}
+		}
+
+		cb(start, end)
+		cursor = end
+	}
+}
+
+func isASCIIWordByte(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
 }
 
 func trimURLSuffix(text string, start, end int) (int, string) {
