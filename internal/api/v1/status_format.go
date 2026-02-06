@@ -140,22 +140,47 @@ func writeFormattedText(b *strings.Builder, s string) {
 	i := 0
 	n := len(s)
 	for i < n {
-		j := strings.IndexAny(s[i:], "\r\n\"'&<>")
+		// Optimization: fast manual scan for small distances to avoid IndexAny overhead
+		// and slice header allocations for dense special characters.
+		limit := i + 16
+		if limit > n {
+			limit = n
+		}
+
+		j := -1
+		for k := i; k < limit; k++ {
+			c := s[k]
+			// \r \n " ' & < >
+			if c == '\r' || c == '\n' || c == '"' || c == '\'' || c == '&' || c == '<' || c == '>' {
+				j = k - i
+				break
+			}
+		}
+
 		if j == -1 {
-			b.WriteString(s[i:])
-			break
+			if limit == n {
+				b.WriteString(s[i:])
+				break
+			}
+			idx := strings.IndexAny(s[limit:], "\r\n\"'&<>")
+			if idx == -1 {
+				b.WriteString(s[i:])
+				break
+			}
+			j = (limit - i) + idx
 		}
-		j += i
 
-		if j > i {
-			b.WriteString(s[i:j])
+		// Found at j (relative to i)
+		absJ := i + j
+		if absJ > i {
+			b.WriteString(s[i:absJ])
 		}
 
-		c := s[j]
+		c := s[absJ]
 		if c == '\r' || c == '\n' {
 			// Handle newlines
 			newlines := 0
-			k := j
+			k := absJ
 			for k < n {
 				c2 := s[k]
 				if c2 == '\r' {
@@ -191,7 +216,7 @@ func writeFormattedText(b *strings.Builder, s string) {
 			case '>':
 				b.WriteString("&gt;")
 			}
-			i = j + 1
+			i = absJ + 1
 		}
 	}
 }
@@ -693,16 +718,43 @@ func writeEscapeString(b *strings.Builder, s string) {
 	i := 0
 	n := len(s)
 	for i < n {
-		j := strings.IndexAny(s[i:], "\"'&<>")
-		if j == -1 {
-			b.WriteString(s[i:])
-			break
+		// Optimization: fast manual scan for small distances to avoid IndexAny overhead
+		// and slice header allocations for dense special characters.
+		limit := i + 16
+		if limit > n {
+			limit = n
 		}
-		j += i
 
-		b.WriteString(s[i:j])
+		j := -1
+		for k := i; k < limit; k++ {
+			c := s[k]
+			// " ' & < >
+			if c == '"' || c == '\'' || c == '&' || c == '<' || c == '>' {
+				j = k - i
+				break
+			}
+		}
 
-		switch s[j] {
+		if j == -1 {
+			if limit == n {
+				b.WriteString(s[i:])
+				break
+			}
+			idx := strings.IndexAny(s[limit:], "\"'&<>")
+			if idx == -1 {
+				b.WriteString(s[i:])
+				break
+			}
+			j = (limit - i) + idx
+		}
+
+		// Found at j (relative to i)
+		absJ := i + j
+		if absJ > i {
+			b.WriteString(s[i:absJ])
+		}
+
+		switch s[absJ] {
 		case '"':
 			b.WriteString("&#34;")
 		case '&':
@@ -714,7 +766,7 @@ func writeEscapeString(b *strings.Builder, s string) {
 		case '>':
 			b.WriteString("&gt;")
 		}
-		i = j + 1
+		i = absJ + 1
 	}
 }
 
