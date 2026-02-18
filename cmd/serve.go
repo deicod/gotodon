@@ -25,6 +25,7 @@ import (
 	v1 "github.com/deicod/gotodon/internal/api/v1"
 	v1alpha "github.com/deicod/gotodon/internal/api/v1alpha"
 	v2 "github.com/deicod/gotodon/internal/api/v2"
+	webapi "github.com/deicod/gotodon/internal/api/web"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/federation"
@@ -344,6 +345,16 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	v2AdminAccountsHandler := v2.NewAdminAccountsHandler(queries, cfg)
 	v2AdminAccountsHandler.RegisterRoutes(mux)
+
+	// Register web handlers
+	webEmbedsHandler := webapi.NewEmbedsHandler(queries, cfg)
+	webEmbedsHandler.RegisterRoutes(mux)
+
+	webSettingsHandler := webapi.NewSettingsHandler(queries)
+	webSettingsHandler.RegisterRoutes(mux)
+
+	webPushSubscriptionsHandler := webapi.NewPushSubscriptionsHandler(queries, cfg)
+	webPushSubscriptionsHandler.RegisterRoutes(mux)
 
 	// Register OAuth handlers
 	oauthHandler := oauthapi.NewHandler(queries, cfg)

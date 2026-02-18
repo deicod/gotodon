@@ -541,6 +541,7 @@ func (h *ReportsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/admin/reports", h.GetAll)
 	mux.HandleFunc("GET /api/v1/admin/reports/{id}", h.Get)
 	mux.HandleFunc("PUT /api/v1/admin/reports/{id}", h.Update)
+	mux.HandleFunc("PATCH /api/v1/admin/reports/{id}", h.Update)
 	mux.HandleFunc("POST /api/v1/admin/reports/{id}/resolve", h.Resolve)
 	mux.HandleFunc("POST /api/v1/admin/reports/{id}/assign_to_self", h.AssignToSelf)
 	mux.HandleFunc("POST /api/v1/admin/reports/{id}/unassign", h.Unassign)

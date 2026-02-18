@@ -335,5 +335,6 @@ func (h *DomainBlocksHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/admin/domain_blocks", h.Create)
 	mux.HandleFunc("GET /api/v1/admin/domain_blocks/{id}", h.Get)
 	mux.HandleFunc("PUT /api/v1/admin/domain_blocks/{id}", h.Update)
+	mux.HandleFunc("PATCH /api/v1/admin/domain_blocks/{id}", h.Update)
 	mux.HandleFunc("DELETE /api/v1/admin/domain_blocks/{id}", h.Delete)
 }

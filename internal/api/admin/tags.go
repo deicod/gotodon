@@ -217,4 +217,5 @@ func (h *TagsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/admin/tags", h.GetAll)
 	mux.HandleFunc("GET /api/v1/admin/tags/{id}", h.Get)
 	mux.HandleFunc("PUT /api/v1/admin/tags/{id}", h.Update)
+	mux.HandleFunc("PATCH /api/v1/admin/tags/{id}", h.Update)
 }

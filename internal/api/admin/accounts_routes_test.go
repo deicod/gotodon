@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-func TestAccountsHandler_RegisterRoutes_UnsensitiveAlias(t *testing.T) {
+func TestAccountsHandler_RegisterRoutes_Unsensitive(t *testing.T) {
 	h := NewAccountsHandler(nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -20,11 +20,6 @@ func TestAccountsHandler_RegisterRoutes_UnsensitiveAlias(t *testing.T) {
 		path        string
 		wantPattern string
 	}{
-		{
-			method:      http.MethodPost,
-			path:        "/api/v1/admin/accounts/123/unsensitize",
-			wantPattern: "POST /api/v1/admin/accounts/{id}/unsensitize",
-		},
 		{
 			method:      http.MethodPost,
 			path:        "/api/v1/admin/accounts/123/unsensitive",

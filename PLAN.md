@@ -164,12 +164,12 @@ Gaps
 - Token refresh/expiry and revocation semantics are incomplete.
 
 Plan
-1) Adopt `github.com/ory/fosite` as the OAuth/OIDC core and route `/oauth/authorize`, `/oauth/token`, and `/oauth/revoke` through fosite handlers.
-2) Implement a fosite storage layer on top of `oauth_applications`, `oauth_access_grants`, and `oauth_access_tokens` with PKCE support via `code_challenge` fields.
+1) Keep custom OAuth handlers for Mastodon compatibility.
+2) Preserve existing oauth application/token storage and PKCE flow.
 3) Align token handling to Mastodon semantics: hashed access/refresh token storage, scoped tokens, `last_used_at/ip` updates, and revocation.
 4) Support grant types needed by Mastodon clients (authorization_code + PKCE, refresh_token, client_credentials); keep password grant only for legacy clients behind config.
 5) Expose `/.well-known/oauth-authorization-server` and `/oauth/userinfo` payloads aligned with Mastodon; add OIDC discovery only if required by clients.
-6) Migration plan: dual-validate legacy tokens and fosite tokens during cutover, backfill hashes for existing tokens, then remove legacy paths.
+6) No migration required; continue using legacy token format.
 7) Add tests for code+PKCE, refresh, revoke, userinfo, discovery metadata, and expiry/rotation behavior.
 
 ---

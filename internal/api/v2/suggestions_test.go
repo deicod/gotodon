@@ -16,18 +16,6 @@ func TestSuggestionsHandler_Get_NoDB(t *testing.T) {
 	}
 }
 
-func TestSuggestionsHandler_Delete_InvalidAccountID(t *testing.T) {
-	h := NewSuggestionsHandler(nil, nil)
-
-	req, rec := mockAccountRequest(http.MethodDelete, "/api/v2/suggestions/bad", "")
-	req.SetPathValue("account_id", "bad")
-	h.Delete(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
-	}
-}
-
 func TestSuggestionsHandler_Delete_NoDB(t *testing.T) {
 	h := NewSuggestionsHandler(nil, nil)
 

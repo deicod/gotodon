@@ -633,6 +633,7 @@ func (h *FiltersHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/filters", h.Create)
 	mux.HandleFunc("GET /api/v1/filters/{id}", h.Get)
 	mux.HandleFunc("PUT /api/v1/filters/{id}", h.Update)
+	mux.HandleFunc("PATCH /api/v1/filters/{id}", h.Update)
 	mux.HandleFunc("DELETE /api/v1/filters/{id}", h.Delete)
 }
 

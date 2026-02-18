@@ -530,6 +530,5 @@ func (h *AccountsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/enable", h.Enable)
 	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unsilence", h.Unsilence)
 	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unsuspend", h.Unsuspend)
-	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unsensitize", h.Unsensitize)
 	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unsensitive", h.Unsensitize)
 }

@@ -489,6 +489,7 @@ func (h *ListsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/lists", h.Create)
 	mux.HandleFunc("GET /api/v1/lists/{id}", h.Get)
 	mux.HandleFunc("PUT /api/v1/lists/{id}", h.Update)
+	mux.HandleFunc("PATCH /api/v1/lists/{id}", h.Update)
 	mux.HandleFunc("DELETE /api/v1/lists/{id}", h.Delete)
 	mux.HandleFunc("GET /api/v1/lists/{id}/accounts", h.GetAccounts)
 	mux.HandleFunc("POST /api/v1/lists/{id}/accounts", h.AddAccounts)

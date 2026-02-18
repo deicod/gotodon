@@ -345,5 +345,6 @@ func (h *IpBlocksHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/admin/ip_blocks", h.Create)
 	mux.HandleFunc("GET /api/v1/admin/ip_blocks/{id}", h.Get)
 	mux.HandleFunc("PUT /api/v1/admin/ip_blocks/{id}", h.Update)
+	mux.HandleFunc("PATCH /api/v1/admin/ip_blocks/{id}", h.Update)
 	mux.HandleFunc("DELETE /api/v1/admin/ip_blocks/{id}", h.Delete)
 }

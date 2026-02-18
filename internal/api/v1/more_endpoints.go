@@ -728,6 +728,7 @@ func (h *ScheduledStatusesHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/scheduled_statuses", h.List)
 	mux.HandleFunc("GET /api/v1/scheduled_statuses/{id}", h.Get)
 	mux.HandleFunc("PUT /api/v1/scheduled_statuses/{id}", h.Update)
+	mux.HandleFunc("PATCH /api/v1/scheduled_statuses/{id}", h.Update)
 	mux.HandleFunc("DELETE /api/v1/scheduled_statuses/{id}", h.Delete)
 }
 
@@ -850,6 +851,7 @@ func (h *PushHandler) Create(w http.ResponseWriter, r *http.Request) {
 		KeyAuth:       pgtype.Text{String: authKey, Valid: true},
 		Data:          dataBytes,
 		UserID:        pgtype.Int8{Int64: userID, Valid: userID > 0},
+		Standard:      false,
 	})
 	if err == nil {
 		web.JSON(w, http.StatusOK, PushSubscription{
@@ -873,6 +875,7 @@ func (h *PushHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Data:          dataBytes,
 		UserID:        pgtype.Int8{Int64: userID, Valid: userID > 0},
 		AccessTokenID: pgtype.Int8{Int64: tokenID, Valid: true},
+		Standard:      false,
 	})
 	if err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Failed to create subscription")
@@ -1020,5 +1023,6 @@ func (h *PushHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/push/subscription", h.Get)
 	mux.HandleFunc("POST /api/v1/push/subscription", h.Create)
 	mux.HandleFunc("PUT /api/v1/push/subscription", h.Update)
+	mux.HandleFunc("PATCH /api/v1/push/subscription", h.Update)
 	mux.HandleFunc("DELETE /api/v1/push/subscription", h.Delete)
 }

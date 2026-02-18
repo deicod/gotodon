@@ -806,6 +806,7 @@ func (h *NotificationsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v2/notifications/unread_count", h.UnreadCount)
 	mux.HandleFunc("GET /api/v2/notifications/policy", h.GetPolicy)
 	mux.HandleFunc("PUT /api/v2/notifications/policy", h.UpdatePolicy)
+	mux.HandleFunc("PATCH /api/v2/notifications/policy", h.UpdatePolicy)
 	mux.HandleFunc("GET /api/v2/notifications/{group_key}", h.Get)
 	mux.HandleFunc("POST /api/v2/notifications/{group_key}/dismiss", h.Dismiss)
 	mux.HandleFunc("GET /api/v2/notifications/{group_key}/accounts", h.Accounts)

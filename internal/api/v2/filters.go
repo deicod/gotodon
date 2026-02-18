@@ -1025,7 +1025,12 @@ func (h *FiltersHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v2/filters", h.Create)
 	mux.HandleFunc("GET /api/v2/filters/", h.dispatchGet)
 	mux.HandleFunc("POST /api/v2/filters/", h.dispatchPost)
+	mux.HandleFunc("PUT /api/v2/filters/{id}", h.Update)
+	mux.HandleFunc("PATCH /api/v2/filters/{id}", h.Update)
+	mux.HandleFunc("PUT /api/v2/filters/keywords/{id}", h.UpdateKeywordByID)
+	mux.HandleFunc("PATCH /api/v2/filters/keywords/{id}", h.UpdateKeywordByID)
 	mux.HandleFunc("PUT /api/v2/filters/", h.dispatchPut)
+	mux.HandleFunc("PATCH /api/v2/filters/", h.dispatchPut)
 	mux.HandleFunc("DELETE /api/v2/filters/", h.dispatchDelete)
 }
 

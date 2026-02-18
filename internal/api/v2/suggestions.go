@@ -109,13 +109,11 @@ func (h *SuggestionsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	suggestionAccountID := web.Param(r, "account_id")
-
 	targetID, err := strconv.ParseInt(suggestionAccountID, 10, 64)
 	if err != nil || targetID <= 0 {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
-
 	if h.queries == nil {
 		web.JSONError(w, http.StatusInternalServerError, "Suggestions unavailable")
 		return

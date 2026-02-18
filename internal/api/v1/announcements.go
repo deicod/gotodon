@@ -690,5 +690,6 @@ func (h *AnnouncementsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/announcements", h.GetAll)
 	mux.HandleFunc("POST /api/v1/announcements/{id}/dismiss", h.Dismiss)
 	mux.HandleFunc("PUT /api/v1/announcements/{id}/reactions/{name}", h.AddReaction)
+	mux.HandleFunc("PATCH /api/v1/announcements/{id}/reactions/{name}", h.AddReaction)
 	mux.HandleFunc("DELETE /api/v1/announcements/{id}/reactions/{name}", h.RemoveReaction)
 }

@@ -89,11 +89,26 @@ func (h *Handler) Show(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	width := oembedDefaultWidth
-	if v := parseDimension(web.QueryParam(r, "maxwidth")); v != nil {
-		width = *v
-	}
+	width := parseDimension(web.QueryParam(r, "maxwidth"))
 	height := parseDimension(web.QueryParam(r, "maxheight"))
+
+	resp := h.BuildResponse(account, status, width, height)
+
+	w.Header().Set("Cache-Control", "private, no-store")
+	web.JSON(w, http.StatusOK, resp)
+}
+
+// BuildResponse builds the oEmbed response for a status.
+func (h *Handler) BuildResponse(account db.Account, status db.Status, width, height *int) OEmbedResponse {
+	computedWidth := oembedDefaultWidth
+	if width != nil && *width > 0 {
+		computedWidth = *width
+	}
+
+	computedHeight := height
+	if computedHeight != nil && *computedHeight < 1 {
+		computedHeight = nil
+	}
 
 	providerName := h.localDomain()
 	rootURL := h.rootURL()
@@ -109,13 +124,12 @@ func (h *Handler) Show(w http.ResponseWriter, r *http.Request) {
 	embedURL := h.embedStatusURL(accountSegment, statusID)
 
 	authorAcct := accountSegment
-
 	authorLine := authorAcct
 	if !strings.Contains(authorAcct, "@") {
 		authorLine = authorAcct + "@" + providerName
 	}
 
-	resp := OEmbedResponse{
+	return OEmbedResponse{
 		Type:         oembedType,
 		Version:      oembedVersion,
 		AuthorName:   authorName,
@@ -124,12 +138,9 @@ func (h *Handler) Show(w http.ResponseWriter, r *http.Request) {
 		ProviderURL:  rootURLWithSlash,
 		CacheAge:     oembedCacheAge,
 		HTML:         h.buildHTML(embedURL, statusURL, authorLine),
-		Width:        width,
-		Height:       height,
+		Width:        computedWidth,
+		Height:       computedHeight,
 	}
-
-	w.Header().Set("Cache-Control", "private, no-store")
-	web.JSON(w, http.StatusOK, resp)
 }
 
 // OEmbedResponse is the JSON response for /api/oembed.
