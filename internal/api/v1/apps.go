@@ -57,11 +57,41 @@ func (h *AppsHandler) vapidKey() string {
 type CreateAppRequest struct {
 	ClientName   string                `json:"client_name" form:"client_name"`
 	RedirectURIs createAppRedirectURIs `json:"redirect_uris" form:"redirect_uris"`
-	Scopes       string                `json:"scopes" form:"scopes"`
+	Scopes       createAppScopes       `json:"scopes" form:"scopes"`
 	Website      string                `json:"website" form:"website"`
 }
 
 type createAppRedirectURIs []string
+
+type createAppScopes string
+
+func (s *createAppScopes) UnmarshalJSON(data []byte) error {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "null" {
+		*s = ""
+		return nil
+	}
+
+	var single string
+	if err := json.Unmarshal(data, &single); err == nil {
+		*s = createAppScopes(single)
+		return nil
+	}
+
+	// Mastodon bug-compat: if scopes is sent as a JSON array, treat it like omitted.
+	var array []json.RawMessage
+	if err := json.Unmarshal(data, &array); err == nil {
+		*s = ""
+		return nil
+	}
+
+	return errors.New("scopes must be a string")
+}
+
+func (s *createAppScopes) UnmarshalText(text []byte) error {
+	*s = createAppScopes(string(text))
+	return nil
+}
 
 func (r *createAppRedirectURIs) UnmarshalJSON(data []byte) error {
 	trimmed := strings.TrimSpace(string(data))
@@ -143,7 +173,7 @@ func (h *AppsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scopes := oauth.ParseScopes(req.Scopes)
+	scopes := oauth.ParseScopes(string(req.Scopes))
 	if err := oauth.ValidateScopes(scopes); err != nil {
 		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Scopes is not included in the list")
 		return

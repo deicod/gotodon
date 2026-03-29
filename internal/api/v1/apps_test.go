@@ -303,6 +303,137 @@ func TestAppsHandler_Create_AcceptsRedirectURIsArray_FormEncoded_DBPath(t *testi
 	}
 }
 
+func TestAppsHandler_Create_MissingScopes_DefaultsToRead_DBPath(t *testing.T) {
+	stub := &stubAppsQueries{
+		app: db.OauthApplication{
+			ID:          102,
+			Name:        "Default Scope App",
+			Uid:         "generated-client-id",
+			Secret:      "generated-client-secret",
+			Scopes:      "read",
+			RedirectUri: "https://example.com/callback",
+		},
+	}
+	h := NewAppsHandler(stub, &config.Config{})
+
+	body := strings.NewReader(`{
+		"client_name":"Default Scope App",
+		"redirect_uris":"https://example.com/callback"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/apps", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.Create(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := stub.createArg.Scopes; got != "read" {
+		t.Fatalf("stored scopes = %q, want %q", got, "read")
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	scopes, ok := resp["scopes"].([]any)
+	if !ok {
+		t.Fatalf("scopes type = %T, want []any", resp["scopes"])
+	}
+	if len(scopes) != 1 || scopes[0] != "read" {
+		t.Fatalf("scopes = %#v, want [read]", scopes)
+	}
+}
+
+func TestAppsHandler_Create_JSONArrayScopes_DefaultsToRead_DBPath(t *testing.T) {
+	stub := &stubAppsQueries{
+		app: db.OauthApplication{
+			ID:          103,
+			Name:        "Array Scope App",
+			Uid:         "generated-client-id",
+			Secret:      "generated-client-secret",
+			Scopes:      "read",
+			RedirectUri: "https://example.com/callback",
+		},
+	}
+	h := NewAppsHandler(stub, &config.Config{})
+
+	body := strings.NewReader(`{
+		"client_name":"Array Scope App",
+		"redirect_uris":"https://example.com/callback",
+		"scopes":["write","read:statuses"]
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/apps", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.Create(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := stub.createArg.Scopes; got != "read" {
+		t.Fatalf("stored scopes = %q, want %q", got, "read")
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	scopes, ok := resp["scopes"].([]any)
+	if !ok {
+		t.Fatalf("scopes type = %T, want []any", resp["scopes"])
+	}
+	if len(scopes) != 1 || scopes[0] != "read" {
+		t.Fatalf("scopes = %#v, want [read]", scopes)
+	}
+}
+
+func TestAppsHandler_Create_ScalarScopes_Preserved_DBPath(t *testing.T) {
+	stub := &stubAppsQueries{
+		app: db.OauthApplication{
+			ID:          104,
+			Name:        "Scalar Scope App",
+			Uid:         "generated-client-id",
+			Secret:      "generated-client-secret",
+			Scopes:      "write read:statuses",
+			RedirectUri: "https://example.com/callback",
+		},
+	}
+	h := NewAppsHandler(stub, &config.Config{})
+
+	body := strings.NewReader(`{
+		"client_name":"Scalar Scope App",
+		"redirect_uris":"https://example.com/callback",
+		"scopes":"write read:statuses"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/apps", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.Create(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := stub.createArg.Scopes; got != "write read:statuses" {
+		t.Fatalf("stored scopes = %q, want %q", got, "write read:statuses")
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	scopes, ok := resp["scopes"].([]any)
+	if !ok {
+		t.Fatalf("scopes type = %T, want []any", resp["scopes"])
+	}
+	if len(scopes) != 2 || scopes[0] != "write" || scopes[1] != "read:statuses" {
+		t.Fatalf("scopes = %#v, want [write read:statuses]", scopes)
+	}
+}
+
 func TestAppsHandler_Create_RejectsEmptyRedirectURIsArray(t *testing.T) {
 	h := NewAppsHandler(nil, &config.Config{})
 
