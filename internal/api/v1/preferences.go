@@ -28,11 +28,13 @@ func NewPreferencesHandler(queries *db.Queries) *PreferencesHandler {
 
 // Preferences represents user preferences
 type Preferences struct {
-	PostingDefaultVisibility string `json:"posting:default:visibility"`
-	PostingDefaultSensitive  bool   `json:"posting:default:sensitive"`
-	PostingDefaultLanguage   string `json:"posting:default:language,omitempty"`
-	ReadingExpandMedia       string `json:"reading:expand:media"`
-	ReadingExpandSpoilers    bool   `json:"reading:expand:spoilers"`
+	PostingDefaultVisibility  string `json:"posting:default:visibility"`
+	PostingDefaultSensitive   bool   `json:"posting:default:sensitive"`
+	PostingDefaultLanguage    string `json:"posting:default:language,omitempty"`
+	PostingDefaultQuotePolicy string `json:"posting:default:quote_policy"`
+	ReadingExpandMedia        string `json:"reading:expand:media"`
+	ReadingExpandSpoilers     bool   `json:"reading:expand:spoilers"`
+	ReadingAutoplayGifs       bool   `json:"reading:autoplay:gifs"`
 }
 
 var validPreferenceVisibility = map[string]struct{}{
@@ -45,6 +47,12 @@ var validPreferenceExpandMedia = map[string]struct{}{
 	"default":  {},
 	"show_all": {},
 	"hide_all": {},
+}
+
+var validPreferenceQuotePolicy = map[string]struct{}{
+	"public":    {},
+	"followers": {},
+	"nobody":    {},
 }
 
 // Get handles GET /api/v1/preferences
@@ -97,6 +105,12 @@ func (h *PreferencesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	// Validate expand media
 	if req.ReadingExpandMedia != "" && !isValidPreferenceExpandMedia(req.ReadingExpandMedia) {
 		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Expand media value is invalid")
+		return
+	}
+
+	// Validate quote policy
+	if req.PostingDefaultQuotePolicy != "" && !isValidPreferenceQuotePolicy(req.PostingDefaultQuotePolicy) {
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Quote policy is invalid")
 		return
 	}
 
@@ -159,10 +173,12 @@ func (h *PreferencesHandler) RegisterRoutes(mux *http.ServeMux) {
 
 func defaultPreferences(locale string) Preferences {
 	prefs := Preferences{
-		PostingDefaultVisibility: "public",
-		PostingDefaultSensitive:  false,
-		ReadingExpandMedia:       "default",
-		ReadingExpandSpoilers:    false,
+		PostingDefaultVisibility:  "public",
+		PostingDefaultSensitive:   false,
+		PostingDefaultQuotePolicy: "public",
+		ReadingExpandMedia:        "default",
+		ReadingExpandSpoilers:     false,
+		ReadingAutoplayGifs:       false,
 	}
 	if strings.TrimSpace(locale) != "" {
 		prefs.PostingDefaultLanguage = strings.TrimSpace(locale)
@@ -182,11 +198,17 @@ func preferencesFromSettings(settings map[string]any, locale string) Preferences
 	if value := settingsString(settings, "default_language"); value != "" {
 		prefs.PostingDefaultLanguage = value
 	}
+	if value := settingsString(settings, "default_quote_policy"); isValidPreferenceQuotePolicy(value) {
+		prefs.PostingDefaultQuotePolicy = value
+	}
 	if value := settingsString(settings, "web.display_media"); isValidPreferenceExpandMedia(value) {
 		prefs.ReadingExpandMedia = value
 	}
 	if value, ok := settingsBool(settings, "web.expand_content_warnings"); ok {
 		prefs.ReadingExpandSpoilers = value
+	}
+	if value, ok := settingsBool(settings, "web.auto_play"); ok {
+		prefs.ReadingAutoplayGifs = value
 	}
 
 	return prefs
@@ -210,12 +232,19 @@ func applyPreferenceUpdate(settings map[string]any, req Preferences) {
 		settings["default_language"] = strings.TrimSpace(req.PostingDefaultLanguage)
 	}
 
+	if strings.TrimSpace(req.PostingDefaultQuotePolicy) == "" {
+		delete(settings, "default_quote_policy")
+	} else {
+		settings["default_quote_policy"] = strings.TrimSpace(req.PostingDefaultQuotePolicy)
+	}
+
 	if strings.TrimSpace(req.ReadingExpandMedia) == "" {
 		delete(settings, "web.display_media")
 	} else {
 		settings["web.display_media"] = strings.TrimSpace(req.ReadingExpandMedia)
 	}
 	settings["web.expand_content_warnings"] = req.ReadingExpandSpoilers
+	settings["web.auto_play"] = req.ReadingAutoplayGifs
 }
 
 func applySourceSettings(settings map[string]any, privacy *string, sensitive *bool, language *string) {
@@ -308,5 +337,10 @@ func isValidPreferenceVisibility(value string) bool {
 
 func isValidPreferenceExpandMedia(value string) bool {
 	_, ok := validPreferenceExpandMedia[value]
+	return ok
+}
+
+func isValidPreferenceQuotePolicy(value string) bool {
+	_, ok := validPreferenceQuotePolicy[value]
 	return ok
 }

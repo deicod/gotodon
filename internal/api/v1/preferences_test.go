@@ -32,6 +32,12 @@ func TestPreferencesHandler_GetDefaults(t *testing.T) {
 	if resp.ReadingExpandSpoilers {
 		t.Fatalf("reading:expand:spoilers = true, want false")
 	}
+	if resp.PostingDefaultQuotePolicy != "public" {
+		t.Fatalf("posting:default:quote_policy = %q, want %q", resp.PostingDefaultQuotePolicy, "public")
+	}
+	if resp.ReadingAutoplayGifs {
+		t.Fatalf("reading:autoplay:gifs = true, want false")
+	}
 }
 
 func TestPreferencesFromSettings(t *testing.T) {
@@ -39,8 +45,10 @@ func TestPreferencesFromSettings(t *testing.T) {
 		"default_privacy":             "private",
 		"default_sensitive":           true,
 		"default_language":            "fr",
+		"default_quote_policy":        "followers",
 		"web.display_media":           "show_all",
 		"web.expand_content_warnings": true,
+		"web.auto_play":               true,
 	}
 
 	prefs := preferencesFromSettings(settings, "en")
@@ -59,12 +67,20 @@ func TestPreferencesFromSettings(t *testing.T) {
 	if !prefs.ReadingExpandSpoilers {
 		t.Fatalf("expand spoilers = false, want true")
 	}
+	if prefs.PostingDefaultQuotePolicy != "followers" {
+		t.Fatalf("quote policy = %q, want %q", prefs.PostingDefaultQuotePolicy, "followers")
+	}
+	if !prefs.ReadingAutoplayGifs {
+		t.Fatalf("autoplay gifs = false, want true")
+	}
 
 	settings = map[string]any{
 		"default_privacy":             "invalid",
 		"default_sensitive":           "true",
 		"web.display_media":           "bad",
 		"web.expand_content_warnings": "true",
+		"default_quote_policy":        "invalid",
+		"web.auto_play":               "true",
 	}
 
 	prefs = preferencesFromSettings(settings, "en")
@@ -82,5 +98,29 @@ func TestPreferencesFromSettings(t *testing.T) {
 	}
 	if !prefs.ReadingExpandSpoilers {
 		t.Fatalf("string expand spoilers = false, want true")
+	}
+	if prefs.PostingDefaultQuotePolicy != "public" {
+		t.Fatalf("invalid quote policy = %q, want %q", prefs.PostingDefaultQuotePolicy, "public")
+	}
+	if !prefs.ReadingAutoplayGifs {
+		t.Fatalf("string autoplay gifs = false, want true")
+	}
+}
+
+func TestPreferencesFromSettings_InvalidQuotePolicyFallsBackToDefault(t *testing.T) {
+	prefs := preferencesFromSettings(map[string]any{
+		"default_quote_policy": "bad-value",
+	}, "")
+	if prefs.PostingDefaultQuotePolicy != "public" {
+		t.Fatalf("invalid quote policy = %q, want %q", prefs.PostingDefaultQuotePolicy, "public")
+	}
+}
+
+func TestPreferencesFromSettings_AutoplayGifsStringBool(t *testing.T) {
+	prefs := preferencesFromSettings(map[string]any{
+		"web.auto_play": "true",
+	}, "")
+	if !prefs.ReadingAutoplayGifs {
+		t.Fatalf("string autoplay gifs = false, want true")
 	}
 }
