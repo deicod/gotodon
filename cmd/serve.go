@@ -19,6 +19,7 @@ import (
 
 	activitypubapi "github.com/deicod/gotodon/internal/api/activitypub"
 	"github.com/deicod/gotodon/internal/api/admin"
+	hostmetaapi "github.com/deicod/gotodon/internal/api/hostmeta"
 	"github.com/deicod/gotodon/internal/api/middleware"
 	nodeinfoapi "github.com/deicod/gotodon/internal/api/nodeinfo"
 	oauthapi "github.com/deicod/gotodon/internal/api/oauth"
@@ -365,6 +366,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	oembedHandler := oembedapi.NewHandler(queries, cfg)
 	oembedHandler.RegisterRoutes(mux)
 
+	hostMetaHandler := hostmetaapi.NewHandler(cfg)
+	hostMetaHandler.RegisterRoutes(mux)
+
 	nodeInfoHandler := nodeinfoapi.NewHandler(queries, cfg)
 	nodeInfoHandler.RegisterRoutes(mux)
 
@@ -498,19 +502,6 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	// V1 Reports (User API)
 	v1ReportsHandler := v1.NewReportsHandler(queries)
 	mux.HandleFunc("POST /api/v1/reports", v1ReportsHandler.Create)
-
-	mux.HandleFunc("GET /.well-known/host-meta", func(w http.ResponseWriter, r *http.Request) {
-		// Return XRD host-meta as per RFC 6415
-		xml := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
-<XRD xmlns="http://docs.oasis-open.org/ns/xri/xrd-1.0">
-  <Link rel="lrdd" template="https://%s/.well-known/webfinger?resource={uri}"/>
-</XRD>`, cfg.Instance.LocalDomain)
-		w.Header().Set("Content-Type", "application/xrd+xml; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write([]byte(xml)); err != nil {
-			logger.Error("Failed to write host-meta XML response", "error", err)
-		}
-	})
 
 	// Health check
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
