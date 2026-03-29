@@ -27,6 +27,7 @@ import (
 	nodeinfoapi "github.com/deicod/gotodon/internal/api/nodeinfo"
 	oauthapi "github.com/deicod/gotodon/internal/api/oauth"
 	oembedapi "github.com/deicod/gotodon/internal/api/oembed"
+	wellknownapi "github.com/deicod/gotodon/internal/api/wellknown"
 	v1 "github.com/deicod/gotodon/internal/api/v1"
 	v1alpha "github.com/deicod/gotodon/internal/api/v1alpha"
 	v2 "github.com/deicod/gotodon/internal/api/v2"
@@ -380,6 +381,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	webfingerHandler := webfingerapi.NewHandler(queries, cfg)
 	webfingerHandler.RegisterRoutes(mux)
+
+	wellKnownHandler := wellknownapi.NewHandler()
+	wellKnownHandler.RegisterRoutes(mux)
 
 	remoteActorResolver := federation.NewRemoteActorResolver(queries, cfg.Instance.LocalDomain)
 	var authorizeInteractionHandler *authorizeinteractionapi.Handler
