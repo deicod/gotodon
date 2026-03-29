@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -25,6 +27,8 @@ type stubAccountUpdateQueries struct {
 	updateParams         db.UpdateAccountParams
 	updateSettingsCalled bool
 	updateSettingsParams db.UpdateUserSettingsParams
+	account              db.Account
+	getAccountErr        error
 	user                 db.User
 }
 
@@ -39,6 +43,16 @@ func (s *stubAccountUpdateQueries) GetUserByAccountID(ctx context.Context, accou
 		return s.user, nil
 	}
 	return db.User{}, pgx.ErrNoRows
+}
+
+func (s *stubAccountUpdateQueries) GetAccountByID(ctx context.Context, id int64) (db.Account, error) {
+	if s.getAccountErr != nil {
+		return db.Account{}, s.getAccountErr
+	}
+	if s.account.ID != 0 {
+		return s.account, nil
+	}
+	return db.Account{}, pgx.ErrNoRows
 }
 
 func (s *stubAccountUpdateQueries) UpdateUserSettings(ctx context.Context, arg db.UpdateUserSettingsParams) error {
@@ -431,6 +445,121 @@ func TestAccountsHandler_UpdateCredentials_ValidNamedFieldStillSucceeds(t *testi
 	}
 	if fields[0].Name != "Site" || fields[0].Value != "https://example.com" {
 		t.Fatalf("field[0] = %+v, want Site/https://example.com", fields[0])
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_PreservesVerifiedAtWhenFieldValueUnchanged(t *testing.T) {
+	verifiedAt := time.Date(2024, time.January, 2, 3, 4, 5, 0, time.UTC)
+	existingFields, err := json.Marshal([]Field{
+		{
+			Name:       "Website",
+			Value:      "https://example.com",
+			VerifiedAt: &verifiedAt,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal existing fields: %v", err)
+	}
+	stub := &stubAccountUpdateQueries{
+		account: db.Account{
+			ID:     1,
+			Fields: existingFields,
+		},
+	}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+	body := `{"fields_attributes":[{"name":"Website","value":"https://example.com"}]}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !stub.updateCalled {
+		t.Fatal("expected UpdateAccount to be called")
+	}
+	fields := decodeStoredFields(t, stub.updateParams.Fields)
+	if len(fields) != 1 {
+		t.Fatalf("fields length = %d, want 1", len(fields))
+	}
+	if fields[0].VerifiedAt == nil {
+		t.Fatal("expected verified_at to be preserved")
+	}
+	if !fields[0].VerifiedAt.Equal(verifiedAt) {
+		t.Fatalf("verified_at = %s, want %s", fields[0].VerifiedAt.UTC(), verifiedAt.UTC())
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_DropsVerifiedAtWhenFieldValueChanges(t *testing.T) {
+	verifiedAt := time.Date(2024, time.January, 2, 3, 4, 5, 0, time.UTC)
+	existingFields, err := json.Marshal([]Field{
+		{
+			Name:       "Website",
+			Value:      "https://example.com",
+			VerifiedAt: &verifiedAt,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal existing fields: %v", err)
+	}
+	stub := &stubAccountUpdateQueries{
+		account: db.Account{
+			ID:     1,
+			Fields: existingFields,
+		},
+	}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+	body := `{"fields_attributes":[{"name":"Website","value":"https://new.example.com"}]}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !stub.updateCalled {
+		t.Fatal("expected UpdateAccount to be called")
+	}
+	fields := decodeStoredFields(t, stub.updateParams.Fields)
+	if len(fields) != 1 {
+		t.Fatalf("fields length = %d, want 1", len(fields))
+	}
+	if fields[0].VerifiedAt != nil {
+		t.Fatalf("verified_at = %v, want nil after value change", fields[0].VerifiedAt)
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_AccountLookupFailureReturns500AndDoesNotUpdate(t *testing.T) {
+	stub := &stubAccountUpdateQueries{
+		getAccountErr: errors.New("db unavailable"),
+	}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+	body := `{"fields_attributes":[{"name":"Website","value":"https://example.com"}]}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "write:accounts")
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+	if stub.updateCalled {
+		t.Fatal("expected UpdateAccount to not be called")
 	}
 }
 
@@ -1143,6 +1272,18 @@ func decodeUpdateFields(t *testing.T, raw []byte) []UpdateCredentialsField {
 	var fields []UpdateCredentialsField
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		t.Fatalf("unmarshal fields: %v", err)
+	}
+	return fields
+}
+
+func decodeStoredFields(t *testing.T, raw []byte) []Field {
+	t.Helper()
+	if len(raw) == 0 {
+		return nil
+	}
+	var fields []Field
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatalf("unmarshal stored fields: %v", err)
 	}
 	return fields
 }

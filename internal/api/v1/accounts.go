@@ -431,7 +431,16 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		if fieldsProvided {
-			encoded, err := json.Marshal(fields)
+			existingFields := []byte{}
+			dbAcc, err := h.queries.GetAccountByID(ctx, accountID)
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				web.JSONError(w, http.StatusInternalServerError, "Failed to fetch account")
+				return
+			}
+			if err == nil {
+				existingFields = dbAcc.Fields
+			}
+			encoded, err := json.Marshal(preserveVerifiedAtFields(existingFields, fields))
 			if err != nil {
 				web.JSONError(w, http.StatusInternalServerError, "Failed to encode fields")
 				return
@@ -614,6 +623,34 @@ func hasProfileFieldWithValueMissingLabel(fields []UpdateCredentialsField) bool 
 		}
 	}
 	return false
+}
+
+func preserveVerifiedAtFields(existingRaw []byte, fields []UpdateCredentialsField) []Field {
+	existing := parseAccountFields(existingRaw)
+	verifiedByValue := make(map[string]time.Time, len(existing))
+	for _, field := range existing {
+		if field.VerifiedAt == nil {
+			continue
+		}
+		if _, exists := verifiedByValue[field.Value]; exists {
+			continue
+		}
+		verifiedByValue[field.Value] = *field.VerifiedAt
+	}
+
+	merged := make([]Field, 0, len(fields))
+	for _, field := range fields {
+		mergedField := Field{
+			Name:  field.Name,
+			Value: field.Value,
+		}
+		if verifiedAt, ok := verifiedByValue[field.Value]; ok {
+			value := verifiedAt
+			mergedField.VerifiedAt = &value
+		}
+		merged = append(merged, mergedField)
+	}
+	return merged
 }
 
 func normalizeAttributionDomains(domains []string) []string {
