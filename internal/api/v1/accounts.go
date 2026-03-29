@@ -220,6 +220,11 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
 		return
 	}
+	scopes := middleware.GetScopes(r.Context())
+	if scopes != "" && !oauth.HasScope(scopes, "write") && !oauth.HasScope(scopes, "write:accounts") {
+		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
+		return
+	}
 
 	var req UpdateCredentialsRequest
 	if err := web.Bind(r, &req); err != nil {
