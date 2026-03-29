@@ -792,12 +792,29 @@ func TestAccountsHandler_UpdateCredentials_SourceQuotePolicyInvalid(t *testing.T
 	if stub.updateCalled {
 		t.Fatal("expected UpdateAccount not to be called")
 	}
-	var errResp map[string]string
-	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+	var got struct {
+		Error   string `json:"error"`
+		Details struct {
+			QuotePolicy []struct {
+				Error       string `json:"error"`
+				Description string `json:"description"`
+			} `json:"quote_policy"`
+		} `json:"details"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode error response: %v", err)
 	}
-	if got, want := errResp["error"], "Validation failed: Quote policy is invalid"; got != want {
-		t.Fatalf("error = %q, want %q", got, want)
+	if !strings.HasPrefix(got.Error, "Validation failed") {
+		t.Fatalf("error = %q, want prefix %q", got.Error, "Validation failed")
+	}
+	if len(got.Details.QuotePolicy) != 1 {
+		t.Fatalf("details.quote_policy length = %d, want 1", len(got.Details.QuotePolicy))
+	}
+	if got.Details.QuotePolicy[0].Error != "ERR_INCLUSION" {
+		t.Fatalf("details.quote_policy[0].error = %q, want %q", got.Details.QuotePolicy[0].Error, "ERR_INCLUSION")
+	}
+	if got.Details.QuotePolicy[0].Description != "is not included in the list" {
+		t.Fatalf("details.quote_policy[0].description = %q, want %q", got.Details.QuotePolicy[0].Description, "is not included in the list")
 	}
 }
 

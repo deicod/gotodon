@@ -277,7 +277,18 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 	if sourceQuotePolicy != nil {
 		trimmed := strings.TrimSpace(*sourceQuotePolicy)
 		if trimmed != "" && !isValidPreferenceQuotePolicy(trimmed) {
-			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Quote policy is invalid")
+			description := "is not included in the list"
+			web.JSON(w, http.StatusUnprocessableEntity, mastodonValidationErrorResponse{
+				Error: fmt.Sprintf("Validation failed: Quote policy %s", description),
+				Details: map[string][]mastodonValidationDetail{
+					"quote_policy": {
+						{
+							Error:       "ERR_INCLUSION",
+							Description: description,
+						},
+					},
+				},
+			})
 			return
 		}
 	}
