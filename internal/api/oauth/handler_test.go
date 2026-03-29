@@ -914,8 +914,18 @@ func TestRevoke_MismatchedClientDoesNotRevoke(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.Revoke(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["error"] != "unauthorized_client" {
+		t.Fatalf("error = %q, want %q", resp["error"], "unauthorized_client")
+	}
+	if resp["error_description"] != "You are not authorized to revoke this token" {
+		t.Fatalf("error_description = %q, want %q", resp["error_description"], "You are not authorized to revoke this token")
 	}
 	if store.tokensByToken["token55"].RevokedAt.Valid {
 		t.Fatalf("expected token to remain active for mismatched client")
@@ -952,8 +962,18 @@ func TestRevoke_MissingClientContextDoesNotRevoke(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.Revoke(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["error"] != "unauthorized_client" {
+		t.Fatalf("error = %q, want %q", resp["error"], "unauthorized_client")
+	}
+	if resp["error_description"] != "You are not authorized to revoke this token" {
+		t.Fatalf("error_description = %q, want %q", resp["error_description"], "You are not authorized to revoke this token")
 	}
 	if store.tokensByToken["token66"].RevokedAt.Valid {
 		t.Fatalf("expected token to remain active without client context")
@@ -963,6 +983,73 @@ func TestRevoke_MissingClientContextDoesNotRevoke(t *testing.T) {
 	}
 	if len(store.deletedTokens) != 0 {
 		t.Fatalf("deleted push subscriptions = %d, want 0", len(store.deletedTokens))
+	}
+}
+
+func TestRevoke_InvalidClientCredentialsReturnsUnauthorizedClient(t *testing.T) {
+	store := newStubOAuthStore()
+	store.addApp(db.OauthApplication{
+		ID:           100,
+		Uid:          "client100",
+		Secret:       "secret100",
+		Confidential: true,
+	})
+	handler := NewHandler(store, nil, nil)
+
+	form := url.Values{
+		"token":         []string{"some-token"},
+		"client_id":     []string{"client100"},
+		"client_secret": []string{"wrong-secret"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/oauth/revoke", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.Revoke(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["error"] != "unauthorized_client" {
+		t.Fatalf("error = %q, want %q", resp["error"], "unauthorized_client")
+	}
+	if resp["error_description"] != "You are not authorized to revoke this token" {
+		t.Fatalf("error_description = %q, want %q", resp["error_description"], "You are not authorized to revoke this token")
+	}
+}
+
+func TestRevoke_ValidClientWithBlankTokenReturnsEmptyObject(t *testing.T) {
+	store := newStubOAuthStore()
+	store.addApp(db.OauthApplication{
+		ID:           101,
+		Uid:          "client101",
+		Secret:       "secret101",
+		Confidential: true,
+	})
+	handler := NewHandler(store, nil, nil)
+
+	form := url.Values{
+		"token":         []string{""},
+		"client_id":     []string{"client101"},
+		"client_secret": []string{"secret101"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/oauth/revoke", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.Revoke(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp) != 0 {
+		t.Fatalf("response = %v, want empty object", resp)
 	}
 }
 

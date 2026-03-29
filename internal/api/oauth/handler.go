@@ -296,25 +296,25 @@ func (h *Handler) Revoke(w http.ResponseWriter, r *http.Request) {
 		req.ClientSecret = r.FormValue("client_secret")
 	}
 
-	if req.Token == "" {
-		web.JSON(w, http.StatusOK, map[string]any{})
-		return
-	}
-
 	ctx := r.Context()
 
 	app, err := h.validateClient(ctx, req.ClientID, req.ClientSecret)
 	if err != nil {
-		if strings.TrimSpace(req.ClientID) != "" {
-			writeOAuthError(w, http.StatusUnauthorized, "invalid_client", "Invalid client credentials")
-			return
-		}
+		writeOAuthError(w, http.StatusForbidden, "unauthorized_client", "You are not authorized to revoke this token")
+		return
+	}
+
+	if req.Token == "" {
 		web.JSON(w, http.StatusOK, map[string]any{})
 		return
 	}
 
 	// Try access token, then refresh token.
 	if token, err := h.queries.GetOAuthAccessToken(ctx, req.Token); err == nil {
+		if token.ApplicationID.Valid && token.ApplicationID.Int64 != app.ID {
+			writeOAuthError(w, http.StatusForbidden, "unauthorized_client", "You are not authorized to revoke this token")
+			return
+		}
 		if token.ApplicationID.Valid && token.ApplicationID.Int64 == app.ID && h.queries.RevokeOAuthAccessToken(ctx, token.Token) == nil {
 			h.publishTokenKill(ctx, token.ID)
 			if token.ID != 0 {
@@ -322,6 +322,10 @@ func (h *Handler) Revoke(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else if token, err := h.queries.GetOAuthAccessTokenByRefresh(ctx, pgtype.Text{String: req.Token, Valid: true}); err == nil {
+		if token.ApplicationID.Valid && token.ApplicationID.Int64 != app.ID {
+			writeOAuthError(w, http.StatusForbidden, "unauthorized_client", "You are not authorized to revoke this token")
+			return
+		}
 		if token.ApplicationID.Valid && token.ApplicationID.Int64 == app.ID && h.queries.RevokeOAuthAccessToken(ctx, token.Token) == nil {
 			h.publishTokenKill(ctx, token.ID)
 			if token.ID != 0 {
