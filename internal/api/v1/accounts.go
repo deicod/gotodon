@@ -166,6 +166,11 @@ func (h *AccountsHandler) VerifyCredentials(w http.ResponseWriter, r *http.Reque
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
 		return
 	}
+	scopes := middleware.GetScopes(r.Context())
+	if scopes != "" && !oauth.HasScope(scopes, "read:accounts") && !oauth.HasScope(scopes, "profile") {
+		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
+		return
+	}
 
 	if !h.useDB() {
 		web.JSONError(w, http.StatusInternalServerError, "Account data unavailable")
