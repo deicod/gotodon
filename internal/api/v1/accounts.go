@@ -40,6 +40,7 @@ type AccountsHandler struct {
 const (
 	defaultAccountsLimit      = 40
 	maxProfileFields          = 4
+	accountDisplayNameMax     = 30
 	accountNoteLengthLimit    = 500
 	accountNoteURLPlaceholder = "xxxxxxxxxxxxxxxxxxxxxxx"
 )
@@ -279,6 +280,22 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Quote policy is invalid")
 			return
 		}
+	}
+
+	if req.DisplayName != nil && len([]rune(*req.DisplayName)) > accountDisplayNameMax {
+		description := fmt.Sprintf("character limit of %d exceeded", accountDisplayNameMax)
+		web.JSON(w, http.StatusUnprocessableEntity, mastodonValidationErrorResponse{
+			Error: fmt.Sprintf("Validation failed: Display name %s", description),
+			Details: map[string][]mastodonValidationDetail{
+				"display_name": {
+					{
+						Error:       "ERR_TOO_LONG",
+						Description: description,
+					},
+				},
+			},
+		})
+		return
 	}
 
 	if req.Note != nil && accountNoteLength(*req.Note) > accountNoteLengthLimit {

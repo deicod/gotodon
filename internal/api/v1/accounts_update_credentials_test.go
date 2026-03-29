@@ -319,6 +319,55 @@ func TestAccountsHandler_UpdateCredentials_NoteTooLongReturnsMastodonValidationP
 	}
 }
 
+func TestAccountsHandler_UpdateCredentials_DisplayNameTooLongReturnsMastodonValidationPayload(t *testing.T) {
+	stub := &stubAccountUpdateQueries{}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+	body := `{"display_name":"` + strings.Repeat("a", accountDisplayNameMax+1) + `"}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+	if stub.updateCalled {
+		t.Fatal("expected UpdateAccount not to be called")
+	}
+	if stub.updateSettingsCalled {
+		t.Fatal("expected UpdateUserSettings not to be called")
+	}
+
+	var got struct {
+		Error   string `json:"error"`
+		Details struct {
+			DisplayName []struct {
+				Error       string `json:"error"`
+				Description string `json:"description"`
+			} `json:"display_name"`
+		} `json:"details"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if !strings.HasPrefix(got.Error, "Validation failed") {
+		t.Fatalf("error = %q, want prefix %q", got.Error, "Validation failed")
+	}
+	if len(got.Details.DisplayName) != 1 {
+		t.Fatalf("details.display_name length = %d, want 1", len(got.Details.DisplayName))
+	}
+	if got.Details.DisplayName[0].Error != "ERR_TOO_LONG" {
+		t.Fatalf("details.display_name[0].error = %q, want %q", got.Details.DisplayName[0].Error, "ERR_TOO_LONG")
+	}
+	if !strings.Contains(got.Details.DisplayName[0].Description, "character limit of 30 exceeded") {
+		t.Fatalf("details.display_name[0].description = %q, want to mention %q", got.Details.DisplayName[0].Description, "character limit of 30 exceeded")
+	}
+}
+
 func TestAccountsHandler_UpdateCredentials_NoteLengthBoundaryValidUpdatesAccount(t *testing.T) {
 	stub := &stubAccountUpdateQueries{}
 	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
@@ -341,6 +390,31 @@ func TestAccountsHandler_UpdateCredentials_NoteLengthBoundaryValidUpdatesAccount
 	}
 	if got := stub.updateParams.Note.String; got != note {
 		t.Fatalf("updated note = %q, want %q", got, note)
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_DisplayNameLengthBoundaryValidUpdatesAccount(t *testing.T) {
+	stub := &stubAccountUpdateQueries{}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+	displayName := strings.Repeat("a", accountDisplayNameMax)
+	body := `{"display_name":"` + displayName + `"}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !stub.updateCalled {
+		t.Fatal("expected UpdateAccount to be called")
+	}
+	if got := stub.updateParams.DisplayName.String; got != displayName {
+		t.Fatalf("updated display_name = %q, want %q", got, displayName)
 	}
 }
 
