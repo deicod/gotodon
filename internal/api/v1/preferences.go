@@ -253,7 +253,7 @@ func applyPreferenceUpdate(settings map[string]any, req Preferences) {
 	settings["web.auto_play"] = req.ReadingAutoplayGifs
 }
 
-func applySourceSettings(settings map[string]any, privacy *string, sensitive *bool, language *string) {
+func applySourceSettings(settings map[string]any, privacy *string, sensitive *bool, language *string, quotePolicy *string) {
 	if settings == nil {
 		return
 	}
@@ -275,6 +275,14 @@ func applySourceSettings(settings map[string]any, privacy *string, sensitive *bo
 			delete(settings, "default_language")
 		} else {
 			settings["default_language"] = trimmed
+		}
+	}
+	if quotePolicy != nil {
+		trimmed := strings.TrimSpace(*quotePolicy)
+		if trimmed == "" {
+			delete(settings, "default_quote_policy")
+		} else {
+			settings["default_quote_policy"] = trimmed
 		}
 	}
 }

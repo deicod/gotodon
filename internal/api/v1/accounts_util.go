@@ -513,10 +513,6 @@ func buildCredentialAccount(ctx context.Context, q accountCredentialQueries, cfg
 	}
 
 	prefs := preferencesFromSettings(settings, locale)
-	quotePolicy := settingsString(settings, "default_quote_policy")
-	if quotePolicy == "" {
-		quotePolicy = "public"
-	}
 
 	followRequests := 0
 	if q != nil {
@@ -548,7 +544,7 @@ func buildCredentialAccount(ctx context.Context, q accountCredentialQueries, cfg
 		Discoverable:        discoverable,
 		Indexable:           apiAcc.Indexable,
 		AttributionDomains:  attributionDomains,
-		QuotePolicy:         quotePolicy,
+		QuotePolicy:         prefs.PostingDefaultQuotePolicy,
 	}
 
 	var role *AccountRole

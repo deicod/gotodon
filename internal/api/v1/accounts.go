@@ -208,9 +208,10 @@ type UpdateCredentialsField struct {
 }
 
 type UpdateCredentialsSource struct {
-	Privacy   *string `json:"privacy" form:"privacy"`
-	Sensitive *bool   `json:"sensitive" form:"sensitive"`
-	Language  *string `json:"language" form:"language"`
+	Privacy     *string `json:"privacy" form:"privacy"`
+	Sensitive   *bool   `json:"sensitive" form:"sensitive"`
+	Language    *string `json:"language" form:"language"`
+	QuotePolicy *string `json:"quote_policy" form:"quote_policy"`
 }
 
 // UpdateCredentials handles PATCH /api/v1/accounts/update_credentials
@@ -233,6 +234,33 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 	}
 
 	ctx := r.Context()
+	var sourcePrivacy *string
+	var sourceSensitive *bool
+	var sourceLanguage *string
+	var sourceQuotePolicy *string
+	if req.Source != nil {
+		sourcePrivacy = req.Source.Privacy
+		sourceSensitive = req.Source.Sensitive
+		sourceLanguage = req.Source.Language
+		sourceQuotePolicy = req.Source.QuotePolicy
+	}
+	if sourceQuotePolicy == nil {
+		if vals, ok := r.PostForm["source[quote_policy]"]; ok {
+			value := ""
+			if len(vals) > 0 {
+				value = vals[0]
+			}
+			sourceQuotePolicy = &value
+		}
+	}
+
+	if sourceQuotePolicy != nil {
+		trimmed := strings.TrimSpace(*sourceQuotePolicy)
+		if trimmed != "" && !isValidPreferenceQuotePolicy(trimmed) {
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Quote policy is invalid")
+			return
+		}
+	}
 
 	if h.useDB() {
 		params := db.UpdateAccountParams{ID: accountID}
@@ -286,15 +314,7 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 		}
 
 		// Update user settings (source params)
-		var sourcePrivacy *string
-		var sourceSensitive *bool
-		var sourceLanguage *string
-		if req.Source != nil {
-			sourcePrivacy = req.Source.Privacy
-			sourceSensitive = req.Source.Sensitive
-			sourceLanguage = req.Source.Language
-		}
-		if sourcePrivacy != nil || sourceSensitive != nil || sourceLanguage != nil {
+		if sourcePrivacy != nil || sourceSensitive != nil || sourceLanguage != nil || sourceQuotePolicy != nil {
 			settings := map[string]any{}
 			user, err := h.queries.GetUserByAccountID(ctx, accountID)
 			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -305,7 +325,7 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 				settings = settingsFromText(user.Settings)
 			}
 
-			applySourceSettings(settings, sourcePrivacy, sourceSensitive, sourceLanguage)
+			applySourceSettings(settings, sourcePrivacy, sourceSensitive, sourceLanguage, sourceQuotePolicy)
 			encoded, err := settingsToText(settings)
 			if err != nil {
 				web.JSONError(w, http.StatusInternalServerError, "Failed to encode preferences")

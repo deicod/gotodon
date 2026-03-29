@@ -310,6 +310,28 @@ func (s *accountSerializeStub) GetAccountsByUsernamesAndDomains(ctx context.Cont
 	return nil, nil
 }
 
+type accountCredentialStub struct {
+	accountSerializeStub
+	user         db.User
+	followCount  int64
+	userRoleErr  error
+}
+
+func (s *accountCredentialStub) GetUserByAccountID(ctx context.Context, accountID int64) (db.User, error) {
+	return s.user, nil
+}
+
+func (s *accountCredentialStub) CountFollowRequestsForAccount(ctx context.Context, targetAccountID int64) (int64, error) {
+	return s.followCount, nil
+}
+
+func (s *accountCredentialStub) GetUserRole(ctx context.Context, userID int64) (db.UserRole, error) {
+	if s.userRoleErr != nil {
+		return db.UserRole{}, s.userRoleErr
+	}
+	return db.UserRole{}, nil
+}
+
 func TestSerializeAccounts_LinkifiesNoteMentions(t *testing.T) {
 	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "local.test", WebDomain: "web.test"}}
 
@@ -335,5 +357,28 @@ func TestSerializeAccounts_LinkifiesNoteMentions(t *testing.T) {
 	}
 	if !strings.HasPrefix(acc.Note, "<p>") {
 		t.Fatalf("note = %q, want paragraph wrapper", acc.Note)
+	}
+}
+
+func TestBuildCredentialAccount_SourceQuotePolicyFallsBackToPublicForInvalidStoredValue(t *testing.T) {
+	cfg := &config.Config{Instance: config.InstanceConfig{LocalDomain: "local.test", WebDomain: "web.test"}}
+	dbAcc := db.Account{
+		ID:       1,
+		Username: "alice",
+	}
+	stub := &accountCredentialStub{
+		user: db.User{
+			ID: 1,
+			Settings: pgtype.Text{
+				String: `{"default_quote_policy":"bad-value"}`,
+				Valid:  true,
+			},
+		},
+	}
+
+	cred := buildCredentialAccount(context.Background(), stub, cfg, dbAcc)
+
+	if cred.Source.QuotePolicy != "public" {
+		t.Fatalf("source.quote_policy = %q, want public", cred.Source.QuotePolicy)
 	}
 }

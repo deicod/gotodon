@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
@@ -43,6 +44,9 @@ func (s *stubAccountUpdateQueries) GetUserByAccountID(ctx context.Context, accou
 func (s *stubAccountUpdateQueries) UpdateUserSettings(ctx context.Context, arg db.UpdateUserSettingsParams) error {
 	s.updateSettingsCalled = true
 	s.updateSettingsParams = arg
+	if s.user.ID != 0 {
+		s.user.Settings = arg.Settings
+	}
 	return nil
 }
 
@@ -297,6 +301,44 @@ func TestAccountsHandler_UpdateCredentials_SourceJSON(t *testing.T) {
 	}
 }
 
+func TestAccountsHandler_UpdateCredentials_SourceQuotePolicyJSON(t *testing.T) {
+	stub := &stubAccountUpdateQueries{
+		user: db.User{
+			ID:        1,
+			AccountID: 1,
+		},
+	}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+	body := `{"source":{"quote_policy":"followers"}}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !stub.updateSettingsCalled {
+		t.Fatal("expected UpdateUserSettings to be called")
+	}
+	settings := settingsFromText(stub.updateSettingsParams.Settings)
+	if settings["default_quote_policy"] != "followers" {
+		t.Fatalf("default_quote_policy = %v, want followers", settings["default_quote_policy"])
+	}
+
+	var resp CredentialAccount
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Source.QuotePolicy != "followers" {
+		t.Fatalf("response source.quote_policy = %q, want followers", resp.Source.QuotePolicy)
+	}
+}
+
 func TestAccountsHandler_UpdateCredentials_SourceForm(t *testing.T) {
 	stub := &stubAccountUpdateQueries{}
 	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
@@ -329,6 +371,149 @@ func TestAccountsHandler_UpdateCredentials_SourceForm(t *testing.T) {
 	}
 	if settings["default_language"] != "en" {
 		t.Fatalf("default_language = %v, want en", settings["default_language"])
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_SourceQuotePolicyForm(t *testing.T) {
+	stub := &stubAccountUpdateQueries{}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+	values := url.Values{}
+	values.Set("source[quote_policy]", "nobody")
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", strings.NewReader(values.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !stub.updateSettingsCalled {
+		t.Fatal("expected UpdateUserSettings to be called")
+	}
+	settings := settingsFromText(stub.updateSettingsParams.Settings)
+	if settings["default_quote_policy"] != "nobody" {
+		t.Fatalf("default_quote_policy = %v, want nobody", settings["default_quote_policy"])
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_SourceQuotePolicyInvalid(t *testing.T) {
+	stub := &stubAccountUpdateQueries{
+		user: db.User{
+			ID:        1,
+			AccountID: 1,
+			Settings: pgtype.Text{
+				String: `{"default_quote_policy":"followers"}`,
+				Valid:  true,
+			},
+		},
+	}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+	body := `{"source":{"quote_policy":"invalid"}}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+	if stub.updateSettingsCalled {
+		t.Fatal("expected UpdateUserSettings not to be called")
+	}
+	if stub.updateCalled {
+		t.Fatal("expected UpdateAccount not to be called")
+	}
+	var errResp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if got, want := errResp["error"], "Validation failed: Quote policy is invalid"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_SourceQuotePolicyEmptyClearsSetting(t *testing.T) {
+	stub := &stubAccountUpdateQueries{
+		user: db.User{
+			ID:        1,
+			AccountID: 1,
+			Settings: pgtype.Text{
+				String: `{"default_quote_policy":"followers","default_privacy":"private"}`,
+				Valid:  true,
+			},
+		},
+	}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+	body := `{"source":{"quote_policy":""}}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !stub.updateSettingsCalled {
+		t.Fatal("expected UpdateUserSettings to be called")
+	}
+	settings := settingsFromText(stub.updateSettingsParams.Settings)
+	if _, ok := settings["default_quote_policy"]; ok {
+		t.Fatalf("default_quote_policy still present: %v", settings["default_quote_policy"])
+	}
+	if settings["default_privacy"] != "private" {
+		t.Fatalf("default_privacy = %v, want private", settings["default_privacy"])
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_SourceQuotePolicyEmptyFormClearsSetting(t *testing.T) {
+	stub := &stubAccountUpdateQueries{
+		user: db.User{
+			ID:        1,
+			AccountID: 1,
+			Settings: pgtype.Text{
+				String: `{"default_quote_policy":"followers","default_privacy":"private"}`,
+				Valid:  true,
+			},
+		},
+	}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+	values := url.Values{}
+	values.Set("source[quote_policy]", "")
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", strings.NewReader(values.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !stub.updateSettingsCalled {
+		t.Fatal("expected UpdateUserSettings to be called")
+	}
+	settings := settingsFromText(stub.updateSettingsParams.Settings)
+	if _, ok := settings["default_quote_policy"]; ok {
+		t.Fatalf("default_quote_policy still present: %v", settings["default_quote_policy"])
+	}
+	if settings["default_privacy"] != "private" {
+		t.Fatalf("default_privacy = %v, want private", settings["default_privacy"])
 	}
 }
 
