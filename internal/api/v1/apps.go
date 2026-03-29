@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"unicode/utf8"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -24,6 +25,12 @@ type AppsHandler struct {
 	queries appsQueries
 	cfg     *config.Config
 }
+
+const (
+	appNameLimit        = 60
+	appRedirectURILimit = 2000
+	appWebsiteLimit     = 2000
+)
 
 type appsQueries interface {
 	CreateOAuthApplication(ctx context.Context, arg db.CreateOAuthApplicationParams) (db.OauthApplication, error)
@@ -104,10 +111,18 @@ func (h *AppsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Name can't be blank")
 		return
 	}
+	if utf8.RuneCountInString(req.ClientName) > appNameLimit {
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Name is too long")
+		return
+	}
 
 	rawRedirectURI, redirectURIs := normalizeCreateAppRedirectURIs(req.RedirectURIs)
 	if len(redirectURIs) == 0 {
 		web.JSONError(w, http.StatusUnprocessableEntity, "Redirect URI is required")
+		return
+	}
+	if utf8.RuneCountInString(rawRedirectURI) > appRedirectURILimit {
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Redirect URI is too long")
 		return
 	}
 
@@ -117,6 +132,15 @@ func (h *AppsHandler) Create(w http.ResponseWriter, r *http.Request) {
 			web.JSONError(w, http.StatusUnprocessableEntity, "Invalid redirect URI: "+uri)
 			return
 		}
+	}
+
+	if utf8.RuneCountInString(req.Website) > appWebsiteLimit {
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Website is too long")
+		return
+	}
+	if req.Website != "" && !isValidWebsiteURL(req.Website) {
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Website is invalid")
+		return
 	}
 
 	scopes := oauth.ParseScopes(req.Scopes)
@@ -202,6 +226,17 @@ func normalizeCreateAppRedirectURIs(rawInput createAppRedirectURIs) (string, []s
 	}
 
 	return strings.Join(redirectURIs, "\n"), redirectURIs
+}
+
+func isValidWebsiteURL(raw string) bool {
+	parsed, err := url.ParseRequestURI(raw)
+	if err != nil {
+		return false
+	}
+	if !parsed.IsAbs() || parsed.Host == "" {
+		return false
+	}
+	return parsed.Scheme == "http" || parsed.Scheme == "https"
 }
 
 type appCredentialsResponse struct {

@@ -329,6 +329,146 @@ func TestAppsHandler_Create_RejectsEmptyRedirectURIsArray(t *testing.T) {
 	}
 }
 
+func TestAppsHandler_Create_RejectsTooLongName(t *testing.T) {
+	h := NewAppsHandler(nil, &config.Config{})
+
+	body := strings.NewReader(`{
+		"client_name":"` + strings.Repeat("a", 61) + `",
+		"redirect_uris":"https://example.com/callback",
+		"scopes":"read"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/apps", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.Create(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+}
+
+func TestAppsHandler_Create_RejectsTooLongWebsite(t *testing.T) {
+	h := NewAppsHandler(nil, &config.Config{})
+	website := "https://example.com/" + strings.Repeat("a", 2001)
+
+	body := strings.NewReader(`{
+		"client_name":"Parity App",
+		"redirect_uris":"https://example.com/callback",
+		"scopes":"read",
+		"website":"` + website + `"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/apps", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.Create(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+}
+
+func TestAppsHandler_Create_RejectsInvalidWebsiteURL(t *testing.T) {
+	h := NewAppsHandler(nil, &config.Config{})
+
+	body := strings.NewReader(`{
+		"client_name":"Parity App",
+		"redirect_uris":"https://example.com/callback",
+		"scopes":"read",
+		"website":"not-a-url"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/apps", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.Create(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+}
+
+func TestAppsHandler_Create_RejectsNonHTTPWebsiteURL(t *testing.T) {
+	h := NewAppsHandler(nil, &config.Config{})
+
+	body := strings.NewReader(`{
+		"client_name":"Parity App",
+		"redirect_uris":"https://example.com/callback",
+		"scopes":"read",
+		"website":"ftp://example.com"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/apps", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.Create(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+}
+
+func TestAppsHandler_Create_RejectsTooLongRedirectURI(t *testing.T) {
+	h := NewAppsHandler(nil, &config.Config{})
+	redirectURI := "https://example.com/" + strings.Repeat("a", 1981)
+
+	body := strings.NewReader(`{
+		"client_name":"Parity App",
+		"redirect_uris":"` + redirectURI + `",
+		"scopes":"read"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/apps", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.Create(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+}
+
+func TestAppsHandler_Create_AcceptsNameAtRuneLimit(t *testing.T) {
+	h := NewAppsHandler(nil, &config.Config{})
+	name := strings.Repeat("é", 60)
+
+	body := strings.NewReader(`{
+		"client_name":"` + name + `",
+		"redirect_uris":"https://example.com/callback",
+		"scopes":"read"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/apps", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.Create(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestAppsHandler_Create_RejectsTooManyRedirectURIs(t *testing.T) {
+	h := NewAppsHandler(nil, &config.Config{})
+	redirectURI := "https://example.com/" + strings.Repeat("a", 960)
+
+	body := strings.NewReader(`{
+		"client_name":"Parity App",
+		"redirect_uris":["` + redirectURI + `","` + redirectURI + `","` + redirectURI + `"],
+		"scopes":"read"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/apps", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.Create(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+}
+
 func TestAppsHandler_Create_RejectsNewlineOnlyRedirectURIsString(t *testing.T) {
 	h := NewAppsHandler(nil, &config.Config{})
 
