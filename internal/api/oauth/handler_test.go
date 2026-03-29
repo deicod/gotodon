@@ -1521,9 +1521,24 @@ func TestMetadata(t *testing.T) {
 	if resp["authorization_endpoint"] != "https://example.com/oauth/authorize" {
 		t.Fatalf("authorization_endpoint = %v", resp["authorization_endpoint"])
 	}
+
+	responseModes, ok := resp["response_modes_supported"].([]any)
+	if !ok {
+		t.Fatalf("response_modes_supported missing or wrong type: %T", resp["response_modes_supported"])
+	}
+	if len(responseModes) != 1 || responseModes[0] != "query" {
+		t.Fatalf("response_modes_supported = %v, want [query]", responseModes)
+	}
+
 	grantTypes, ok := resp["grant_types_supported"].([]any)
 	if !ok {
 		t.Fatalf("grant_types_supported missing or wrong type: %T", resp["grant_types_supported"])
+	}
+	if len(grantTypes) != 2 {
+		t.Fatalf("grant_types_supported = %v, want exactly 2 grant types", grantTypes)
+	}
+	if grantTypes[0] != "authorization_code" || grantTypes[1] != "client_credentials" {
+		t.Fatalf("grant_types_supported = %v, want [authorization_code client_credentials]", grantTypes)
 	}
 	for _, grantType := range grantTypes {
 		if grantType == "refresh_token" {

@@ -30,6 +30,11 @@ const (
 	authorizationCodeTTL        = 10 * time.Minute
 	pkceMethodS256              = "S256"
 	explicitGrantRedirectPrefix = "\x1egotodon-explicit-redirect\x1e"
+	grantTypeAuthorizationCode  = "authorization_code"
+	grantTypeClientCredentials  = "client_credentials"
+	grantTypeRefreshToken       = "refresh_token"
+	responseTypeCode            = "code"
+	responseModeQuery           = "query"
 )
 
 type oauthQuerier interface {
@@ -170,9 +175,9 @@ func (h *Handler) Token(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch req.GrantType {
-	case "authorization_code":
+	case grantTypeAuthorizationCode:
 		h.handleAuthorizationCode(w, r, req)
-	case "client_credentials":
+	case grantTypeClientCredentials:
 		h.handleClientCredentials(w, r, req)
 	default:
 		writeOAuthError(w, http.StatusBadRequest, "unsupported_grant_type", "The grant type is not supported")
@@ -371,7 +376,7 @@ func (h *Handler) Authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.ResponseType != "code" {
+	if req.ResponseType != responseTypeCode {
 		redirectWithError(w, r, redirectURI, "unsupported_response_type", "Unsupported response type", req.State)
 		return
 	}
@@ -439,7 +444,7 @@ func (h *Handler) AuthorizePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if responseType != "code" {
+	if responseType != responseTypeCode {
 		redirectWithError(w, r, redirectURI, "unsupported_response_type", "Unsupported response type", state)
 		return
 	}
@@ -537,6 +542,7 @@ func (h *Handler) Userinfo(w http.ResponseWriter, r *http.Request) {
 // Metadata handles GET /.well-known/oauth-authorization-server
 func (h *Handler) Metadata(w http.ResponseWriter, r *http.Request) {
 	base := h.baseURL()
+	responseTypesSupported := h.metadataResponseTypesSupported()
 	resp := oauthMetadataResponse{
 		Issuer:                            h.issuer(),
 		AuthorizationEndpoint:             base + "/oauth/authorize",
@@ -544,15 +550,43 @@ func (h *Handler) Metadata(w http.ResponseWriter, r *http.Request) {
 		RevocationEndpoint:                base + "/oauth/revoke",
 		UserinfoEndpoint:                  base + "/oauth/userinfo",
 		ScopesSupported:                   oauth.SupportedScopes(),
-		ResponseTypesSupported:            []string{"code"},
-		ResponseModesSupported:            []string{"query"},
-		GrantTypesSupported:               []string{"authorization_code", "client_credentials"},
+		ResponseTypesSupported:            responseTypesSupported,
+		ResponseModesSupported:            metadataResponseModesSupported(responseTypesSupported),
+		GrantTypesSupported:               h.metadataGrantTypesSupported(),
 		TokenEndpointAuthMethodsSupported: []string{"client_secret_basic", "client_secret_post"},
 		CodeChallengeMethodsSupported:     []string{pkceMethodS256},
 		ServiceDocumentation:              "https://docs.joinmastodon.org/",
 		AppRegistrationEndpoint:           base + "/api/v1/apps",
 	}
 	web.JSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) metadataResponseTypesSupported() []string {
+	return []string{responseTypeCode}
+}
+
+func metadataResponseModesSupported(responseTypes []string) []string {
+	for _, responseType := range responseTypes {
+		if responseType == responseTypeCode {
+			return []string{responseModeQuery}
+		}
+	}
+	return nil
+}
+
+func (h *Handler) metadataGrantTypesSupported() []string {
+	supported := []string{
+		grantTypeAuthorizationCode,
+		grantTypeClientCredentials,
+	}
+	if h.refreshTokenGrantSupported() {
+		supported = append(supported, grantTypeRefreshToken)
+	}
+	return supported
+}
+
+func (h *Handler) refreshTokenGrantSupported() bool {
+	return false
 }
 
 // VerifyCredentials validates the current token and returns app info
