@@ -25,6 +25,22 @@ func (q *Queries) CountActiveUsers(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countActiveUsersHalfyear = `-- name: CountActiveUsersHalfyear :one
+SELECT COUNT(*)
+FROM users
+JOIN accounts ON accounts.id = users.account_id
+WHERE users.confirmed_at IS NOT NULL
+  AND accounts.suspended_at IS NULL
+  AND COALESCE(users.current_sign_in_at, users.last_sign_in_at) >= NOW() - INTERVAL '24 weeks'
+`
+
+func (q *Queries) CountActiveUsersHalfyear(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveUsersHalfyear)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countInstanceDomains = `-- name: CountInstanceDomains :one
 SELECT COUNT(DISTINCT accounts.domain)
 FROM accounts
@@ -63,6 +79,42 @@ WHERE users.confirmed_at IS NOT NULL
 
 func (q *Queries) CountInstanceUsers(ctx context.Context) (int64, error) {
 	row := q.db.QueryRow(ctx, countInstanceUsers)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countNodeInfoActiveUsersHalfyear = `-- name: CountNodeInfoActiveUsersHalfyear :one
+SELECT COUNT(DISTINCT login_activities.user_id)
+FROM login_activities
+JOIN users ON users.id = login_activities.user_id
+JOIN accounts ON accounts.id = users.account_id
+WHERE login_activities.success = true
+  AND login_activities.created_at >= NOW() - INTERVAL '24 weeks'
+  AND users.confirmed_at IS NOT NULL
+  AND accounts.suspended_at IS NULL
+`
+
+func (q *Queries) CountNodeInfoActiveUsersHalfyear(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countNodeInfoActiveUsersHalfyear)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countNodeInfoActiveUsersMonth = `-- name: CountNodeInfoActiveUsersMonth :one
+SELECT COUNT(DISTINCT login_activities.user_id)
+FROM login_activities
+JOIN users ON users.id = login_activities.user_id
+JOIN accounts ON accounts.id = users.account_id
+WHERE login_activities.success = true
+  AND login_activities.created_at >= NOW() - INTERVAL '4 weeks'
+  AND users.confirmed_at IS NOT NULL
+  AND accounts.suspended_at IS NULL
+`
+
+func (q *Queries) CountNodeInfoActiveUsersMonth(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countNodeInfoActiveUsersMonth)
 	var count int64
 	err := row.Scan(&count)
 	return count, err

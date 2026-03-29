@@ -140,6 +140,7 @@ type Querier interface {
 	CountAccountOutboxStatuses(ctx context.Context, accountID int64) (int64, error)
 	CountAccountPins(ctx context.Context, accountID int64) (int64, error)
 	CountActiveUsers(ctx context.Context) (int64, error)
+	CountActiveUsersHalfyear(ctx context.Context) (int64, error)
 	CountAnnualReportsByAccount(ctx context.Context, accountID int64) (int64, error)
 	CountDomainAllows(ctx context.Context) (int64, error)
 	CountFailedLoginAttempts(ctx context.Context, arg CountFailedLoginAttemptsParams) (int64, error)
@@ -154,6 +155,8 @@ type Querier interface {
 	CountInstanceStatuses(ctx context.Context) (int64, error)
 	CountInstanceUsers(ctx context.Context) (int64, error)
 	CountMigrationFollowers(ctx context.Context, targetAccountID pgtype.Int8) (int64, error)
+	CountNodeInfoActiveUsersHalfyear(ctx context.Context) (int64, error)
+	CountNodeInfoActiveUsersMonth(ctx context.Context) (int64, error)
 	CountNotificationRequests(ctx context.Context, accountID int64) (int64, error)
 	CountQuotesByQuotedStatus(ctx context.Context, quotedStatusID pgtype.Int8) (int64, error)
 	CountScheduledStatusesByAccount(ctx context.Context, accountID int64) (int64, error)
@@ -350,6 +353,7 @@ type Querier interface {
 	GetList(ctx context.Context, arg GetListParams) (List, error)
 	GetListTimeline(ctx context.Context, arg GetListTimelineParams) ([]Status, error)
 	GetListsContainingAccount(ctx context.Context, arg GetListsContainingAccountParams) ([]List, error)
+	GetLocalAccountByUsernameAllowSuspended(ctx context.Context, username string) (Account, error)
 	GetMarker(ctx context.Context, arg GetMarkerParams) (Marker, error)
 	GetMediaAttachment(ctx context.Context, id int64) (MediaAttachment, error)
 	GetMediaAttachmentByAccount(ctx context.Context, arg GetMediaAttachmentByAccountParams) (MediaAttachment, error)
@@ -460,6 +464,7 @@ type Querier interface {
 	GetWebAuthnCredentialByExternalID(ctx context.Context, externalID string) (WebauthnCredential, error)
 	GetWebSettingByUserID(ctx context.Context, userID int64) (WebSetting, error)
 	HardDeleteRule(ctx context.Context, id int64) error
+	HasAccountDeletionRequest(ctx context.Context, accountID int64) (bool, error)
 	HasNotificationPermission(ctx context.Context, arg HasNotificationPermissionParams) (bool, error)
 	IncrementNotificationRequestCount(ctx context.Context, arg IncrementNotificationRequestCountParams) (NotificationRequest, error)
 	IncrementStatusFavourites(ctx context.Context, statusID int64) error

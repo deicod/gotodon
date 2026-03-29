@@ -515,7 +515,18 @@ func (q *Queries) AdminSilenceAccount(ctx context.Context, id int64) error {
 }
 
 const adminSuspendAccount = `-- name: AdminSuspendAccount :exec
-UPDATE accounts SET suspended_at = now(), suspension_origin = 0, updated_at = now() WHERE id = $1
+WITH suspended AS (
+    UPDATE accounts
+    SET suspended_at = now(), suspension_origin = 0, updated_at = now()
+    WHERE accounts.id = $1
+    RETURNING accounts.id AS account_id
+)
+INSERT INTO account_deletion_requests (account_id, created_at, updated_at)
+SELECT suspended.account_id, now(), now()
+FROM suspended
+WHERE NOT EXISTS (
+    SELECT 1 FROM account_deletion_requests WHERE account_id = suspended.account_id
+)
 `
 
 func (q *Queries) AdminSuspendAccount(ctx context.Context, id int64) error {
@@ -542,7 +553,14 @@ func (q *Queries) AdminUnsilenceAccount(ctx context.Context, id int64) error {
 }
 
 const adminUnsuspendAccount = `-- name: AdminUnsuspendAccount :exec
-UPDATE accounts SET suspended_at = NULL, updated_at = now() WHERE id = $1
+WITH unsuspended AS (
+    UPDATE accounts
+    SET suspended_at = NULL, suspension_origin = NULL, updated_at = now()
+    WHERE accounts.id = $1
+    RETURNING accounts.id AS account_id
+)
+DELETE FROM account_deletion_requests
+WHERE account_id IN (SELECT unsuspended.account_id FROM unsuspended)
 `
 
 func (q *Queries) AdminUnsuspendAccount(ctx context.Context, id int64) error {

@@ -169,10 +169,28 @@ UPDATE accounts SET silenced_at = now(), updated_at = now() WHERE id = $1;
 UPDATE accounts SET silenced_at = NULL, updated_at = now() WHERE id = $1;
 
 -- name: AdminSuspendAccount :exec
-UPDATE accounts SET suspended_at = now(), suspension_origin = 0, updated_at = now() WHERE id = $1;
+WITH suspended AS (
+    UPDATE accounts
+    SET suspended_at = now(), suspension_origin = 0, updated_at = now()
+    WHERE accounts.id = $1
+    RETURNING accounts.id AS account_id
+)
+INSERT INTO account_deletion_requests (account_id, created_at, updated_at)
+SELECT suspended.account_id, now(), now()
+FROM suspended
+WHERE NOT EXISTS (
+    SELECT 1 FROM account_deletion_requests WHERE account_id = suspended.account_id
+);
 
 -- name: AdminUnsuspendAccount :exec
-UPDATE accounts SET suspended_at = NULL, updated_at = now() WHERE id = $1;
+WITH unsuspended AS (
+    UPDATE accounts
+    SET suspended_at = NULL, suspension_origin = NULL, updated_at = now()
+    WHERE accounts.id = $1
+    RETURNING accounts.id AS account_id
+)
+DELETE FROM account_deletion_requests
+WHERE account_id IN (SELECT unsuspended.account_id FROM unsuspended);
 
 -- name: AdminSensitizeAccount :exec
 UPDATE accounts SET sensitized_at = now(), updated_at = now() WHERE id = $1;

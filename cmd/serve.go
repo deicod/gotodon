@@ -20,12 +20,14 @@ import (
 	activitypubapi "github.com/deicod/gotodon/internal/api/activitypub"
 	"github.com/deicod/gotodon/internal/api/admin"
 	"github.com/deicod/gotodon/internal/api/middleware"
+	nodeinfoapi "github.com/deicod/gotodon/internal/api/nodeinfo"
 	oauthapi "github.com/deicod/gotodon/internal/api/oauth"
 	oembedapi "github.com/deicod/gotodon/internal/api/oembed"
 	v1 "github.com/deicod/gotodon/internal/api/v1"
 	v1alpha "github.com/deicod/gotodon/internal/api/v1alpha"
 	v2 "github.com/deicod/gotodon/internal/api/v2"
 	webapi "github.com/deicod/gotodon/internal/api/web"
+	webfingerapi "github.com/deicod/gotodon/internal/api/webfinger"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/federation"
@@ -363,6 +365,12 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	oembedHandler := oembedapi.NewHandler(queries, cfg)
 	oembedHandler.RegisterRoutes(mux)
 
+	nodeInfoHandler := nodeinfoapi.NewHandler(queries, cfg)
+	nodeInfoHandler.RegisterRoutes(mux)
+
+	webfingerHandler := webfingerapi.NewHandler(queries, cfg)
+	webfingerHandler.RegisterRoutes(mux)
+
 	// ActivityPub Federation
 	federationHandler := activitypubapi.NewFederationHandler(queries, cfg.Instance.LocalDomain)
 	followService := federation.NewFollowService(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher(), nil)
@@ -491,50 +499,6 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	v1ReportsHandler := v1.NewReportsHandler(queries)
 	mux.HandleFunc("POST /api/v1/reports", v1ReportsHandler.Create)
 
-	// Well-known endpoints
-	mux.HandleFunc("GET /.well-known/webfinger", func(w http.ResponseWriter, r *http.Request) {
-		resource := web.QueryParam(r, "resource")
-		if resource == "" {
-			web.JSON(w, http.StatusBadRequest, map[string]string{
-				"error": "Missing required 'resource' parameter",
-			})
-			return
-		}
-
-		username, domain, err := activitypub.ParseAcct(resource)
-		if err != nil {
-			web.JSON(w, http.StatusBadRequest, map[string]string{
-				"error": "Invalid resource format. Expected acct:username@domain",
-			})
-			return
-		}
-
-		// Only handle requests for local domain
-		if domain != cfg.Instance.LocalDomain {
-			web.JSON(w, http.StatusNotFound, map[string]string{
-				"error": "User not found on this server",
-			})
-			return
-		}
-
-		account, err := queries.GetAccountByUsername(r.Context(), username)
-		if err != nil {
-			web.JSON(w, http.StatusNotFound, map[string]string{
-				"error": "Account not found",
-			})
-			return
-		}
-
-		// Build WebFinger response
-		accountURI := fmt.Sprintf("https://%s/users/%s", cfg.Instance.LocalDomain, account.Username)
-		profileURL := fmt.Sprintf("https://%s/@%s", cfg.Instance.LocalDomain, account.Username)
-
-		resp := activitypub.BuildWebFingerResponse(account.Username, cfg.Instance.LocalDomain, accountURI, profileURL)
-
-		w.Header().Set("Content-Type", activitypub.WebFingerContentType)
-		web.JSON(w, http.StatusOK, resp)
-	})
-
 	mux.HandleFunc("GET /.well-known/host-meta", func(w http.ResponseWriter, r *http.Request) {
 		// Return XRD host-meta as per RFC 6415
 		xml := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
@@ -546,38 +510,6 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		if _, err := w.Write([]byte(xml)); err != nil {
 			logger.Error("Failed to write host-meta XML response", "error", err)
 		}
-	})
-
-	mux.HandleFunc("GET /.well-known/nodeinfo", func(w http.ResponseWriter, r *http.Request) {
-		web.JSON(w, http.StatusOK, map[string]interface{}{
-			"links": []map[string]string{
-				{
-					"rel":  "http://nodeinfo.diaspora.software/ns/schema/2.0",
-					"href": fmt.Sprintf("https://%s/nodeinfo/2.0", cfg.Instance.LocalDomain),
-				},
-			},
-		})
-	})
-
-	// NodeInfo
-	mux.HandleFunc("GET /nodeinfo/2.0", func(w http.ResponseWriter, r *http.Request) {
-		web.JSON(w, http.StatusOK, map[string]interface{}{
-			"version": "2.0",
-			"software": map[string]string{
-				"name":    "gotodon",
-				"version": "0.1.0",
-			},
-			"protocols": []string{"activitypub"},
-			"usage": map[string]interface{}{
-				"users": map[string]int{
-					"total":          0,
-					"activeMonth":    0,
-					"activeHalfyear": 0,
-				},
-				"localPosts": 0,
-			},
-			"openRegistrations": cfg.Instance.RegistrationsMode == "open",
-		})
 	})
 
 	// Health check

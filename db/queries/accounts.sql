@@ -8,6 +8,10 @@ SELECT * FROM accounts WHERE id = $1;
 SELECT * FROM accounts 
 WHERE lower(username) = lower(@username) AND domain IS NULL AND suspended_at IS NULL;
 
+-- name: GetLocalAccountByUsernameAllowSuspended :one
+SELECT * FROM accounts
+WHERE lower(username) = lower(@username) AND domain IS NULL;
+
 -- name: GetAccountByUsernameAndDomain :one
 SELECT * FROM accounts 
 WHERE lower(username) = lower(@username) 
@@ -68,6 +72,11 @@ WHERE id = $1;
 -- name: UnsuspendAccount :exec
 UPDATE accounts SET suspended_at = NULL, suspension_origin = NULL, updated_at = now()
 WHERE id = $1;
+
+-- name: HasAccountDeletionRequest :one
+SELECT EXISTS(
+    SELECT 1 FROM account_deletion_requests WHERE account_id = $1
+);
 
 -- name: GetAccountStats :one
 SELECT * FROM account_stats WHERE account_id = $1;

@@ -787,6 +787,81 @@ func (q *Queries) GetKnownDomains(ctx context.Context) ([]pgtype.Text, error) {
 	return items, nil
 }
 
+const getLocalAccountByUsernameAllowSuspended = `-- name: GetLocalAccountByUsernameAllowSuspended :one
+SELECT id, username, domain, private_key, public_key, created_at, updated_at, note, display_name, uri, url, avatar_file_name, avatar_content_type, avatar_file_size, avatar_updated_at, header_file_name, header_content_type, header_file_size, header_updated_at, avatar_remote_url, locked, header_remote_url, last_webfingered_at, inbox_url, outbox_url, shared_inbox_url, followers_url, following_url, protocol, memorial, moved_to_account_id, featured_collection_url, fields, actor_type, discoverable, also_known_as, silenced_at, suspended_at, hide_collections, avatar_storage_schema_version, header_storage_schema_version, suspension_origin, sensitized_at, trendable, reviewed_at, requested_review_at, indexable, attribution_domains, id_scheme FROM accounts
+WHERE lower(username) = lower($1) AND domain IS NULL
+`
+
+func (q *Queries) GetLocalAccountByUsernameAllowSuspended(ctx context.Context, username string) (Account, error) {
+	row := q.db.QueryRow(ctx, getLocalAccountByUsernameAllowSuspended, username)
+	var i Account
+	err := row.Scan(
+		&i.ID,
+		&i.Username,
+		&i.Domain,
+		&i.PrivateKey,
+		&i.PublicKey,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Note,
+		&i.DisplayName,
+		&i.Uri,
+		&i.Url,
+		&i.AvatarFileName,
+		&i.AvatarContentType,
+		&i.AvatarFileSize,
+		&i.AvatarUpdatedAt,
+		&i.HeaderFileName,
+		&i.HeaderContentType,
+		&i.HeaderFileSize,
+		&i.HeaderUpdatedAt,
+		&i.AvatarRemoteUrl,
+		&i.Locked,
+		&i.HeaderRemoteUrl,
+		&i.LastWebfingeredAt,
+		&i.InboxUrl,
+		&i.OutboxUrl,
+		&i.SharedInboxUrl,
+		&i.FollowersUrl,
+		&i.FollowingUrl,
+		&i.Protocol,
+		&i.Memorial,
+		&i.MovedToAccountID,
+		&i.FeaturedCollectionUrl,
+		&i.Fields,
+		&i.ActorType,
+		&i.Discoverable,
+		&i.AlsoKnownAs,
+		&i.SilencedAt,
+		&i.SuspendedAt,
+		&i.HideCollections,
+		&i.AvatarStorageSchemaVersion,
+		&i.HeaderStorageSchemaVersion,
+		&i.SuspensionOrigin,
+		&i.SensitizedAt,
+		&i.Trendable,
+		&i.ReviewedAt,
+		&i.RequestedReviewAt,
+		&i.Indexable,
+		&i.AttributionDomains,
+		&i.IDScheme,
+	)
+	return i, err
+}
+
+const hasAccountDeletionRequest = `-- name: HasAccountDeletionRequest :one
+SELECT EXISTS(
+    SELECT 1 FROM account_deletion_requests WHERE account_id = $1
+)
+`
+
+func (q *Queries) HasAccountDeletionRequest(ctx context.Context, accountID int64) (bool, error) {
+	row := q.db.QueryRow(ctx, hasAccountDeletionRequest, accountID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const listAccountStatsByAccountIDs = `-- name: ListAccountStatsByAccountIDs :many
 SELECT id, account_id, statuses_count, following_count, followers_count, created_at, updated_at, last_status_at FROM account_stats
 WHERE account_id = ANY($1::bigint[])
