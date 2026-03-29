@@ -5,6 +5,9 @@ import (
 	"context"
 	"net/netip"
 	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
@@ -20,11 +23,15 @@ type tokenValidatorQueries interface {
 // TokenValidator validates OAuth access tokens and records usage.
 type TokenValidator struct {
 	queries tokenValidatorQueries
+	now     func() time.Time
 }
 
 // NewTokenValidator creates a validator backed by database queries.
 func NewTokenValidator(queries tokenValidatorQueries) *TokenValidator {
-	return &TokenValidator{queries: queries}
+	return &TokenValidator{
+		queries: queries,
+		now:     time.Now,
+	}
 }
 
 // ValidateToken verifies a token and returns identity context details.
@@ -67,12 +74,15 @@ func (v *TokenValidator) ValidateToken(ctx context.Context, token string) (*midd
 		info.AccountID = &accountID
 	}
 
-	v.touchToken(ctx, dbToken.ID)
+	v.touchToken(ctx, dbToken)
 	return info, nil
 }
 
-func (v *TokenValidator) touchToken(ctx context.Context, tokenID int64) {
+func (v *TokenValidator) touchToken(ctx context.Context, token db.OauthAccessToken) {
 	if v.queries == nil {
+		return
+	}
+	if !v.shouldTrackUsage(token.LastUsedAt) {
 		return
 	}
 
@@ -89,7 +99,18 @@ func (v *TokenValidator) touchToken(ctx context.Context, tokenID int64) {
 	}
 
 	_ = v.queries.UpdateOAuthTokenLastUsed(ctx, db.UpdateOAuthTokenLastUsedParams{
-		ID:         tokenID,
+		ID:         token.ID,
 		LastUsedIp: ipAddr,
 	})
+}
+
+func (v *TokenValidator) shouldTrackUsage(lastUsedAt pgtype.Timestamptz) bool {
+	if !lastUsedAt.Valid {
+		return true
+	}
+	now := time.Now
+	if v.now != nil {
+		now = v.now
+	}
+	return now().After(lastUsedAt.Time.Add(24 * time.Hour))
 }

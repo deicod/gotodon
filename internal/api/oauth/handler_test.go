@@ -1467,3 +1467,76 @@ func TestTokenValidator(t *testing.T) {
 		t.Fatalf("expected token usage to be recorded")
 	}
 }
+
+func TestTokenValidatorUsageTrackingCadence(t *testing.T) {
+	now := time.Date(2026, time.January, 2, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name          string
+		lastUsedAt    pgtype.Timestamptz
+		expectTouched bool
+	}{
+		{
+			name:          "missing last_used_at records usage",
+			lastUsedAt:    pgtype.Timestamptz{},
+			expectTouched: true,
+		},
+		{
+			name: "recent last_used_at does not record usage",
+			lastUsedAt: pgtype.Timestamptz{
+				Time:  now.Add(-23 * time.Hour),
+				Valid: true,
+			},
+			expectTouched: false,
+		},
+		{
+			name: "stale last_used_at records usage",
+			lastUsedAt: pgtype.Timestamptz{
+				Time:  now.Add(-25 * time.Hour),
+				Valid: true,
+			},
+			expectTouched: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newStubOAuthStore()
+			store.addUser(db.User{
+				ID:          3,
+				Email:       "user@example.com",
+				AccountID:   12,
+				Approved:    true,
+				ConfirmedAt: pgtype.Timestamptz{Time: now, Valid: true},
+			})
+			store.tokensByToken["token"] = db.OauthAccessToken{
+				ID:              1,
+				Token:           "token",
+				Scopes:          pgtype.Text{String: "profile", Valid: true},
+				ApplicationID:   pgtype.Int8{Int64: 5, Valid: true},
+				ResourceOwnerID: pgtype.Int8{Int64: 3, Valid: true},
+				CreatedAt:       pgtype.Timestamptz{Time: now, Valid: true},
+				LastUsedAt:      tt.lastUsedAt,
+			}
+
+			validator := NewTokenValidator(store)
+			validator.now = func() time.Time { return now }
+			ctx := context.WithValue(context.Background(), middleware.ContextKeyClientIP, "203.0.113.10")
+
+			info, err := validator.ValidateToken(ctx, "token")
+			if err != nil {
+				t.Fatalf("ValidateToken error: %v", err)
+			}
+			if info.AccountID == nil || *info.AccountID != 12 {
+				t.Fatalf("account id = %v, want 12", info.AccountID)
+			}
+
+			if tt.expectTouched && len(store.lastUsed) != 1 {
+				t.Fatalf("expected token usage to be recorded once, got %d", len(store.lastUsed))
+			}
+			if !tt.expectTouched && len(store.lastUsed) != 0 {
+				t.Fatalf("expected token usage not to be recorded, got %d updates", len(store.lastUsed))
+			}
+		})
+	}
+}
