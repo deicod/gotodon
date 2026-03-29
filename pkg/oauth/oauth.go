@@ -19,6 +19,7 @@ var (
 	ErrUnauthorizedClient = errors.New("unauthorized_client")
 	ErrAccessDenied       = errors.New("access_denied")
 	ErrUnsupportedGrant   = errors.New("unsupported_grant_type")
+	ErrRevokedToken       = errors.New("token_revoked")
 	ErrExpiredToken       = errors.New("token_expired")
 	ErrInvalidToken       = errors.New("invalid_token")
 	ErrInsufficientScope  = errors.New("insufficient_scope")

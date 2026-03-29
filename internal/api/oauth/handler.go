@@ -38,6 +38,7 @@ type oauthQuerier interface {
 	GetLatestActiveOAuthAccessTokenByGrant(ctx context.Context, arg db.GetLatestActiveOAuthAccessTokenByGrantParams) (db.OauthAccessToken, error)
 	CreateOAuthAccessToken(ctx context.Context, arg db.CreateOAuthAccessTokenParams) (db.OauthAccessToken, error)
 	GetOAuthAccessToken(ctx context.Context, token string) (db.OauthAccessToken, error)
+	GetOAuthAccessTokenByTokenIncludingRevoked(ctx context.Context, token string) (db.OauthAccessToken, error)
 	GetOAuthAccessTokenByRefresh(ctx context.Context, refresh pgtype.Text) (db.OauthAccessToken, error)
 	RevokeOAuthAccessToken(ctx context.Context, token string) error
 	CreateOAuthAccessGrant(ctx context.Context, arg db.CreateOAuthAccessGrantParams) (db.OauthAccessGrant, error)

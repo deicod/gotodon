@@ -13,11 +13,23 @@ import (
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	pkgoauth "github.com/deicod/gotodon/pkg/oauth"
 )
 
 type stubAppsQueries struct {
 	app db.OauthApplication
 	err error
+}
+
+type appsTestTokenValidator struct {
+	err error
+}
+
+func (s appsTestTokenValidator) ValidateToken(_ context.Context, _ string) (*middleware.TokenInfo, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &middleware.TokenInfo{TokenID: 1, AppID: 1, Scopes: "read"}, nil
 }
 
 func (s *stubAppsQueries) CreateOAuthApplication(_ context.Context, _ db.CreateOAuthApplicationParams) (db.OauthApplication, error) {
@@ -225,5 +237,30 @@ func TestAppsHandler_VerifyCredentials_InvalidAppIDReturnsUnauthorized(t *testin
 	}
 	if errResp["error"] != "The access token is invalid" {
 		t.Fatalf("error = %v, want %q", errResp["error"], "The access token is invalid")
+	}
+}
+
+func TestAppsHandler_VerifyCredentials_RequireAuthRevokedTokenMessage(t *testing.T) {
+	h := NewAppsHandler(nil, &config.Config{})
+	mux := http.NewServeMux()
+	mux.Handle("GET /api/v1/apps/verify_credentials",
+		middleware.RequireAuth(appsTestTokenValidator{err: pkgoauth.ErrRevokedToken})(http.HandlerFunc(h.VerifyCredentials)),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/apps/verify_credentials", nil)
+	req.Header.Set("Authorization", "Bearer revoked")
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	var errResp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("unmarshal error response: %v", err)
+	}
+	if errResp["error"] != "The access token was revoked" {
+		t.Fatalf("error = %v, want %q", errResp["error"], "The access token was revoked")
 	}
 }

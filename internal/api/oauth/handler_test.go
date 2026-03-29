@@ -20,6 +20,7 @@ import (
 	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	pkgoauth "github.com/deicod/gotodon/pkg/oauth"
 )
 
 type stubOAuthStore struct {
@@ -161,6 +162,14 @@ func (s *stubOAuthStore) CreateOAuthAccessToken(ctx context.Context, arg db.Crea
 func (s *stubOAuthStore) GetOAuthAccessToken(ctx context.Context, token string) (db.OauthAccessToken, error) {
 	found, ok := s.tokensByToken[token]
 	if !ok || found.RevokedAt.Valid {
+		return db.OauthAccessToken{}, pgx.ErrNoRows
+	}
+	return found, nil
+}
+
+func (s *stubOAuthStore) GetOAuthAccessTokenByTokenIncludingRevoked(ctx context.Context, token string) (db.OauthAccessToken, error) {
+	found, ok := s.tokensByToken[token]
+	if !ok {
 		return db.OauthAccessToken{}, pgx.ErrNoRows
 	}
 	return found, nil
@@ -1539,4 +1548,48 @@ func TestTokenValidatorUsageTrackingCadence(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTokenValidatorFailureKinds(t *testing.T) {
+	now := time.Now()
+
+	t.Run("revoked token", func(t *testing.T) {
+		store := newStubOAuthStore()
+		store.tokensByToken["token"] = db.OauthAccessToken{
+			Token:     "token",
+			CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+			RevokedAt: pgtype.Timestamptz{Time: now, Valid: true},
+		}
+
+		validator := NewTokenValidator(store)
+		_, err := validator.ValidateToken(context.Background(), "token")
+		if !errors.Is(err, pkgoauth.ErrRevokedToken) {
+			t.Fatalf("error = %v, want %v", err, pkgoauth.ErrRevokedToken)
+		}
+	})
+
+	t.Run("expired token", func(t *testing.T) {
+		store := newStubOAuthStore()
+		store.tokensByToken["token"] = db.OauthAccessToken{
+			Token:     "token",
+			ExpiresIn: pgtype.Int4{Int32: 1, Valid: true},
+			CreatedAt: pgtype.Timestamptz{Time: now.Add(-2 * time.Second), Valid: true},
+		}
+
+		validator := NewTokenValidator(store)
+		_, err := validator.ValidateToken(context.Background(), "token")
+		if !errors.Is(err, pkgoauth.ErrExpiredToken) {
+			t.Fatalf("error = %v, want %v", err, pkgoauth.ErrExpiredToken)
+		}
+	})
+
+	t.Run("invalid token", func(t *testing.T) {
+		store := newStubOAuthStore()
+
+		validator := NewTokenValidator(store)
+		_, err := validator.ValidateToken(context.Background(), "missing")
+		if !errors.Is(err, pkgoauth.ErrInvalidToken) {
+			t.Fatalf("error = %v, want %v", err, pkgoauth.ErrInvalidToken)
+		}
+	})
 }

@@ -3,11 +3,13 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"strings"
 
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 // ContextKey type for context keys
@@ -54,7 +56,7 @@ func RequireAuth(validator TokenValidator) func(http.Handler) http.Handler {
 
 			info, err := validator.ValidateToken(r.Context(), token)
 			if err != nil {
-				web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+				web.JSONError(w, http.StatusUnauthorized, authErrorMessage(err))
 				return
 			}
 
@@ -89,7 +91,7 @@ func Authenticate(validator TokenValidator) func(http.Handler) http.Handler {
 			ctx := context.WithValue(r.Context(), ContextKeyClientIP, clientIP(r))
 			info, err := validator.ValidateToken(ctx, token)
 			if err != nil {
-				web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+				web.JSONError(w, http.StatusUnauthorized, authErrorMessage(err))
 				return
 			}
 
@@ -252,4 +254,15 @@ func hasScope(tokenScopes, required string) bool {
 		}
 	}
 	return false
+}
+
+func authErrorMessage(err error) string {
+	switch {
+	case errors.Is(err, oauth.ErrRevokedToken):
+		return "The access token was revoked"
+	case errors.Is(err, oauth.ErrExpiredToken):
+		return "The access token expired"
+	default:
+		return "The access token is invalid"
+	}
 }

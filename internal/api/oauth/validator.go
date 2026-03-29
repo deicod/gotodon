@@ -15,7 +15,7 @@ import (
 )
 
 type tokenValidatorQueries interface {
-	GetOAuthAccessToken(ctx context.Context, token string) (db.OauthAccessToken, error)
+	GetOAuthAccessTokenByTokenIncludingRevoked(ctx context.Context, token string) (db.OauthAccessToken, error)
 	UpdateOAuthTokenLastUsed(ctx context.Context, arg db.UpdateOAuthTokenLastUsedParams) error
 	GetUserByID(ctx context.Context, id int64) (db.User, error)
 }
@@ -40,9 +40,12 @@ func (v *TokenValidator) ValidateToken(ctx context.Context, token string) (*midd
 		return nil, oauth.ErrInvalidToken
 	}
 
-	dbToken, err := v.queries.GetOAuthAccessToken(ctx, token)
+	dbToken, err := v.queries.GetOAuthAccessTokenByTokenIncludingRevoked(ctx, token)
 	if err != nil {
 		return nil, oauth.ErrInvalidToken
+	}
+	if dbToken.RevokedAt.Valid {
+		return nil, oauth.ErrRevokedToken
 	}
 
 	if dbToken.ExpiresIn.Valid && dbToken.CreatedAt.Valid {
