@@ -26,8 +26,9 @@ import (
 )
 
 const (
-	authorizationCodeTTL = 10 * time.Minute
-	pkceMethodS256       = "S256"
+	authorizationCodeTTL        = 10 * time.Minute
+	pkceMethodS256              = "S256"
+	explicitGrantRedirectPrefix = "\x1egotodon-explicit-redirect\x1e"
 )
 
 type oauthQuerier interface {
@@ -116,15 +117,16 @@ type oauthMetadataResponse struct {
 }
 
 type authorizeTemplateData struct {
-	AppName             string
-	ClientID            string
-	RedirectURI         string
-	ResponseType        string
-	Scope               string
-	ScopeLabel          string
-	State               string
-	CodeChallenge       string
-	CodeChallengeMethod string
+	AppName              string
+	ClientID             string
+	RequestedRedirectURI string
+	RedirectURI          string
+	ResponseType         string
+	Scope                string
+	ScopeLabel           string
+	State                string
+	CodeChallenge        string
+	CodeChallengeMethod  string
 }
 
 var authorizeTemplate = template.Must(template.New("authorize").Parse(`<!DOCTYPE html>
@@ -138,7 +140,7 @@ var authorizeTemplate = template.Must(template.New("authorize").Parse(`<!DOCTYPE
   <p>{{.AppName}} is requesting access with scopes: {{.ScopeLabel}}</p>
   <form method="POST" action="/oauth/authorize">
     <input type="hidden" name="client_id" value="{{.ClientID}}">
-    <input type="hidden" name="redirect_uri" value="{{.RedirectURI}}">
+    <input type="hidden" name="redirect_uri" value="{{.RequestedRedirectURI}}">
     <input type="hidden" name="scope" value="{{.Scope}}">
     <input type="hidden" name="state" value="{{.State}}">
     <input type="hidden" name="response_type" value="{{.ResponseType}}">
@@ -228,9 +230,31 @@ func (h *Handler) handleAuthorizationCode(w http.ResponseWriter, r *http.Request
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "Invalid authorization code")
 		return
 	}
-	if grant.RedirectUri != "" && req.RedirectURI != "" && grant.RedirectUri != req.RedirectURI {
-		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "Redirect URI mismatch")
-		return
+	grantRedirectURI, grantRedirectExplicit := decodeGrantRedirectBinding(grant.RedirectUri)
+	if grantRedirectExplicit {
+		if grantRedirectURI != req.RedirectURI {
+			writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "Redirect URI mismatch")
+			return
+		}
+	} else if grantRedirectURI != "" {
+		if req.RedirectURI == "" {
+			allowed := splitRedirectURIs(app.RedirectUri)
+			if len(allowed) == 1 && allowed[0] == grantRedirectURI {
+				// Compatibility for pre-patch grants where a single app redirect URI
+				// was persisted even when authorize omitted redirect_uri.
+			} else {
+				writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "Redirect URI mismatch")
+				return
+			}
+		} else if grantRedirectURI != req.RedirectURI {
+			writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "Redirect URI mismatch")
+			return
+		}
+	} else if strings.TrimSpace(req.RedirectURI) != "" {
+		if _, err := selectRedirectURI(app.RedirectUri, req.RedirectURI); err != nil {
+			writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "Redirect URI mismatch")
+			return
+		}
 	}
 	if grant.CreatedAt.Valid {
 		expiresAt := grant.CreatedAt.Time.Add(time.Duration(grant.ExpiresIn) * time.Second)
@@ -414,15 +438,16 @@ func (h *Handler) Authorize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := authorizeTemplateData{
-		AppName:             app.Name,
-		ClientID:            req.ClientID,
-		RedirectURI:         redirectURI,
-		ResponseType:        req.ResponseType,
-		Scope:               normalized,
-		ScopeLabel:          normalized,
-		State:               req.State,
-		CodeChallenge:       req.CodeChallenge,
-		CodeChallengeMethod: normalizedCodeChallengeMethod(req.CodeChallengeMethod),
+		AppName:              app.Name,
+		ClientID:             req.ClientID,
+		RequestedRedirectURI: req.RedirectURI,
+		RedirectURI:          redirectURI,
+		ResponseType:         req.ResponseType,
+		Scope:                normalized,
+		ScopeLabel:           normalized,
+		State:                req.State,
+		CodeChallenge:        req.CodeChallenge,
+		CodeChallengeMethod:  normalizedCodeChallengeMethod(req.CodeChallengeMethod),
 	}
 
 	w.Header().Set("Content-Type", "text/html")
@@ -434,7 +459,10 @@ func (h *Handler) Authorize(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) AuthorizePost(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	clientID := r.FormValue("client_id")
-	redirectURI := r.FormValue("redirect_uri")
+	requestedRedirectURI := r.FormValue("redirect_uri")
+	if strings.TrimSpace(requestedRedirectURI) == "" {
+		requestedRedirectURI = ""
+	}
 	scope := r.FormValue("scope")
 	state := r.FormValue("state")
 	responseType := r.FormValue("response_type")
@@ -451,7 +479,7 @@ func (h *Handler) AuthorizePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	redirectURI, err = selectRedirectURI(app.RedirectUri, redirectURI)
+	redirectURI, err := selectRedirectURI(app.RedirectUri, requestedRedirectURI)
 	if err != nil {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "Invalid redirect URI")
 		return
@@ -506,7 +534,7 @@ func (h *Handler) AuthorizePost(w http.ResponseWriter, r *http.Request) {
 	_, err = h.queries.CreateOAuthAccessGrant(ctx, db.CreateOAuthAccessGrantParams{
 		Token:               code,
 		ExpiresIn:           expiresIn,
-		RedirectUri:         redirectURI,
+		RedirectUri:         encodeGrantRedirectBinding(requestedRedirectURI),
 		Scopes:              scopeValue,
 		ApplicationID:       app.ID,
 		ResourceOwnerID:     user.ID,
@@ -835,6 +863,20 @@ func splitRedirectURIs(raw string) []string {
 		}
 	}
 	return uris
+}
+
+func encodeGrantRedirectBinding(requestedRedirectURI string) string {
+	if requestedRedirectURI == "" {
+		return ""
+	}
+	return explicitGrantRedirectPrefix + requestedRedirectURI
+}
+
+func decodeGrantRedirectBinding(stored string) (redirectURI string, explicit bool) {
+	if strings.HasPrefix(stored, explicitGrantRedirectPrefix) {
+		return strings.TrimPrefix(stored, explicitGrantRedirectPrefix), true
+	}
+	return stored, false
 }
 
 func redirectWithCode(w http.ResponseWriter, r *http.Request, redirectURI, code, state string) {

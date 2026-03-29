@@ -271,6 +271,194 @@ func TestTokenHandler_AuthorizationCodeScopesPreserved(t *testing.T) {
 	}
 }
 
+func TestTokenHandler_AuthorizationCodeRedirectURIMatch(t *testing.T) {
+	store := newStubOAuthStore()
+	app := db.OauthApplication{
+		ID:           1,
+		Uid:          "client",
+		Secret:       "secret",
+		RedirectUri:  "https://app.example/callback",
+		Scopes:       "read write",
+		Confidential: true,
+	}
+	store.addApp(app)
+	store.grantsByToken["grant-redirect-match"] = db.OauthAccessGrant{
+		Token:           "grant-redirect-match",
+		ExpiresIn:       600,
+		RedirectUri:     encodeGrantRedirectBinding("https://app.example/callback"),
+		Scopes:          pgtype.Text{String: "read", Valid: true},
+		ApplicationID:   app.ID,
+		ResourceOwnerID: 99,
+		CreatedAt:       pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	}
+
+	handler := NewHandler(store, nil, nil)
+	form := url.Values{
+		"grant_type":    []string{"authorization_code"},
+		"client_id":     []string{"client"},
+		"client_secret": []string{"secret"},
+		"code":          []string{"grant-redirect-match"},
+		"redirect_uri":  []string{"https://app.example/callback"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.Token(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !store.grantsByToken["grant-redirect-match"].RevokedAt.Valid {
+		t.Fatalf("expected grant to be revoked")
+	}
+}
+
+func TestTokenHandler_AuthorizationCodeRedirectURIRequiredWhenGrantExplicitlyBound(t *testing.T) {
+	store := newStubOAuthStore()
+	app := db.OauthApplication{
+		ID:           1,
+		Uid:          "client",
+		Secret:       "secret",
+		RedirectUri:  "https://app.example/callback",
+		Scopes:       "read write",
+		Confidential: true,
+	}
+	store.addApp(app)
+	store.grantsByToken["grant-redirect-required"] = db.OauthAccessGrant{
+		Token:           "grant-redirect-required",
+		ExpiresIn:       600,
+		RedirectUri:     encodeGrantRedirectBinding("https://app.example/callback"),
+		Scopes:          pgtype.Text{String: "read", Valid: true},
+		ApplicationID:   app.ID,
+		ResourceOwnerID: 99,
+		CreatedAt:       pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	}
+
+	handler := NewHandler(store, nil, nil)
+	form := url.Values{
+		"grant_type":    []string{"authorization_code"},
+		"client_id":     []string{"client"},
+		"client_secret": []string{"secret"},
+		"code":          []string{"grant-redirect-required"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.Token(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["error"] != "invalid_grant" {
+		t.Fatalf("error = %q, want %q", resp["error"], "invalid_grant")
+	}
+	if resp["error_description"] != "Redirect URI mismatch" {
+		t.Fatalf("error_description = %q, want %q", resp["error_description"], "Redirect URI mismatch")
+	}
+	if store.grantsByToken["grant-redirect-required"].RevokedAt.Valid {
+		t.Fatalf("expected grant to remain active on mismatch")
+	}
+}
+
+func TestTokenHandler_AuthorizationCodeRedirectURIMismatch(t *testing.T) {
+	store := newStubOAuthStore()
+	app := db.OauthApplication{
+		ID:           1,
+		Uid:          "client",
+		Secret:       "secret",
+		RedirectUri:  "https://app.example/callback",
+		Scopes:       "read write",
+		Confidential: true,
+	}
+	store.addApp(app)
+	store.grantsByToken["grant-redirect-mismatch"] = db.OauthAccessGrant{
+		Token:           "grant-redirect-mismatch",
+		ExpiresIn:       600,
+		RedirectUri:     encodeGrantRedirectBinding("https://app.example/callback"),
+		Scopes:          pgtype.Text{String: "read", Valid: true},
+		ApplicationID:   app.ID,
+		ResourceOwnerID: 99,
+		CreatedAt:       pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	}
+
+	handler := NewHandler(store, nil, nil)
+	form := url.Values{
+		"grant_type":    []string{"authorization_code"},
+		"client_id":     []string{"client"},
+		"client_secret": []string{"secret"},
+		"code":          []string{"grant-redirect-mismatch"},
+		"redirect_uri":  []string{"https://evil.example/callback"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.Token(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["error"] != "invalid_grant" {
+		t.Fatalf("error = %q, want %q", resp["error"], "invalid_grant")
+	}
+	if resp["error_description"] != "Redirect URI mismatch" {
+		t.Fatalf("error_description = %q, want %q", resp["error_description"], "Redirect URI mismatch")
+	}
+	if store.grantsByToken["grant-redirect-mismatch"].RevokedAt.Valid {
+		t.Fatalf("expected grant to remain active on mismatch")
+	}
+}
+
+func TestTokenHandler_AuthorizationCodePrePatchSingleRedirectGrantAllowsOmittedRedirect(t *testing.T) {
+	store := newStubOAuthStore()
+	app := db.OauthApplication{
+		ID:           1,
+		Uid:          "client",
+		Secret:       "secret",
+		RedirectUri:  "https://app.example/callback",
+		Scopes:       "read write",
+		Confidential: true,
+	}
+	store.addApp(app)
+	// Pre-patch behavior stored resolved redirect URI in grant even when authorize
+	// omitted redirect_uri for a single-URI app.
+	store.grantsByToken["grant-prepatch-single-uri"] = db.OauthAccessGrant{
+		Token:           "grant-prepatch-single-uri",
+		ExpiresIn:       600,
+		RedirectUri:     "https://app.example/callback",
+		Scopes:          pgtype.Text{String: "read", Valid: true},
+		ApplicationID:   app.ID,
+		ResourceOwnerID: 99,
+		CreatedAt:       pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	}
+
+	handler := NewHandler(store, nil, nil)
+	form := url.Values{
+		"grant_type":    []string{"authorization_code"},
+		"client_id":     []string{"client"},
+		"client_secret": []string{"secret"},
+		"code":          []string{"grant-prepatch-single-uri"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.Token(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !store.grantsByToken["grant-prepatch-single-uri"].RevokedAt.Valid {
+		t.Fatalf("expected grant to be revoked")
+	}
+}
+
 func TestTokenHandler_ClientCredentialsInvalidScope(t *testing.T) {
 	store := newStubOAuthStore()
 	store.addApp(db.OauthApplication{
@@ -729,6 +917,203 @@ func TestAuthorizePost_PKCEGrant(t *testing.T) {
 	grant, ok := store.grantsByToken[code]
 	if !ok || !grant.CodeChallenge.Valid || grant.CodeChallenge.String != challenge {
 		t.Fatalf("grant not stored with code challenge")
+	}
+	if grant.RedirectUri != encodeGrantRedirectBinding("https://app.example/callback") {
+		t.Fatalf("grant redirect_uri = %q, want encoded explicit redirect", grant.RedirectUri)
+	}
+}
+
+func TestAuthorizePost_OmittedRedirectBindsNoGrantRedirectAndTokenWithoutRedirectSucceeds(t *testing.T) {
+	store := newStubOAuthStore()
+	app := db.OauthApplication{
+		ID:           1,
+		Uid:          "client",
+		Secret:       "secret",
+		RedirectUri:  "https://app.example/callback",
+		Scopes:       "read",
+		Confidential: true,
+	}
+	store.addApp(app)
+
+	hash, err := auth.HashPassword("hunter2")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	store.addUser(db.User{
+		ID:                7,
+		Email:             "user@example.com",
+		EncryptedPassword: hash,
+		AccountID:         9,
+		Approved:          true,
+		ConfirmedAt:       pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	})
+
+	handler := NewHandler(store, nil, nil)
+	form := url.Values{
+		"client_id":     []string{"client"},
+		"scope":         []string{"read"},
+		"response_type": []string{"code"},
+		"approve":       []string{"true"},
+		"email":         []string{"user@example.com"},
+		"password":      []string{"hunter2"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/oauth/authorize", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.AuthorizePost(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("authorize status = %d, want %d", rec.Code, http.StatusFound)
+	}
+	location := rec.Header().Get("Location")
+	parsed, err := url.Parse(location)
+	if err != nil {
+		t.Fatalf("parse location: %v", err)
+	}
+	code := parsed.Query().Get("code")
+	if code == "" {
+		t.Fatalf("expected code in redirect")
+	}
+	grant := store.grantsByToken[code]
+	if grant.RedirectUri != "" {
+		t.Fatalf("grant redirect_uri = %q, want empty when request omitted redirect_uri", grant.RedirectUri)
+	}
+
+	tokenForm := url.Values{
+		"grant_type":    []string{"authorization_code"},
+		"client_id":     []string{"client"},
+		"client_secret": []string{"secret"},
+		"code":          []string{code},
+	}
+	tokenReq := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(tokenForm.Encode()))
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenRec := httptest.NewRecorder()
+	handler.Token(tokenRec, tokenReq)
+
+	if tokenRec.Code != http.StatusOK {
+		t.Fatalf("token status = %d, want %d", tokenRec.Code, http.StatusOK)
+	}
+}
+
+func TestAuthorizePost_WhitespaceRedirectBindsNoGrantRedirectAndTokenWithoutRedirectSucceeds(t *testing.T) {
+	store := newStubOAuthStore()
+	app := db.OauthApplication{
+		ID:           1,
+		Uid:          "client",
+		Secret:       "secret",
+		RedirectUri:  "https://app.example/callback",
+		Scopes:       "read",
+		Confidential: true,
+	}
+	store.addApp(app)
+
+	hash, err := auth.HashPassword("hunter2")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	store.addUser(db.User{
+		ID:                7,
+		Email:             "user@example.com",
+		EncryptedPassword: hash,
+		AccountID:         9,
+		Approved:          true,
+		ConfirmedAt:       pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	})
+
+	handler := NewHandler(store, nil, nil)
+	form := url.Values{
+		"client_id":     []string{"client"},
+		"redirect_uri":  []string{"   "},
+		"scope":         []string{"read"},
+		"response_type": []string{"code"},
+		"approve":       []string{"true"},
+		"email":         []string{"user@example.com"},
+		"password":      []string{"hunter2"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/oauth/authorize", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.AuthorizePost(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("authorize status = %d, want %d", rec.Code, http.StatusFound)
+	}
+	location := rec.Header().Get("Location")
+	parsed, err := url.Parse(location)
+	if err != nil {
+		t.Fatalf("parse location: %v", err)
+	}
+	code := parsed.Query().Get("code")
+	if code == "" {
+		t.Fatalf("expected code in redirect")
+	}
+	grant := store.grantsByToken[code]
+	if grant.RedirectUri != "" {
+		t.Fatalf("grant redirect_uri = %q, want empty when request redirect_uri is whitespace", grant.RedirectUri)
+	}
+
+	tokenForm := url.Values{
+		"grant_type":    []string{"authorization_code"},
+		"client_id":     []string{"client"},
+		"client_secret": []string{"secret"},
+		"code":          []string{code},
+	}
+	tokenReq := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(tokenForm.Encode()))
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenRec := httptest.NewRecorder()
+	handler.Token(tokenRec, tokenReq)
+
+	if tokenRec.Code != http.StatusOK {
+		t.Fatalf("token status = %d, want %d", tokenRec.Code, http.StatusOK)
+	}
+}
+
+func TestTokenHandler_AuthorizationCodeRejectsMismatchingRedirectWhenGrantNotExplicitlyBound(t *testing.T) {
+	store := newStubOAuthStore()
+	app := db.OauthApplication{
+		ID:           1,
+		Uid:          "client",
+		Secret:       "secret",
+		RedirectUri:  "https://app.example/callback",
+		Scopes:       "read",
+		Confidential: true,
+	}
+	store.addApp(app)
+	store.grantsByToken["grant-unbound-redirect"] = db.OauthAccessGrant{
+		Token:           "grant-unbound-redirect",
+		ExpiresIn:       600,
+		RedirectUri:     "",
+		Scopes:          pgtype.Text{String: "read", Valid: true},
+		ApplicationID:   app.ID,
+		ResourceOwnerID: 99,
+		CreatedAt:       pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	}
+
+	handler := NewHandler(store, nil, nil)
+	form := url.Values{
+		"grant_type":    []string{"authorization_code"},
+		"client_id":     []string{"client"},
+		"client_secret": []string{"secret"},
+		"code":          []string{"grant-unbound-redirect"},
+		"redirect_uri":  []string{"https://evil.example/callback"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.Token(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["error"] != "invalid_grant" {
+		t.Fatalf("error = %q, want %q", resp["error"], "invalid_grant")
+	}
+	if resp["error_description"] != "Redirect URI mismatch" {
+		t.Fatalf("error_description = %q, want %q", resp["error_description"], "Redirect URI mismatch")
 	}
 }
 
