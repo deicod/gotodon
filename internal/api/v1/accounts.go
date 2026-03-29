@@ -44,6 +44,7 @@ const (
 	attributionDomainsLimit   = 100
 	accountDisplayNameMax     = 30
 	accountNoteLengthLimit    = 500
+	accountNoteCommentMax     = 2000
 	accountNoteURLPlaceholder = "xxxxxxxxxxxxxxxxxxxxxxx"
 )
 
@@ -1830,6 +1831,22 @@ func (h *AccountsHandler) SetNote(w http.ResponseWriter, r *http.Request) {
 		_, err := h.queries.GetAccountByID(ctx, targetID)
 		if err != nil {
 			web.JSONError(w, http.StatusNotFound, "Record not found")
+			return
+		}
+
+		if len([]rune(req.Comment)) > accountNoteCommentMax {
+			description := fmt.Sprintf("character limit of %d exceeded", accountNoteCommentMax)
+			web.JSON(w, http.StatusUnprocessableEntity, mastodonValidationErrorResponse{
+				Error: fmt.Sprintf("Validation failed: Comment %s", description),
+				Details: map[string][]mastodonValidationDetail{
+					"comment": {
+						{
+							Error:       "ERR_TOO_LONG",
+							Description: description,
+						},
+					},
+				},
+			})
 			return
 		}
 

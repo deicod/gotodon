@@ -3,12 +3,16 @@ package v1
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/db"
 )
 
 func mockAccountsRequest(method, path string, body string, accountID int64) (*http.Request, *httptest.ResponseRecorder) {
@@ -250,5 +254,115 @@ func TestAccountsHandler_Lookup_DBUnavailable(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+type stubSetNoteQueries struct {
+	db.Querier
+	getAccountByIDCalls   int
+	upsertAccountNoteCalls int
+	deleteAccountNoteCalls int
+	lastUpsert             db.UpsertAccountNoteParams
+	note                   db.AccountNote
+}
+
+func (s *stubSetNoteQueries) GetAccountByID(ctx context.Context, id int64) (db.Account, error) {
+	s.getAccountByIDCalls++
+	return db.Account{ID: id, Username: "target"}, nil
+}
+
+func (s *stubSetNoteQueries) UpsertAccountNote(ctx context.Context, arg db.UpsertAccountNoteParams) (db.AccountNote, error) {
+	s.upsertAccountNoteCalls++
+	s.lastUpsert = arg
+	return db.AccountNote{AccountID: arg.AccountID, TargetAccountID: arg.TargetAccountID, Comment: arg.Comment}, nil
+}
+
+func (s *stubSetNoteQueries) DeleteAccountNote(ctx context.Context, arg db.DeleteAccountNoteParams) error {
+	s.deleteAccountNoteCalls++
+	return nil
+}
+
+func (s *stubSetNoteQueries) GetFollow(ctx context.Context, arg db.GetFollowParams) (db.Follow, error) {
+	return db.Follow{}, pgx.ErrNoRows
+}
+
+func (s *stubSetNoteQueries) GetBlock(ctx context.Context, arg db.GetBlockParams) (db.Block, error) {
+	return db.Block{}, pgx.ErrNoRows
+}
+
+func (s *stubSetNoteQueries) GetMute(ctx context.Context, arg db.GetMuteParams) (db.Mute, error) {
+	return db.Mute{}, pgx.ErrNoRows
+}
+
+func (s *stubSetNoteQueries) GetAccountNote(ctx context.Context, arg db.GetAccountNoteParams) (db.AccountNote, error) {
+	if s.note.Comment == "" {
+		return db.AccountNote{}, errors.New("not found")
+	}
+	return s.note, nil
+}
+
+func TestAccountsHandler_SetNote_CommentLimit_AtLimitSucceeds(t *testing.T) {
+	stub := &stubSetNoteQueries{}
+	h := NewAccountsHandler(stub, nil, nil, nil)
+
+	comment := strings.Repeat("a", accountNoteCommentMax)
+	req, rec := mockAccountsRequest(http.MethodPost, "/api/v1/accounts/42/note", `{"comment":"`+comment+`"}`, 100)
+	req.SetPathValue("id", "42")
+
+	h.SetNote(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if stub.upsertAccountNoteCalls != 1 {
+		t.Fatalf("upsert calls = %d, want %d", stub.upsertAccountNoteCalls, 1)
+	}
+	if stub.deleteAccountNoteCalls != 0 {
+		t.Fatalf("delete calls = %d, want %d", stub.deleteAccountNoteCalls, 0)
+	}
+	if got, want := stub.lastUpsert.Comment, comment; got != want {
+		t.Fatalf("upsert comment length = %d, want %d", len([]rune(got)), len([]rune(want)))
+	}
+}
+
+func TestAccountsHandler_SetNote_CommentLimit_OverLimitFails(t *testing.T) {
+	stub := &stubSetNoteQueries{}
+	h := NewAccountsHandler(stub, nil, nil, nil)
+
+	comment := strings.Repeat("a", accountNoteCommentMax+1)
+	req, rec := mockAccountsRequest(http.MethodPost, "/api/v1/accounts/42/note", `{"comment":"`+comment+`"}`, 100)
+	req.SetPathValue("id", "42")
+
+	h.SetNote(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+	if stub.upsertAccountNoteCalls != 0 {
+		t.Fatalf("upsert calls = %d, want %d", stub.upsertAccountNoteCalls, 0)
+	}
+	if stub.deleteAccountNoteCalls != 0 {
+		t.Fatalf("delete calls = %d, want %d", stub.deleteAccountNoteCalls, 0)
+	}
+
+	var resp mastodonValidationErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if got, want := resp.Error, "Validation failed: Comment character limit of 2000 exceeded"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+	details, ok := resp.Details["comment"]
+	if !ok {
+		t.Fatalf("missing comment validation details")
+	}
+	if len(details) != 1 {
+		t.Fatalf("details length = %d, want %d", len(details), 1)
+	}
+	if got, want := details[0].Error, "ERR_TOO_LONG"; got != want {
+		t.Fatalf("details error = %q, want %q", got, want)
+	}
+	if got, want := details[0].Description, "character limit of 2000 exceeded"; got != want {
+		t.Fatalf("details description = %q, want %q", got, want)
 	}
 }
