@@ -332,6 +332,108 @@ func TestAccountsHandler_UpdateCredentials_FieldsAttributesAtLimitPersistsAllFie
 	}
 }
 
+func TestAccountsHandler_UpdateCredentials_FieldValueWithoutNameReturnsMastodonValidationPayload(t *testing.T) {
+	stub := &stubAccountUpdateQueries{}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+	body := `{"fields_attributes":[{"name":"   ","value":"https://example.com"}]}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+	if stub.updateCalled {
+		t.Fatal("expected UpdateAccount not to be called")
+	}
+	if stub.updateSettingsCalled {
+		t.Fatal("expected UpdateUserSettings not to be called")
+	}
+
+	var got struct {
+		Error   string `json:"error"`
+		Details struct {
+			FieldsWithValuesMissingLabels []struct {
+				Error       string `json:"error"`
+				Description string `json:"description"`
+			} `json:"fields_with_values_missing_labels"`
+		} `json:"details"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if !strings.HasPrefix(got.Error, "Validation failed") {
+		t.Fatalf("error = %q, want prefix %q", got.Error, "Validation failed")
+	}
+	if len(got.Details.FieldsWithValuesMissingLabels) != 1 {
+		t.Fatalf("details.fields_with_values_missing_labels length = %d, want 1", len(got.Details.FieldsWithValuesMissingLabels))
+	}
+	if got.Details.FieldsWithValuesMissingLabels[0].Error != "ERR_BLANK" {
+		t.Fatalf("details.fields_with_values_missing_labels[0].error = %q, want %q", got.Details.FieldsWithValuesMissingLabels[0].Error, "ERR_BLANK")
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_FullyBlankFieldRowIgnored(t *testing.T) {
+	stub := &stubAccountUpdateQueries{}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+	body := `{"fields_attributes":[{"name":" ","value":" "},{"name":"Site","value":"https://example.com"}]}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !stub.updateCalled {
+		t.Fatal("expected UpdateAccount to be called")
+	}
+	fields := decodeUpdateFields(t, stub.updateParams.Fields)
+	if len(fields) != 1 {
+		t.Fatalf("fields length = %d, want 1", len(fields))
+	}
+	if fields[0].Name != "Site" || fields[0].Value != "https://example.com" {
+		t.Fatalf("field[0] = %+v, want Site/https://example.com", fields[0])
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_ValidNamedFieldStillSucceeds(t *testing.T) {
+	stub := &stubAccountUpdateQueries{}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+	body := `{"fields_attributes":[{"name":"Site","value":"https://example.com"}]}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !stub.updateCalled {
+		t.Fatal("expected UpdateAccount to be called")
+	}
+	fields := decodeUpdateFields(t, stub.updateParams.Fields)
+	if len(fields) != 1 {
+		t.Fatalf("fields length = %d, want 1", len(fields))
+	}
+	if fields[0].Name != "Site" || fields[0].Value != "https://example.com" {
+		t.Fatalf("field[0] = %+v, want Site/https://example.com", fields[0])
+	}
+}
+
 func TestAccountsHandler_UpdateCredentials_NoteTooLongReturnsMastodonValidationPayload(t *testing.T) {
 	stub := &stubAccountUpdateQueries{}
 	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)

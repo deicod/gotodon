@@ -350,6 +350,21 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 			web.JSONError(w, http.StatusBadRequest, "Invalid request body")
 			return
 		}
+		if fieldsProvided && hasProfileFieldWithValueMissingLabel(fields) {
+			description := "fields with values must have labels"
+			web.JSON(w, http.StatusUnprocessableEntity, mastodonValidationErrorResponse{
+				Error: fmt.Sprintf("Validation failed: %s", description),
+				Details: map[string][]mastodonValidationDetail{
+					"fields_with_values_missing_labels": {
+						{
+							Error:       "ERR_BLANK",
+							Description: description,
+						},
+					},
+				},
+			})
+			return
+		}
 		if fieldsProvided && len(fields) > maxProfileFields {
 			description := fmt.Sprintf("field limit of %d exceeded", maxProfileFields)
 			web.JSON(w, http.StatusUnprocessableEntity, mastodonValidationErrorResponse{
@@ -540,6 +555,15 @@ func normalizeFieldsAttributes(fields []UpdateCredentialsField) []UpdateCredenti
 		normalized = append(normalized, field)
 	}
 	return normalized
+}
+
+func hasProfileFieldWithValueMissingLabel(fields []UpdateCredentialsField) bool {
+	for _, field := range fields {
+		if strings.TrimSpace(field.Name) == "" && strings.TrimSpace(field.Value) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeAttributionDomains(domains []string) []string {
