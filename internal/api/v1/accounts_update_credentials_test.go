@@ -898,7 +898,7 @@ func TestAccountsHandler_UpdateCredentials_AttributionDomains(t *testing.T) {
 	stub := &stubAccountUpdateQueries{}
 	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
 
-	body := `{"attribution_domains":["Example.com","  example.com  ","foo.test",""]}`
+	body := `{"attribution_domains":["https://Example.com","http://foo.example","*.bar.example","  example.com  ",""]}`
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
@@ -910,8 +910,8 @@ func TestAccountsHandler_UpdateCredentials_AttributionDomains(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	if got := stub.updateParams.AttributionDomains; len(got) != 2 || got[0] != "example.com" || got[1] != "foo.test" {
-		t.Fatalf("attribution_domains = %v, want [example.com foo.test]", got)
+	if got := stub.updateParams.AttributionDomains; len(got) != 3 || got[0] != "example.com" || got[1] != "foo.example" || got[2] != "bar.example" {
+		t.Fatalf("attribution_domains = %v, want [example.com foo.example bar.example]", got)
 	}
 }
 
@@ -920,9 +920,10 @@ func TestAccountsHandler_UpdateCredentials_AttributionDomainsForm(t *testing.T) 
 	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
 
 	values := url.Values{}
-	values.Add("attribution_domains[]", "Example.com")
+	values.Add("attribution_domains[]", "https://Example.com")
 	values.Add("attribution_domains[]", "example.com")
-	values.Add("attribution_domains[]", "foo.test")
+	values.Add("attribution_domains[]", "http://foo.test")
+	values.Add("attribution_domains[]", "*.bar.test")
 
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", strings.NewReader(values.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -935,8 +936,202 @@ func TestAccountsHandler_UpdateCredentials_AttributionDomainsForm(t *testing.T) 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	if got := stub.updateParams.AttributionDomains; len(got) != 2 || got[0] != "example.com" || got[1] != "foo.test" {
-		t.Fatalf("attribution_domains = %v, want [example.com foo.test]", got)
+	if got := stub.updateParams.AttributionDomains; len(got) != 3 || got[0] != "example.com" || got[1] != "foo.test" || got[2] != "bar.test" {
+		t.Fatalf("attribution_domains = %v, want [example.com foo.test bar.test]", got)
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_AttributionDomainsAcceptsIDN(t *testing.T) {
+	stub := &stubAccountUpdateQueries{}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+	body := `{"attribution_domains":["https://bücher.example"]}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := stub.updateParams.AttributionDomains; len(got) != 1 || got[0] != "bücher.example" {
+		t.Fatalf("attribution_domains = %v, want [bücher.example]", got)
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_AttributionDomainsAcceptsTrailingDot(t *testing.T) {
+	stub := &stubAccountUpdateQueries{}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+	body := `{"attribution_domains":["example.com."]}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := stub.updateParams.AttributionDomains; len(got) != 1 || got[0] != "example.com." {
+		t.Fatalf("attribution_domains = %v, want [example.com.]", got)
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_AttributionDomainsMaxLengthAccepted(t *testing.T) {
+	stub := &stubAccountUpdateQueries{}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+	label := strings.Repeat("a", 63)
+	domain := strings.Join([]string{label, label, label, label}, ".")
+	body := `{"attribution_domains":["` + domain + `"]}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := stub.updateParams.AttributionDomains; len(got) != 1 || got[0] != domain {
+		t.Fatalf("attribution_domains = %v, want [%s]", got, domain)
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_AttributionDomainsInvalidReturnsMastodonValidationPayload(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "contains spaces",
+			body: `{"attribution_domains":["example com"]}`,
+		},
+		{
+			name: "invalid symbol",
+			body: `{"attribution_domains":["@"]}`,
+		},
+		{
+			name: "consecutive dots",
+			body: `{"attribution_domains":["example..com"]}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stub := &stubAccountUpdateQueries{}
+			h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+			req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", bytes.NewBufferString(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+			req = req.WithContext(ctx)
+			rec := httptest.NewRecorder()
+
+			h.UpdateCredentials(rec, req)
+
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+			}
+			if stub.updateCalled {
+				t.Fatal("expected UpdateAccount not to be called")
+			}
+			if stub.updateSettingsCalled {
+				t.Fatal("expected UpdateUserSettings not to be called")
+			}
+
+			var got struct {
+				Error   string `json:"error"`
+				Details struct {
+					AttributionDomains []struct {
+						Error       string `json:"error"`
+						Description string `json:"description"`
+					} `json:"attribution_domains"`
+				} `json:"details"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatalf("decode error response: %v", err)
+			}
+			if !strings.HasPrefix(got.Error, "Validation failed") {
+				t.Fatalf("error = %q, want prefix %q", got.Error, "Validation failed")
+			}
+			if len(got.Details.AttributionDomains) != 1 {
+				t.Fatalf("details.attribution_domains length = %d, want 1", len(got.Details.AttributionDomains))
+			}
+			if got.Details.AttributionDomains[0].Error != "ERR_INVALID" {
+				t.Fatalf("details.attribution_domains[0].error = %q, want %q", got.Details.AttributionDomains[0].Error, "ERR_INVALID")
+			}
+			if got.Details.AttributionDomains[0].Description != "is invalid" {
+				t.Fatalf("details.attribution_domains[0].description = %q, want %q", got.Details.AttributionDomains[0].Description, "is invalid")
+			}
+		})
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_AttributionDomainsOverLimitReturnsMastodonValidationPayload(t *testing.T) {
+	stub := &stubAccountUpdateQueries{}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+	domains := make([]string, 0, attributionDomainsLimit+1)
+	for i := 0; i < attributionDomainsLimit+1; i++ {
+		domains = append(domains, "domain"+strconv.Itoa(i)+".example")
+	}
+	bodyBytes, err := json.Marshal(map[string]any{
+		"attribution_domains": domains,
+	})
+	if err != nil {
+		t.Fatalf("marshal request body: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", bytes.NewBuffer(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+	if stub.updateCalled {
+		t.Fatal("expected UpdateAccount not to be called")
+	}
+	if stub.updateSettingsCalled {
+		t.Fatal("expected UpdateUserSettings not to be called")
+	}
+
+	var got struct {
+		Error   string `json:"error"`
+		Details struct {
+			AttributionDomains []struct {
+				Error       string `json:"error"`
+				Description string `json:"description"`
+			} `json:"attribution_domains"`
+		} `json:"details"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if !strings.HasPrefix(got.Error, "Validation failed") {
+		t.Fatalf("error = %q, want prefix %q", got.Error, "Validation failed")
+	}
+	if len(got.Details.AttributionDomains) != 1 {
+		t.Fatalf("details.attribution_domains length = %d, want 1", len(got.Details.AttributionDomains))
+	}
+	if got.Details.AttributionDomains[0].Error != "ERR_TOO_LONG" {
+		t.Fatalf("details.attribution_domains[0].error = %q, want %q", got.Details.AttributionDomains[0].Error, "ERR_TOO_LONG")
+	}
+	if !strings.Contains(got.Details.AttributionDomains[0].Description, "attribution domains limit of 100 exceeded") {
+		t.Fatalf("details.attribution_domains[0].description = %q, want to mention %q", got.Details.AttributionDomains[0].Description, "attribution domains limit of 100 exceeded")
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rivo/uniseg"
+	"golang.org/x/net/idna"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/auth"
@@ -40,6 +41,7 @@ type AccountsHandler struct {
 const (
 	defaultAccountsLimit      = 40
 	maxProfileFields          = 4
+	attributionDomainsLimit   = 100
 	accountDisplayNameMax     = 30
 	accountNoteLengthLimit    = 500
 	accountNoteURLPlaceholder = "xxxxxxxxxxxxxxxxxxxxxxx"
@@ -325,6 +327,43 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	var normalizedAttributionDomains []string
+	if req.AttributionDomains != nil {
+		normalizedAttributionDomains = normalizeAttributionDomains(req.AttributionDomains)
+		if len(normalizedAttributionDomains) > attributionDomainsLimit {
+			description := fmt.Sprintf("attribution domains limit of %d exceeded", attributionDomainsLimit)
+			web.JSON(w, http.StatusUnprocessableEntity, mastodonValidationErrorResponse{
+				Error: fmt.Sprintf("Validation failed: Attribution domains %s", description),
+				Details: map[string][]mastodonValidationDetail{
+					"attribution_domains": {
+						{
+							Error:       "ERR_TOO_LONG",
+							Description: description,
+						},
+					},
+				},
+			})
+			return
+		}
+		for _, domain := range normalizedAttributionDomains {
+			if !isValidAttributionDomain(domain) {
+				description := "is invalid"
+				web.JSON(w, http.StatusUnprocessableEntity, mastodonValidationErrorResponse{
+					Error: fmt.Sprintf("Validation failed: Attribution domains %s", description),
+					Details: map[string][]mastodonValidationDetail{
+						"attribution_domains": {
+							{
+								Error:       "ERR_INVALID",
+								Description: description,
+							},
+						},
+					},
+				})
+				return
+			}
+		}
+	}
+
 	if h.useDB() {
 		params := db.UpdateAccountParams{ID: accountID}
 		if req.DisplayName != nil {
@@ -353,7 +392,7 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 			params.ActorType = pgtype.Text{String: actorType, Valid: true}
 		}
 		if req.AttributionDomains != nil {
-			params.AttributionDomains = normalizeAttributionDomains(req.AttributionDomains)
+			params.AttributionDomains = normalizedAttributionDomains
 		}
 
 		fields, fieldsProvided, err := parseUpdateCredentialsFields(r, req)
@@ -585,6 +624,9 @@ func normalizeAttributionDomains(domains []string) []string {
 	normalized := make([]string, 0, len(domains))
 	for _, domain := range domains {
 		trimmed := strings.ToLower(strings.TrimSpace(domain))
+		trimmed = strings.TrimPrefix(trimmed, "http://")
+		trimmed = strings.TrimPrefix(trimmed, "https://")
+		trimmed = strings.TrimPrefix(trimmed, "*.")
 		if trimmed == "" {
 			continue
 		}
@@ -595,6 +637,36 @@ func normalizeAttributionDomains(domains []string) []string {
 		normalized = append(normalized, trimmed)
 	}
 	return normalized
+}
+
+func isValidAttributionDomain(domain string) bool {
+	asciiDomain, err := idna.Lookup.ToASCII(domain)
+	if err != nil {
+		return false
+	}
+	asciiDomain = strings.TrimSuffix(asciiDomain, ".")
+	if asciiDomain == "" || len(asciiDomain) > 255 {
+		return false
+	}
+	if strings.Contains(asciiDomain, "..") {
+		return false
+	}
+	labels := strings.Split(asciiDomain, ".")
+	for _, label := range labels {
+		if label == "" || len(label) > 63 {
+			return false
+		}
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, r := range label {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
 }
 
 func accountNoteLength(note string) int {
