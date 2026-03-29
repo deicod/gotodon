@@ -398,19 +398,30 @@ func TestTokenHandler_RefreshToken(t *testing.T) {
 	}
 }
 
-func TestRevoke_PublishesKillForRevokedAccessToken(t *testing.T) {
+func TestRevoke_SameClientRevokesAndPublishesKill(t *testing.T) {
 	store := newStubOAuthStore()
-	store.updateToken(db.OauthAccessToken{
+	store.addApp(db.OauthApplication{
 		ID:           44,
-		Token:        "token44",
-		RefreshToken: pgtype.Text{String: "refresh44", Valid: true},
-		CreatedAt:    pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		Uid:          "client44",
+		Secret:       "secret44",
+		Confidential: true,
+	})
+	store.updateToken(db.OauthAccessToken{
+		ID:            44,
+		Token:         "token44",
+		RefreshToken:  pgtype.Text{String: "refresh44", Valid: true},
+		ApplicationID: pgtype.Int8{Int64: 44, Valid: true},
+		CreatedAt:     pgtype.Timestamptz{Time: time.Now(), Valid: true},
 	})
 
 	killPublisher := &stubTokenKillPublisher{}
 	handler := NewHandler(store, nil, killPublisher)
 
-	form := url.Values{"token": []string{"token44"}}
+	form := url.Values{
+		"token":         []string{"token44"},
+		"client_id":     []string{"client44"},
+		"client_secret": []string{"secret44"},
+	}
 	req := httptest.NewRequest(http.MethodPost, "/oauth/revoke", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
@@ -428,20 +439,120 @@ func TestRevoke_PublishesKillForRevokedAccessToken(t *testing.T) {
 	if killPublisher.events[0].streams[0] != "access_token:44" {
 		t.Fatalf("kill stream = %q, want %q", killPublisher.events[0].streams[0], "access_token:44")
 	}
+	if len(store.deletedTokens) != 1 || store.deletedTokens[0].Int64 != 44 {
+		t.Fatalf("expected push subscription deletion for token 44")
+	}
+}
+
+func TestRevoke_MismatchedClientDoesNotRevoke(t *testing.T) {
+	store := newStubOAuthStore()
+	store.addApp(db.OauthApplication{
+		ID:           77,
+		Uid:          "client77",
+		Secret:       "secret77",
+		Confidential: true,
+	})
+	store.addApp(db.OauthApplication{
+		ID:           88,
+		Uid:          "client88",
+		Secret:       "secret88",
+		Confidential: true,
+	})
+	store.updateToken(db.OauthAccessToken{
+		ID:            55,
+		Token:         "token55",
+		ApplicationID: pgtype.Int8{Int64: 88, Valid: true},
+		CreatedAt:     pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	})
+
+	killPublisher := &stubTokenKillPublisher{}
+	handler := NewHandler(store, nil, killPublisher)
+
+	form := url.Values{
+		"token":         []string{"token55"},
+		"client_id":     []string{"client77"},
+		"client_secret": []string{"secret77"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/oauth/revoke", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.Revoke(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if store.tokensByToken["token55"].RevokedAt.Valid {
+		t.Fatalf("expected token to remain active for mismatched client")
+	}
+	if len(killPublisher.events) != 0 {
+		t.Fatalf("kill events = %d, want 0", len(killPublisher.events))
+	}
+	if len(store.deletedTokens) != 0 {
+		t.Fatalf("deleted push subscriptions = %d, want 0", len(store.deletedTokens))
+	}
+}
+
+func TestRevoke_MissingClientContextDoesNotRevoke(t *testing.T) {
+	store := newStubOAuthStore()
+	store.addApp(db.OauthApplication{
+		ID:           99,
+		Uid:          "client99",
+		Secret:       "secret99",
+		Confidential: true,
+	})
+	store.updateToken(db.OauthAccessToken{
+		ID:            66,
+		Token:         "token66",
+		ApplicationID: pgtype.Int8{Int64: 99, Valid: true},
+		CreatedAt:     pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	})
+
+	killPublisher := &stubTokenKillPublisher{}
+	handler := NewHandler(store, nil, killPublisher)
+
+	form := url.Values{"token": []string{"token66"}}
+	req := httptest.NewRequest(http.MethodPost, "/oauth/revoke", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.Revoke(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if store.tokensByToken["token66"].RevokedAt.Valid {
+		t.Fatalf("expected token to remain active without client context")
+	}
+	if len(killPublisher.events) != 0 {
+		t.Fatalf("kill events = %d, want 0", len(killPublisher.events))
+	}
+	if len(store.deletedTokens) != 0 {
+		t.Fatalf("deleted push subscriptions = %d, want 0", len(store.deletedTokens))
+	}
 }
 
 func TestRevoke_KillPublishFailureDoesNotBreakSuccess(t *testing.T) {
 	store := newStubOAuthStore()
+	store.addApp(db.OauthApplication{
+		ID:           55,
+		Uid:          "client55",
+		Secret:       "secret55",
+		Confidential: true,
+	})
 	store.updateToken(db.OauthAccessToken{
-		ID:        55,
-		Token:     "token55",
-		CreatedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		ID:            55,
+		Token:         "token55",
+		ApplicationID: pgtype.Int8{Int64: 55, Valid: true},
+		CreatedAt:     pgtype.Timestamptz{Time: time.Now(), Valid: true},
 	})
 
 	killPublisher := &stubTokenKillPublisher{err: errors.New("redis down")}
 	handler := NewHandler(store, nil, killPublisher)
 
-	form := url.Values{"token": []string{"token55"}}
+	form := url.Values{
+		"token":         []string{"token55"},
+		"client_id":     []string{"client55"},
+		"client_secret": []string{"secret55"},
+	}
 	req := httptest.NewRequest(http.MethodPost, "/oauth/revoke", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
@@ -452,6 +563,9 @@ func TestRevoke_KillPublishFailureDoesNotBreakSuccess(t *testing.T) {
 	}
 	if !store.tokensByToken["token55"].RevokedAt.Valid {
 		t.Fatalf("expected token to be revoked despite kill publish failure")
+	}
+	if len(store.deletedTokens) != 1 || store.deletedTokens[0].Int64 != 55 {
+		t.Fatalf("expected push subscription deletion for token 55")
 	}
 }
 

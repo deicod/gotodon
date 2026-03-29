@@ -329,29 +329,30 @@ func (h *Handler) Revoke(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Verify client if provided
-	if req.ClientID != "" {
-		app, err := h.queries.GetOAuthApplicationByUID(ctx, req.ClientID)
-		if err != nil || (app.Confidential && !auth.SecureCompare(req.ClientSecret, app.Secret)) {
+	app, err := h.validateClient(ctx, req.ClientID, req.ClientSecret)
+	if err != nil {
+		if strings.TrimSpace(req.ClientID) != "" {
 			writeOAuthError(w, http.StatusUnauthorized, "invalid_client", "Invalid client credentials")
 			return
 		}
+		web.JSON(w, http.StatusOK, map[string]any{})
+		return
 	}
 
 	// Try access token, then refresh token.
 	if token, err := h.queries.GetOAuthAccessToken(ctx, req.Token); err == nil {
-		if err := h.queries.RevokeOAuthAccessToken(ctx, token.Token); err == nil {
+		if token.ApplicationID.Valid && token.ApplicationID.Int64 == app.ID && h.queries.RevokeOAuthAccessToken(ctx, token.Token) == nil {
 			h.publishTokenKill(ctx, token.ID)
-		}
-		if token.ID != 0 {
-			_ = h.queries.DeletePushSubscription(ctx, pgtype.Int8{Int64: token.ID, Valid: true})
+			if token.ID != 0 {
+				_ = h.queries.DeletePushSubscription(ctx, pgtype.Int8{Int64: token.ID, Valid: true})
+			}
 		}
 	} else if token, err := h.queries.GetOAuthAccessTokenByRefresh(ctx, pgtype.Text{String: req.Token, Valid: true}); err == nil {
-		if err := h.queries.RevokeOAuthAccessToken(ctx, token.Token); err == nil {
+		if token.ApplicationID.Valid && token.ApplicationID.Int64 == app.ID && h.queries.RevokeOAuthAccessToken(ctx, token.Token) == nil {
 			h.publishTokenKill(ctx, token.ID)
-		}
-		if token.ID != 0 {
-			_ = h.queries.DeletePushSubscription(ctx, pgtype.Int8{Int64: token.ID, Valid: true})
+			if token.ID != 0 {
+				_ = h.queries.DeletePushSubscription(ctx, pgtype.Int8{Int64: token.ID, Valid: true})
+			}
 		}
 	}
 
