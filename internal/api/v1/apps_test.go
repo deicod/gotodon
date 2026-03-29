@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -18,8 +19,9 @@ import (
 )
 
 type stubAppsQueries struct {
-	app db.OauthApplication
-	err error
+	app       db.OauthApplication
+	err       error
+	createArg db.CreateOAuthApplicationParams
 }
 
 type appsTestTokenValidator struct {
@@ -33,7 +35,8 @@ func (s appsTestTokenValidator) ValidateToken(_ context.Context, _ string) (*mid
 	return &middleware.TokenInfo{TokenID: 1, AppID: 1, Scopes: "read"}, nil
 }
 
-func (s *stubAppsQueries) CreateOAuthApplication(_ context.Context, _ db.CreateOAuthApplicationParams) (db.OauthApplication, error) {
+func (s *stubAppsQueries) CreateOAuthApplication(_ context.Context, arg db.CreateOAuthApplicationParams) (db.OauthApplication, error) {
+	s.createArg = arg
 	if s.err != nil {
 		return db.OauthApplication{}, s.err
 	}
@@ -218,6 +221,137 @@ func TestAppsHandler_Create_SuccessPayloadShape_NoDBFallback(t *testing.T) {
 	}
 	if got := resp["redirect_uri"]; got != "https://example.com/callback\nhttps://example.com/alt" {
 		t.Fatalf("redirect_uri = %v, want raw newline-delimited string", got)
+	}
+}
+
+func TestAppsHandler_Create_AcceptsRedirectURIsArray_JSON_DBPath(t *testing.T) {
+	stub := &stubAppsQueries{
+		app: db.OauthApplication{
+			ID:          100,
+			Name:        "Array App",
+			Uid:         "generated-client-id",
+			Secret:      "generated-client-secret",
+			Scopes:      "read",
+			RedirectUri: "https://example.com/callback\nhttps://example.com/alt",
+		},
+	}
+	h := NewAppsHandler(stub, &config.Config{})
+
+	body := strings.NewReader(`{
+		"client_name":"Array App",
+		"redirect_uris":["https://example.com/callback","https://example.com/alt"],
+		"scopes":"read"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/apps", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.Create(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := stub.createArg.RedirectUri; got != "https://example.com/callback\nhttps://example.com/alt" {
+		t.Fatalf("stored redirect_uri = %q, want newline-joined array values", got)
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	redirectURIs, ok := resp["redirect_uris"].([]any)
+	if !ok {
+		t.Fatalf("redirect_uris type = %T, want []any", resp["redirect_uris"])
+	}
+	if len(redirectURIs) != 2 || redirectURIs[0] != "https://example.com/callback" || redirectURIs[1] != "https://example.com/alt" {
+		t.Fatalf("redirect_uris = %#v, want [https://example.com/callback https://example.com/alt]", redirectURIs)
+	}
+	if got := resp["redirect_uri"]; got != "https://example.com/callback\nhttps://example.com/alt" {
+		t.Fatalf("redirect_uri = %v, want raw newline-delimited string", got)
+	}
+}
+
+func TestAppsHandler_Create_AcceptsRedirectURIsArray_FormEncoded_DBPath(t *testing.T) {
+	stub := &stubAppsQueries{
+		app: db.OauthApplication{
+			ID:          101,
+			Name:        "Form App",
+			Uid:         "generated-client-id",
+			Secret:      "generated-client-secret",
+			Scopes:      "read",
+			RedirectUri: "https://example.com/callback\nhttps://example.com/alt",
+		},
+	}
+	h := NewAppsHandler(stub, &config.Config{})
+
+	form := url.Values{}
+	form.Set("client_name", "Form App")
+	form.Set("scopes", "read")
+	form.Add("redirect_uris[]", "https://example.com/callback")
+	form.Add("redirect_uris[]", "https://example.com/alt")
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/apps", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	h.Create(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := stub.createArg.RedirectUri; got != "https://example.com/callback\nhttps://example.com/alt" {
+		t.Fatalf("stored redirect_uri = %q, want newline-joined array values", got)
+	}
+}
+
+func TestAppsHandler_Create_RejectsEmptyRedirectURIsArray(t *testing.T) {
+	h := NewAppsHandler(nil, &config.Config{})
+
+	body := strings.NewReader(`{
+		"client_name":"Parity App",
+		"redirect_uris":[],
+		"scopes":"read"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/apps", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.Create(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+	var errResp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("unmarshal error response: %v", err)
+	}
+	if errResp["error"] != "Redirect URI is required" {
+		t.Fatalf("error = %v, want %q", errResp["error"], "Redirect URI is required")
+	}
+}
+
+func TestAppsHandler_Create_RejectsNewlineOnlyRedirectURIsString(t *testing.T) {
+	h := NewAppsHandler(nil, &config.Config{})
+
+	body := strings.NewReader(`{
+		"client_name":"Parity App",
+		"redirect_uris":"\n\n\t ",
+		"scopes":"read"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/apps", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.Create(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+	var errResp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("unmarshal error response: %v", err)
+	}
+	if errResp["error"] != "Redirect URI is required" {
+		t.Fatalf("error = %v, want %q", errResp["error"], "Redirect URI is required")
 	}
 }
 

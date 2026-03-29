@@ -3,6 +3,8 @@ package v1
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -46,10 +48,34 @@ func (h *AppsHandler) vapidKey() string {
 
 // CreateAppRequest is the request body for POST /api/v1/apps
 type CreateAppRequest struct {
-	ClientName   string `json:"client_name" form:"client_name"`
-	RedirectURIs string `json:"redirect_uris" form:"redirect_uris"`
-	Scopes       string `json:"scopes" form:"scopes"`
-	Website      string `json:"website" form:"website"`
+	ClientName   string                `json:"client_name" form:"client_name"`
+	RedirectURIs createAppRedirectURIs `json:"redirect_uris" form:"redirect_uris"`
+	Scopes       string                `json:"scopes" form:"scopes"`
+	Website      string                `json:"website" form:"website"`
+}
+
+type createAppRedirectURIs []string
+
+func (r *createAppRedirectURIs) UnmarshalJSON(data []byte) error {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "null" {
+		*r = nil
+		return nil
+	}
+
+	var single string
+	if err := json.Unmarshal(data, &single); err == nil {
+		*r = createAppRedirectURIs{single}
+		return nil
+	}
+
+	var many []string
+	if err := json.Unmarshal(data, &many); err == nil {
+		*r = createAppRedirectURIs(many)
+		return nil
+	}
+
+	return errors.New("redirect_uris must be a string or array of strings")
 }
 
 // CreateAppResponse is the response for POST /api/v1/apps
@@ -78,18 +104,15 @@ func (h *AppsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Name can't be blank")
 		return
 	}
-	if req.RedirectURIs == "" {
+
+	rawRedirectURI, redirectURIs := normalizeCreateAppRedirectURIs(req.RedirectURIs)
+	if len(redirectURIs) == 0 {
 		web.JSONError(w, http.StatusUnprocessableEntity, "Redirect URI is required")
 		return
 	}
 
 	// Validate Redirect URIs
-	redirectURIs := strings.Split(req.RedirectURIs, "\n")
 	for _, uri := range redirectURIs {
-		uri = strings.TrimSpace(uri)
-		if uri == "" {
-			continue
-		}
 		if _, err := url.ParseRequestURI(uri); err != nil {
 			web.JSONError(w, http.StatusUnprocessableEntity, "Invalid redirect URI: "+uri)
 			return
@@ -126,7 +149,7 @@ func (h *AppsHandler) Create(w http.ResponseWriter, r *http.Request) {
 			Name:         req.ClientName,
 			Uid:          clientID,
 			Secret:       clientSecret,
-			RedirectUri:  req.RedirectURIs,
+			RedirectUri:  rawRedirectURI,
 			Scopes:       normalizedScopes,
 			Website:      websitePG,
 			OwnerType:    pgtype.Text{Valid: false},
@@ -157,7 +180,6 @@ func (h *AppsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	normalizedScopeList := oauth.ParseScopes(normalizedScopes)
-	redirectURIList := splitAppRedirectURIs(req.RedirectURIs)
 
 	web.JSON(w, http.StatusOK, CreateAppResponse{
 		ID:                    "1",
@@ -167,10 +189,19 @@ func (h *AppsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Name:                  req.ClientName,
 		Website:               website,
 		Scopes:                normalizedScopeList,
-		RedirectURIs:          redirectURIList,
-		RedirectURI:           req.RedirectURIs,
+		RedirectURIs:          redirectURIs,
+		RedirectURI:           rawRedirectURI,
 		VapidKey:              h.vapidKey(),
 	})
+}
+
+func normalizeCreateAppRedirectURIs(rawInput createAppRedirectURIs) (string, []string) {
+	redirectURIs := make([]string, 0, len(rawInput))
+	for _, value := range rawInput {
+		redirectURIs = append(redirectURIs, splitAppRedirectURIs(value)...)
+	}
+
+	return strings.Join(redirectURIs, "\n"), redirectURIs
 }
 
 type appCredentialsResponse struct {
