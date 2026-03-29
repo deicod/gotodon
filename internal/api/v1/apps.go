@@ -2,6 +2,7 @@
 package v1
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -18,12 +19,17 @@ import (
 
 // AppsHandler handles OAuth application registration
 type AppsHandler struct {
-	queries *db.Queries
+	queries appsQueries
 	cfg     *config.Config
 }
 
+type appsQueries interface {
+	CreateOAuthApplication(ctx context.Context, arg db.CreateOAuthApplicationParams) (db.OauthApplication, error)
+	GetOAuthApplication(ctx context.Context, id int64) (db.OauthApplication, error)
+}
+
 // NewAppsHandler creates a new apps handler
-func NewAppsHandler(queries *db.Queries, cfg *config.Config) *AppsHandler {
+func NewAppsHandler(queries appsQueries, cfg *config.Config) *AppsHandler {
 	return &AppsHandler{queries: queries, cfg: cfg}
 }
 
@@ -152,34 +158,93 @@ func (h *AppsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type appCredentialsResponse struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Website      *string  `json:"website"`
+	Scopes       []string `json:"scopes"`
+	RedirectURIs []string `json:"redirect_uris"`
+	RedirectURI  string   `json:"redirect_uri"`
+	VapidKey     string   `json:"vapid_key,omitempty"`
+}
+
 // VerifyCredentials handles GET /api/v1/apps/verify_credentials
 func (h *AppsHandler) VerifyCredentials(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	if h.useDB() {
-		appID, ok := middleware.GetAppID(ctx)
-		if ok {
-			app, err := h.queries.GetOAuthApplication(ctx, appID)
-			if err == nil {
-				website := ""
-				if app.Website.Valid {
-					website = app.Website.String
-				}
-				web.JSON(w, http.StatusOK, map[string]interface{}{
-					"name":      app.Name,
-					"website":   website,
-					"vapid_key": h.vapidKey(),
-				})
-				return
-			}
+	appID, ok := middleware.GetAppID(ctx)
+	if !ok {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	if appID == 0 {
+		web.JSON(w, http.StatusOK, appCredentialsResponse{
+			ID:           "0",
+			Name:         "Test App",
+			Website:      nil,
+			Scopes:       oauth.ParseScopes(middleware.GetScopes(ctx)),
+			RedirectURIs: []string{},
+			RedirectURI:  "",
+			VapidKey:     h.vapidKey(),
+		})
+		return
+	}
+
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Database not available")
+		return
+	}
+
+	app, err := h.queries.GetOAuthApplication(ctx, appID)
+	if err != nil {
+		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
+		return
+	}
+
+	redirectURIs := splitAppRedirectURIs(app.RedirectUri)
+	firstRedirectURI := ""
+	if len(redirectURIs) > 0 {
+		firstRedirectURI = redirectURIs[0]
+	}
+
+	var website *string
+	if app.Website.Valid {
+		trimmedWebsite := strings.TrimSpace(app.Website.String)
+		if trimmedWebsite != "" {
+			website = &trimmedWebsite
 		}
 	}
 
-	web.JSON(w, http.StatusOK, map[string]interface{}{
-		"name":      "Test App",
-		"website":   nil,
-		"vapid_key": h.vapidKey(),
+	web.JSON(w, http.StatusOK, appCredentialsResponse{
+		ID:           strconv.FormatInt(app.ID, 10),
+		Name:         app.Name,
+		Website:      website,
+		Scopes:       oauth.ParseScopes(app.Scopes),
+		RedirectURIs: redirectURIs,
+		RedirectURI:  firstRedirectURI,
+		VapidKey:     h.vapidKey(),
 	})
+}
+
+func splitAppRedirectURIs(raw string) []string {
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		switch r {
+		case '\n', '\r', '\t', ' ':
+			return true
+		default:
+			return false
+		}
+	})
+
+	uris := make([]string, 0, len(fields))
+	for _, field := range fields {
+		trimmed := strings.TrimSpace(field)
+		if trimmed != "" {
+			uris = append(uris, trimmed)
+		}
+	}
+	return uris
 }
 
 // RegisterRoutes registers the apps routes
