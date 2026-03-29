@@ -243,7 +243,7 @@ func TestAccountsHandler_UpdateCredentials_FieldsAttributesForm(t *testing.T) {
 	}
 }
 
-func TestAccountsHandler_UpdateCredentials_FieldsAttributesLimit(t *testing.T) {
+func TestAccountsHandler_UpdateCredentials_FieldsAttributesOverLimitReturnsMastodonValidationPayload(t *testing.T) {
 	stub := &stubAccountUpdateQueries{}
 	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
 
@@ -261,12 +261,74 @@ func TestAccountsHandler_UpdateCredentials_FieldsAttributesLimit(t *testing.T) {
 
 	h.UpdateCredentials(rec, req)
 
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+	if stub.updateCalled {
+		t.Fatal("expected UpdateAccount not to be called")
+	}
+	if stub.updateSettingsCalled {
+		t.Fatal("expected UpdateUserSettings not to be called")
+	}
+
+	var got struct {
+		Error   string `json:"error"`
+		Details struct {
+			Fields []struct {
+				Error       string `json:"error"`
+				Description string `json:"description"`
+			} `json:"fields"`
+		} `json:"details"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if !strings.HasPrefix(got.Error, "Validation failed") {
+		t.Fatalf("error = %q, want prefix %q", got.Error, "Validation failed")
+	}
+	if len(got.Details.Fields) != 1 {
+		t.Fatalf("details.fields length = %d, want 1", len(got.Details.Fields))
+	}
+	if got.Details.Fields[0].Error != "ERR_TOO_LONG" {
+		t.Fatalf("details.fields[0].error = %q, want %q", got.Details.Fields[0].Error, "ERR_TOO_LONG")
+	}
+	if !strings.Contains(got.Details.Fields[0].Description, "field limit of 4 exceeded") {
+		t.Fatalf("details.fields[0].description = %q, want to mention %q", got.Details.Fields[0].Description, "field limit of 4 exceeded")
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_FieldsAttributesAtLimitPersistsAllFields(t *testing.T) {
+	stub := &stubAccountUpdateQueries{}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+	values := url.Values{}
+	for i := 0; i < maxProfileFields; i++ {
+		values.Set("fields_attributes["+strconv.Itoa(i)+"][name]", "Field "+strconv.Itoa(i))
+		values.Set("fields_attributes["+strconv.Itoa(i)+"][value]", "Value "+strconv.Itoa(i))
+	}
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", strings.NewReader(values.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !stub.updateCalled {
+		t.Fatal("expected UpdateAccount to be called")
 	}
 	fields := decodeUpdateFields(t, stub.updateParams.Fields)
 	if len(fields) != maxProfileFields {
 		t.Fatalf("fields length = %d, want %d", len(fields), maxProfileFields)
+	}
+	for i := 0; i < maxProfileFields; i++ {
+		if fields[i].Name != "Field "+strconv.Itoa(i) || fields[i].Value != "Value "+strconv.Itoa(i) {
+			t.Fatalf("field[%d] = %+v, want Field %d/Value %d", i, fields[i], i, i)
+		}
 	}
 }
 

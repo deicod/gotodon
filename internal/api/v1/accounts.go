@@ -350,6 +350,21 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 			web.JSONError(w, http.StatusBadRequest, "Invalid request body")
 			return
 		}
+		if fieldsProvided && len(fields) > maxProfileFields {
+			description := fmt.Sprintf("field limit of %d exceeded", maxProfileFields)
+			web.JSON(w, http.StatusUnprocessableEntity, mastodonValidationErrorResponse{
+				Error: fmt.Sprintf("Validation failed: Fields %s", description),
+				Details: map[string][]mastodonValidationDetail{
+					"fields": {
+						{
+							Error:       "ERR_TOO_LONG",
+							Description: description,
+						},
+					},
+				},
+			})
+			return
+		}
 		if fieldsProvided {
 			encoded, err := json.Marshal(fields)
 			if err != nil {
@@ -523,9 +538,6 @@ func normalizeFieldsAttributes(fields []UpdateCredentialsField) []UpdateCredenti
 			continue
 		}
 		normalized = append(normalized, field)
-		if len(normalized) >= maxProfileFields {
-			break
-		}
 	}
 	return normalized
 }
