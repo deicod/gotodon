@@ -44,7 +44,6 @@ type oauthQuerier interface {
 	GetOAuthAccessGrantByToken(ctx context.Context, token string) (db.OauthAccessGrant, error)
 	RevokeOAuthAccessGrant(ctx context.Context, token string) error
 	GetUserByEmail(ctx context.Context, email string) (db.User, error)
-	GetUserByID(ctx context.Context, id int64) (db.User, error)
 	GetAccountByID(ctx context.Context, id int64) (db.Account, error)
 	DeletePushSubscription(ctx context.Context, accessTokenID pgtype.Int8) error
 }
@@ -75,7 +74,6 @@ type TokenRequest struct {
 	Scope        string `json:"scope" form:"scope"`
 	Username     string `json:"username" form:"username"`
 	Password     string `json:"password" form:"password"`
-	RefreshToken string `json:"refresh_token" form:"refresh_token"`
 	CodeVerifier string `json:"code_verifier" form:"code_verifier"`
 }
 
@@ -175,8 +173,6 @@ func (h *Handler) Token(w http.ResponseWriter, r *http.Request) {
 		h.handleAuthorizationCode(w, r, req)
 	case "client_credentials":
 		h.handleClientCredentials(w, r, req)
-	case "refresh_token":
-		h.handleRefreshToken(w, r, req)
 	default:
 		writeOAuthError(w, http.StatusBadRequest, "unsupported_grant_type", "The grant type is not supported")
 	}
@@ -201,7 +197,7 @@ func (h *Handler) handleClientCredentials(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	resp, err := h.issueAccessToken(ctx, app, nil, normalized, false, true)
+	resp, err := h.issueAccessToken(ctx, app, nil, normalized, true)
 	if err != nil {
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "Failed to generate token")
 		return
@@ -275,62 +271,13 @@ func (h *Handler) handleAuthorizationCode(w http.ResponseWriter, r *http.Request
 		scope = oauth.DefaultScopes
 	}
 
-	resp, err := h.issueAccessToken(ctx, app, &grant.ResourceOwnerID, scope, true, true)
+	resp, err := h.issueAccessToken(ctx, app, &grant.ResourceOwnerID, scope, true)
 	if err != nil {
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "Failed to generate token")
 		return
 	}
 
 	_ = h.queries.RevokeOAuthAccessGrant(ctx, grant.Token)
-	web.JSON(w, http.StatusOK, resp)
-}
-
-func (h *Handler) handleRefreshToken(w http.ResponseWriter, r *http.Request, req TokenRequest) {
-	if req.RefreshToken == "" {
-		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "Missing refresh token")
-		return
-	}
-
-	ctx := r.Context()
-	oldToken, err := h.queries.GetOAuthAccessTokenByRefresh(ctx, pgtype.Text{String: req.RefreshToken, Valid: true})
-	if err != nil {
-		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "Invalid refresh token")
-		return
-	}
-
-	app, err := h.resolveTokenApplication(ctx, req, oldToken)
-	if err != nil {
-		writeOAuthError(w, http.StatusUnauthorized, "invalid_client", "Invalid client credentials")
-		return
-	}
-
-	var ownerID *int64
-	if oldToken.ResourceOwnerID.Valid {
-		user, err := h.queries.GetUserByID(ctx, oldToken.ResourceOwnerID.Int64)
-		if err != nil || user.Disabled || !user.Approved || !user.ConfirmedAt.Valid {
-			writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "Invalid refresh token")
-			return
-		}
-		ownerID = &user.ID
-	}
-
-	scope := strings.TrimSpace(oldToken.Scopes.String)
-	if scope == "" {
-		scope = oauth.DefaultScopes
-	}
-
-	resp, err := h.issueAccessToken(ctx, app, ownerID, scope, true, false)
-	if err != nil {
-		writeOAuthError(w, http.StatusInternalServerError, "server_error", "Failed to generate token")
-		return
-	}
-
-	if err := h.queries.RevokeOAuthAccessToken(ctx, oldToken.Token); err == nil {
-		h.publishTokenKill(ctx, oldToken.ID)
-	}
-	if oldToken.ID != 0 {
-		_ = h.queries.DeletePushSubscription(ctx, pgtype.Int8{Int64: oldToken.ID, Valid: true})
-	}
 	web.JSON(w, http.StatusOK, resp)
 }
 
@@ -594,7 +541,7 @@ func (h *Handler) Metadata(w http.ResponseWriter, r *http.Request) {
 		ScopesSupported:                   oauth.SupportedScopes(),
 		ResponseTypesSupported:            []string{"code"},
 		ResponseModesSupported:            []string{"query"},
-		GrantTypesSupported:               []string{"authorization_code", "client_credentials", "refresh_token"},
+		GrantTypesSupported:               []string{"authorization_code", "client_credentials"},
 		TokenEndpointAuthMethodsSupported: []string{"client_secret_basic", "client_secret_post"},
 		CodeChallengeMethodsSupported:     []string{pkceMethodS256},
 		ServiceDocumentation:              "https://docs.joinmastodon.org/",
@@ -685,7 +632,6 @@ func bindTokenRequest(r *http.Request) (TokenRequest, error) {
 		req.Scope = r.FormValue("scope")
 		req.Username = r.FormValue("username")
 		req.Password = r.FormValue("password")
-		req.RefreshToken = r.FormValue("refresh_token")
 		req.CodeVerifier = r.FormValue("code_verifier")
 	}
 
@@ -753,7 +699,7 @@ func (h *Handler) authenticateUser(ctx context.Context, email, password string) 
 	return user, nil
 }
 
-func (h *Handler) issueAccessToken(ctx context.Context, app db.OauthApplication, ownerID *int64, scopes string, withRefresh bool, allowReuse bool) (TokenResponse, error) {
+func (h *Handler) issueAccessToken(ctx context.Context, app db.OauthApplication, ownerID *int64, scopes string, allowReuse bool) (TokenResponse, error) {
 	var resourceOwner pgtype.Int8
 	if ownerID != nil {
 		resourceOwner = pgtype.Int8{Int64: *ownerID, Valid: true}
@@ -768,25 +714,17 @@ func (h *Handler) issueAccessToken(ctx context.Context, app db.OauthApplication,
 			Scopes:          scopeValue,
 		})
 		if err == nil {
-			if withRefresh && !existing.RefreshToken.Valid {
-				// Authorization code and refresh-token grants require a refresh token.
-				// Reuse is skipped when the matching token cannot satisfy that shape.
-			} else {
-				createdAt := time.Now().Unix()
-				if existing.CreatedAt.Valid {
-					createdAt = existing.CreatedAt.Time.Unix()
-				}
-				resp := TokenResponse{
-					AccessToken: existing.Token,
-					TokenType:   "Bearer",
-					Scope:       scopes,
-					CreatedAt:   createdAt,
-				}
-				if existing.RefreshToken.Valid {
-					resp.RefreshToken = existing.RefreshToken.String
-				}
-				return resp, nil
+			createdAt := time.Now().Unix()
+			if existing.CreatedAt.Valid {
+				createdAt = existing.CreatedAt.Time.Unix()
 			}
+			resp := TokenResponse{
+				AccessToken: existing.Token,
+				TokenType:   "Bearer",
+				Scope:       scopes,
+				CreatedAt:   createdAt,
+			}
+			return resp, nil
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return TokenResponse{}, err
 		}
@@ -797,21 +735,11 @@ func (h *Handler) issueAccessToken(ctx context.Context, app db.OauthApplication,
 		return TokenResponse{}, err
 	}
 
-	var refreshToken pgtype.Text
-	var refreshTokenValue string
-	if withRefresh {
-		refreshTokenValue, err = oauth.GenerateToken(32)
-		if err != nil {
-			return TokenResponse{}, err
-		}
-		refreshToken = pgtype.Text{String: refreshTokenValue, Valid: true}
-	}
-
 	expiresIn := pgtype.Int4{Valid: false}
 
 	_, err = h.queries.CreateOAuthAccessToken(ctx, db.CreateOAuthAccessTokenParams{
 		Token:           accessToken,
-		RefreshToken:    refreshToken,
+		RefreshToken:    pgtype.Text{Valid: false},
 		ExpiresIn:       expiresIn,
 		Scopes:          scopeValue,
 		ApplicationID:   applicationID,
@@ -827,36 +755,7 @@ func (h *Handler) issueAccessToken(ctx context.Context, app db.OauthApplication,
 		Scope:       scopes,
 		CreatedAt:   time.Now().Unix(),
 	}
-	if refreshToken.Valid {
-		resp.RefreshToken = refreshTokenValue
-	}
 	return resp, nil
-}
-
-func (h *Handler) resolveTokenApplication(ctx context.Context, req TokenRequest, token db.OauthAccessToken) (db.OauthApplication, error) {
-	if req.ClientID != "" {
-		app, err := h.validateClient(ctx, req.ClientID, req.ClientSecret)
-		if err != nil {
-			return db.OauthApplication{}, err
-		}
-		if !token.ApplicationID.Valid || token.ApplicationID.Int64 != app.ID {
-			return db.OauthApplication{}, errors.New("client mismatch")
-		}
-		return app, nil
-	}
-
-	if !token.ApplicationID.Valid {
-		return db.OauthApplication{}, errors.New("missing client")
-	}
-
-	app, err := h.queries.GetOAuthApplication(ctx, token.ApplicationID.Int64)
-	if err != nil {
-		return db.OauthApplication{}, err
-	}
-	if app.Confidential {
-		return db.OauthApplication{}, errors.New("client credentials required")
-	}
-	return app, nil
 }
 
 func selectRedirectURI(registered, requested string) (string, error) {

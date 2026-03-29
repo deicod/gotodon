@@ -304,8 +304,8 @@ func TestTokenHandler_AuthorizationCodeScopesPreserved(t *testing.T) {
 	if resp.Scope != "read write" {
 		t.Fatalf("scope = %q, want %q", resp.Scope, "read write")
 	}
-	if resp.RefreshToken == "" {
-		t.Fatalf("expected refresh token in authorization_code response")
+	if resp.RefreshToken != "" {
+		t.Fatalf("refresh_token = %q, want empty", resp.RefreshToken)
 	}
 	if !store.grantsByToken["grant123"].RevokedAt.Valid {
 		t.Fatalf("expected grant to be revoked")
@@ -575,7 +575,7 @@ func TestTokenHandler_ClientCredentialsReusesMatchingToken(t *testing.T) {
 	}
 }
 
-func TestTokenHandler_AuthorizationCodeReusesMatchingTokenAndRefresh(t *testing.T) {
+func TestTokenHandler_AuthorizationCodeReusesMatchingTokenWithoutRefresh(t *testing.T) {
 	store := newStubOAuthStore()
 	app := db.OauthApplication{
 		ID:           1,
@@ -629,8 +629,8 @@ func TestTokenHandler_AuthorizationCodeReusesMatchingTokenAndRefresh(t *testing.
 	if resp.AccessToken != "existing-auth-token" {
 		t.Fatalf("access_token = %q, want existing token", resp.AccessToken)
 	}
-	if resp.RefreshToken != "existing-refresh-token" {
-		t.Fatalf("refresh_token = %q, want existing refresh token", resp.RefreshToken)
+	if resp.RefreshToken != "" {
+		t.Fatalf("refresh_token = %q, want empty", resp.RefreshToken)
 	}
 	if !store.grantsByToken["grant-reuse"].RevokedAt.Valid {
 		t.Fatalf("expected grant to be revoked")
@@ -640,7 +640,7 @@ func TestTokenHandler_AuthorizationCodeReusesMatchingTokenAndRefresh(t *testing.
 	}
 }
 
-func TestTokenHandler_AuthorizationCodeReuseFallbackWhenExistingLacksRefreshToken(t *testing.T) {
+func TestTokenHandler_AuthorizationCodeReusesMatchingTokenWithoutRefreshFallback(t *testing.T) {
 	store := newStubOAuthStore()
 	app := db.OauthApplication{
 		ID:           1,
@@ -690,14 +690,14 @@ func TestTokenHandler_AuthorizationCodeReuseFallbackWhenExistingLacksRefreshToke
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp.AccessToken == "existing-without-refresh" {
-		t.Fatalf("expected fallback mint instead of reusing token without refresh")
+	if resp.AccessToken != "existing-without-refresh" {
+		t.Fatalf("access_token = %q, want existing token", resp.AccessToken)
 	}
-	if resp.RefreshToken == "" {
-		t.Fatalf("expected minted token to include refresh token")
+	if resp.RefreshToken != "" {
+		t.Fatalf("refresh_token = %q, want empty", resp.RefreshToken)
 	}
-	if len(store.tokensByToken) != 2 {
-		t.Fatalf("token rows = %d, want %d", len(store.tokensByToken), 2)
+	if len(store.tokensByToken) != 1 {
+		t.Fatalf("token rows = %d, want %d", len(store.tokensByToken), 1)
 	}
 }
 
@@ -787,7 +787,7 @@ func TestTokenHandler_PasswordGrant(t *testing.T) {
 	}
 }
 
-func TestTokenHandler_RefreshToken(t *testing.T) {
+func TestTokenHandler_RefreshTokenUnsupportedGrantType(t *testing.T) {
 	store := newStubOAuthStore()
 	app := db.OauthApplication{
 		ID:           2,
@@ -798,27 +798,7 @@ func TestTokenHandler_RefreshToken(t *testing.T) {
 	}
 	store.addApp(app)
 
-	store.addUser(db.User{
-		ID:          5,
-		Email:       "user@example.com",
-		AccountID:   77,
-		Approved:    true,
-		ConfirmedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
-	})
-
-	oldToken := db.OauthAccessToken{
-		ID:              9,
-		Token:           "oldtoken",
-		RefreshToken:    pgtype.Text{String: "refresh123", Valid: true},
-		Scopes:          pgtype.Text{String: "read", Valid: true},
-		ApplicationID:   pgtype.Int8{Int64: app.ID, Valid: true},
-		ResourceOwnerID: pgtype.Int8{Int64: 5, Valid: true},
-		CreatedAt:       pgtype.Timestamptz{Time: time.Now(), Valid: true},
-	}
-	store.updateToken(oldToken)
-
-	killPublisher := &stubTokenKillPublisher{}
-	handler := NewHandler(store, nil, killPublisher)
+	handler := NewHandler(store, nil, nil)
 	form := url.Values{
 		"grant_type":    []string{"refresh_token"},
 		"client_id":     []string{"client"},
@@ -830,30 +810,18 @@ func TestTokenHandler_RefreshToken(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.Token(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
-	var resp TokenResponse
+	var resp map[string]string
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp.AccessToken == oldToken.Token {
-		t.Fatalf("expected refresh grant to rotate access token")
+	if resp["error"] != "unsupported_grant_type" {
+		t.Fatalf("error = %q, want %q", resp["error"], "unsupported_grant_type")
 	}
-	if resp.RefreshToken == oldToken.RefreshToken.String {
-		t.Fatalf("expected refresh grant to rotate refresh token")
-	}
-	if !store.tokensByToken["oldtoken"].RevokedAt.Valid {
-		t.Fatalf("expected old token to be revoked")
-	}
-	if len(store.deletedTokens) == 0 || store.deletedTokens[0].Int64 != oldToken.ID {
-		t.Fatalf("expected push subscription deletion for old token")
-	}
-	if len(killPublisher.events) != 1 {
-		t.Fatalf("kill events = %d, want 1", len(killPublisher.events))
-	}
-	if killPublisher.events[0].streams[0] != "access_token:9" {
-		t.Fatalf("kill stream = %q, want %q", killPublisher.events[0].streams[0], "access_token:9")
+	if resp["error_description"] != "The grant type is not supported" {
+		t.Fatalf("error_description = %q, want %q", resp["error_description"], "The grant type is not supported")
 	}
 }
 
@@ -1028,7 +996,7 @@ func TestRevoke_KillPublishFailureDoesNotBreakSuccess(t *testing.T) {
 	}
 }
 
-func TestTokenHandler_RefreshTokenKillPublishFailureDoesNotBreakSuccess(t *testing.T) {
+func TestTokenHandler_RefreshTokenGrantDoesNotRevokeExistingToken(t *testing.T) {
 	store := newStubOAuthStore()
 	app := db.OauthApplication{
 		ID:           2,
@@ -1038,13 +1006,6 @@ func TestTokenHandler_RefreshTokenKillPublishFailureDoesNotBreakSuccess(t *testi
 		Confidential: true,
 	}
 	store.addApp(app)
-	store.addUser(db.User{
-		ID:          5,
-		Email:       "user@example.com",
-		AccountID:   77,
-		Approved:    true,
-		ConfirmedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
-	})
 	store.updateToken(db.OauthAccessToken{
 		ID:              9,
 		Token:           "oldtoken",
@@ -1055,8 +1016,7 @@ func TestTokenHandler_RefreshTokenKillPublishFailureDoesNotBreakSuccess(t *testi
 		CreatedAt:       pgtype.Timestamptz{Time: time.Now(), Valid: true},
 	})
 
-	killPublisher := &stubTokenKillPublisher{err: errors.New("redis down")}
-	handler := NewHandler(store, nil, killPublisher)
+	handler := NewHandler(store, nil, nil)
 	form := url.Values{
 		"grant_type":    []string{"refresh_token"},
 		"client_id":     []string{"client"},
@@ -1068,11 +1028,11 @@ func TestTokenHandler_RefreshTokenKillPublishFailureDoesNotBreakSuccess(t *testi
 	rec := httptest.NewRecorder()
 	handler.Token(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
-	if !store.tokensByToken["oldtoken"].RevokedAt.Valid {
-		t.Fatalf("expected old token to be revoked despite kill publish failure")
+	if store.tokensByToken["oldtoken"].RevokedAt.Valid {
+		t.Fatalf("expected old token to remain active")
 	}
 }
 
@@ -1464,6 +1424,15 @@ func TestMetadata(t *testing.T) {
 	}
 	if resp["authorization_endpoint"] != "https://example.com/oauth/authorize" {
 		t.Fatalf("authorization_endpoint = %v", resp["authorization_endpoint"])
+	}
+	grantTypes, ok := resp["grant_types_supported"].([]any)
+	if !ok {
+		t.Fatalf("grant_types_supported missing or wrong type: %T", resp["grant_types_supported"])
+	}
+	for _, grantType := range grantTypes {
+		if grantType == "refresh_token" {
+			t.Fatalf("grant_types_supported unexpectedly includes refresh_token")
+		}
 	}
 }
 
