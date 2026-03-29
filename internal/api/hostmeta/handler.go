@@ -27,6 +27,7 @@ func NewHandler(cfg *config.Config) *Handler {
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /.well-known/host-meta", h.Show)
+	mux.HandleFunc("GET /.well-known/host-meta.json", h.Show)
 }
 
 func (h *Handler) Show(w http.ResponseWriter, r *http.Request) {
@@ -35,7 +36,7 @@ func (h *Handler) Show(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", hostMetaCacheControl)
 
 	template := "https://" + h.publicDomain() + "/.well-known/webfinger?resource={uri}"
-	if acceptsJSON(r.Header.Get("Accept")) {
+	if r.URL.Path == "/.well-known/host-meta.json" || acceptsJSON(r.Header.Get("Accept")) {
 		w.Header().Set("Content-Type", hostMetaJSONType)
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]any{
