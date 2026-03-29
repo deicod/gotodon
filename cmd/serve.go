@@ -20,6 +20,7 @@ import (
 	activitypubapi "github.com/deicod/gotodon/internal/api/activitypub"
 	"github.com/deicod/gotodon/internal/api/admin"
 	hostmetaapi "github.com/deicod/gotodon/internal/api/hostmeta"
+	manifestapi "github.com/deicod/gotodon/internal/api/manifest"
 	"github.com/deicod/gotodon/internal/api/middleware"
 	nodeinfoapi "github.com/deicod/gotodon/internal/api/nodeinfo"
 	oauthapi "github.com/deicod/gotodon/internal/api/oauth"
@@ -368,6 +369,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	hostMetaHandler := hostmetaapi.NewHandler(cfg)
 	hostMetaHandler.RegisterRoutes(mux)
+
+	manifestHandler := manifestapi.NewHandler(queries, cfg)
+	manifestHandler.RegisterRoutes(mux)
 
 	nodeInfoHandler := nodeinfoapi.NewHandler(queries, cfg)
 	nodeInfoHandler.RegisterRoutes(mux)
