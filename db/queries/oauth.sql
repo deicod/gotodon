@@ -73,6 +73,20 @@ WHERE resource_owner_id = $1 AND revoked_at IS NULL;
 SELECT id FROM oauth_access_tokens
 WHERE application_id = $1 AND resource_owner_id IS NOT DISTINCT FROM $2 AND scopes = $3 AND revoked_at IS NULL;
 
+-- name: GetLatestActiveOAuthAccessTokenByGrant :one
+SELECT * FROM oauth_access_tokens
+WHERE application_id = $1
+  AND resource_owner_id IS NOT DISTINCT FROM $2
+  AND scopes = $3
+  AND revoked_at IS NULL
+  AND (
+    expires_in IS NULL
+    OR created_at IS NULL
+    OR created_at + (expires_in * interval '1 second') >= now()
+  )
+ORDER BY created_at DESC, id DESC
+LIMIT 1;
+
 -- name: RevokeOAuthAccessTokensByGrant :exec
 UPDATE oauth_access_tokens SET revoked_at = now()
 WHERE application_id = $1 AND resource_owner_id IS NOT DISTINCT FROM $2 AND scopes = $3 AND revoked_at IS NULL;

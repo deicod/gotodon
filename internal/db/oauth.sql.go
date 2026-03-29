@@ -162,6 +162,46 @@ func (q *Queries) DeleteOAuthApplication(ctx context.Context, id int64) error {
 	return err
 }
 
+const getLatestActiveOAuthAccessTokenByGrant = `-- name: GetLatestActiveOAuthAccessTokenByGrant :one
+SELECT id, token, refresh_token, expires_in, revoked_at, created_at, scopes, application_id, resource_owner_id, last_used_at, last_used_ip FROM oauth_access_tokens
+WHERE application_id = $1
+  AND resource_owner_id IS NOT DISTINCT FROM $2
+  AND scopes = $3
+  AND revoked_at IS NULL
+  AND (
+    expires_in IS NULL
+    OR created_at IS NULL
+    OR created_at + (expires_in * interval '1 second') >= now()
+  )
+ORDER BY created_at DESC, id DESC
+LIMIT 1
+`
+
+type GetLatestActiveOAuthAccessTokenByGrantParams struct {
+	ApplicationID   pgtype.Int8 `db:"application_id" json:"application_id"`
+	ResourceOwnerID pgtype.Int8 `db:"resource_owner_id" json:"resource_owner_id"`
+	Scopes          pgtype.Text `db:"scopes" json:"scopes"`
+}
+
+func (q *Queries) GetLatestActiveOAuthAccessTokenByGrant(ctx context.Context, arg GetLatestActiveOAuthAccessTokenByGrantParams) (OauthAccessToken, error) {
+	row := q.db.QueryRow(ctx, getLatestActiveOAuthAccessTokenByGrant, arg.ApplicationID, arg.ResourceOwnerID, arg.Scopes)
+	var i OauthAccessToken
+	err := row.Scan(
+		&i.ID,
+		&i.Token,
+		&i.RefreshToken,
+		&i.ExpiresIn,
+		&i.RevokedAt,
+		&i.CreatedAt,
+		&i.Scopes,
+		&i.ApplicationID,
+		&i.ResourceOwnerID,
+		&i.LastUsedAt,
+		&i.LastUsedIp,
+	)
+	return i, err
+}
+
 const getOAuthAccessGrantByToken = `-- name: GetOAuthAccessGrantByToken :one
 SELECT id, token, expires_in, redirect_uri, created_at, revoked_at, scopes, application_id, resource_owner_id, code_challenge, code_challenge_method FROM oauth_access_grants
 WHERE token = $1 AND revoked_at IS NULL

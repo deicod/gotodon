@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
@@ -34,6 +35,7 @@ const (
 type oauthQuerier interface {
 	GetOAuthApplication(ctx context.Context, id int64) (db.OauthApplication, error)
 	GetOAuthApplicationByUID(ctx context.Context, uid string) (db.OauthApplication, error)
+	GetLatestActiveOAuthAccessTokenByGrant(ctx context.Context, arg db.GetLatestActiveOAuthAccessTokenByGrantParams) (db.OauthAccessToken, error)
 	CreateOAuthAccessToken(ctx context.Context, arg db.CreateOAuthAccessTokenParams) (db.OauthAccessToken, error)
 	GetOAuthAccessToken(ctx context.Context, token string) (db.OauthAccessToken, error)
 	GetOAuthAccessTokenByRefresh(ctx context.Context, refresh pgtype.Text) (db.OauthAccessToken, error)
@@ -199,7 +201,7 @@ func (h *Handler) handleClientCredentials(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	resp, err := h.issueAccessToken(ctx, app, nil, normalized, false)
+	resp, err := h.issueAccessToken(ctx, app, nil, normalized, false, true)
 	if err != nil {
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "Failed to generate token")
 		return
@@ -273,7 +275,7 @@ func (h *Handler) handleAuthorizationCode(w http.ResponseWriter, r *http.Request
 		scope = oauth.DefaultScopes
 	}
 
-	resp, err := h.issueAccessToken(ctx, app, &grant.ResourceOwnerID, scope, true)
+	resp, err := h.issueAccessToken(ctx, app, &grant.ResourceOwnerID, scope, true, true)
 	if err != nil {
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "Failed to generate token")
 		return
@@ -317,7 +319,7 @@ func (h *Handler) handleRefreshToken(w http.ResponseWriter, r *http.Request, req
 		scope = oauth.DefaultScopes
 	}
 
-	resp, err := h.issueAccessToken(ctx, app, ownerID, scope, true)
+	resp, err := h.issueAccessToken(ctx, app, ownerID, scope, true, false)
 	if err != nil {
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "Failed to generate token")
 		return
@@ -751,7 +753,45 @@ func (h *Handler) authenticateUser(ctx context.Context, email, password string) 
 	return user, nil
 }
 
-func (h *Handler) issueAccessToken(ctx context.Context, app db.OauthApplication, ownerID *int64, scopes string, withRefresh bool) (TokenResponse, error) {
+func (h *Handler) issueAccessToken(ctx context.Context, app db.OauthApplication, ownerID *int64, scopes string, withRefresh bool, allowReuse bool) (TokenResponse, error) {
+	var resourceOwner pgtype.Int8
+	if ownerID != nil {
+		resourceOwner = pgtype.Int8{Int64: *ownerID, Valid: true}
+	}
+	scopeValue := pgtype.Text{String: scopes, Valid: true}
+	applicationID := pgtype.Int8{Int64: app.ID, Valid: true}
+
+	if allowReuse {
+		existing, err := h.queries.GetLatestActiveOAuthAccessTokenByGrant(ctx, db.GetLatestActiveOAuthAccessTokenByGrantParams{
+			ApplicationID:   applicationID,
+			ResourceOwnerID: resourceOwner,
+			Scopes:          scopeValue,
+		})
+		if err == nil {
+			if withRefresh && !existing.RefreshToken.Valid {
+				// Authorization code and refresh-token grants require a refresh token.
+				// Reuse is skipped when the matching token cannot satisfy that shape.
+			} else {
+				createdAt := time.Now().Unix()
+				if existing.CreatedAt.Valid {
+					createdAt = existing.CreatedAt.Time.Unix()
+				}
+				resp := TokenResponse{
+					AccessToken: existing.Token,
+					TokenType:   "Bearer",
+					Scope:       scopes,
+					CreatedAt:   createdAt,
+				}
+				if existing.RefreshToken.Valid {
+					resp.RefreshToken = existing.RefreshToken.String
+				}
+				return resp, nil
+			}
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return TokenResponse{}, err
+		}
+	}
+
 	accessToken, err := oauth.GenerateToken(32)
 	if err != nil {
 		return TokenResponse{}, err
@@ -767,12 +807,6 @@ func (h *Handler) issueAccessToken(ctx context.Context, app db.OauthApplication,
 		refreshToken = pgtype.Text{String: refreshTokenValue, Valid: true}
 	}
 
-	var resourceOwner pgtype.Int8
-	if ownerID != nil {
-		resourceOwner = pgtype.Int8{Int64: *ownerID, Valid: true}
-	}
-
-	scopeValue := pgtype.Text{String: scopes, Valid: true}
 	expiresIn := pgtype.Int4{Valid: false}
 
 	_, err = h.queries.CreateOAuthAccessToken(ctx, db.CreateOAuthAccessTokenParams{
@@ -780,7 +814,7 @@ func (h *Handler) issueAccessToken(ctx context.Context, app db.OauthApplication,
 		RefreshToken:    refreshToken,
 		ExpiresIn:       expiresIn,
 		Scopes:          scopeValue,
-		ApplicationID:   pgtype.Int8{Int64: app.ID, Valid: true},
+		ApplicationID:   applicationID,
 		ResourceOwnerID: resourceOwner,
 	})
 	if err != nil {

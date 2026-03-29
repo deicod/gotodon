@@ -348,6 +348,7 @@ type Querier interface {
 	GetKnownDomains(ctx context.Context) ([]pgtype.Text, error)
 	GetLastSuccessfulLogin(ctx context.Context, userID int64) (LoginActivity, error)
 	GetLatestAccountMigration(ctx context.Context, accountID int64) (AccountMigration, error)
+	GetLatestActiveOAuthAccessTokenByGrant(ctx context.Context, arg GetLatestActiveOAuthAccessTokenByGrantParams) (OauthAccessToken, error)
 	GetLinkTimelineStatuses(ctx context.Context, arg GetLinkTimelineStatusesParams) ([]Status, error)
 	GetLinkTimelineStatusesMinID(ctx context.Context, arg GetLinkTimelineStatusesMinIDParams) ([]Status, error)
 	GetList(ctx context.Context, arg GetListParams) (List, error)
