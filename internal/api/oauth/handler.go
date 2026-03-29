@@ -171,8 +171,6 @@ func (h *Handler) Token(w http.ResponseWriter, r *http.Request) {
 		h.handleAuthorizationCode(w, r, req)
 	case "client_credentials":
 		h.handleClientCredentials(w, r, req)
-	case "password":
-		h.handlePassword(w, r, req)
 	case "refresh_token":
 		h.handleRefreshToken(w, r, req)
 	default:
@@ -258,44 +256,6 @@ func (h *Handler) handleAuthorizationCode(w http.ResponseWriter, r *http.Request
 	}
 
 	_ = h.queries.RevokeOAuthAccessGrant(ctx, grant.Token)
-	web.JSON(w, http.StatusOK, resp)
-}
-
-func (h *Handler) handlePassword(w http.ResponseWriter, r *http.Request, req TokenRequest) {
-	ctx := r.Context()
-
-	app, err := h.validateClient(ctx, req.ClientID, req.ClientSecret)
-	if err != nil {
-		writeOAuthError(w, http.StatusUnauthorized, "invalid_client", "Invalid client credentials")
-		return
-	}
-	if strings.TrimSpace(req.Username) == "" || req.Password == "" {
-		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "Missing credentials")
-		return
-	}
-
-	user, err := h.authenticateUser(ctx, req.Username, req.Password)
-	if err != nil {
-		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "Invalid credentials")
-		return
-	}
-
-	scopes, normalized, err := normalizeScopes(req.Scope)
-	if err != nil {
-		writeOAuthError(w, http.StatusBadRequest, "invalid_scope", "The requested scope is invalid")
-		return
-	}
-	if err := h.ensureAppScopes(app, scopes); err != nil {
-		writeOAuthError(w, http.StatusBadRequest, "invalid_scope", "The requested scope is invalid")
-		return
-	}
-
-	resp, err := h.issueAccessToken(ctx, app, &user.ID, normalized, true)
-	if err != nil {
-		writeOAuthError(w, http.StatusInternalServerError, "server_error", "Failed to generate token")
-		return
-	}
-
 	web.JSON(w, http.StatusOK, resp)
 }
 

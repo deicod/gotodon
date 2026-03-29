@@ -309,19 +309,6 @@ func TestTokenHandler_PasswordGrant(t *testing.T) {
 		Confidential: true,
 	})
 
-	hash, err := auth.HashPassword("hunter2")
-	if err != nil {
-		t.Fatalf("hash password: %v", err)
-	}
-	store.addUser(db.User{
-		ID:                7,
-		Email:             "user@example.com",
-		EncryptedPassword: hash,
-		AccountID:         42,
-		Approved:          true,
-		ConfirmedAt:       pgtype.Timestamptz{Time: time.Now(), Valid: true},
-	})
-
 	handler := NewHandler(store, nil, nil)
 	form := url.Values{
 		"grant_type":    []string{"password"},
@@ -335,19 +322,19 @@ func TestTokenHandler_PasswordGrant(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.Token(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 
-	var resp TokenResponse
+	var resp map[string]string
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp.RefreshToken == "" {
-		t.Fatalf("expected refresh token")
+	if resp["error"] != "unsupported_grant_type" {
+		t.Fatalf("error = %q, want %q", resp["error"], "unsupported_grant_type")
 	}
-	if resp.Scope != "read" {
-		t.Fatalf("scope = %q, want %q", resp.Scope, "read")
+	if resp["error_description"] != "The grant type is not supported" {
+		t.Fatalf("error_description = %q, want %q", resp["error_description"], "The grant type is not supported")
 	}
 }
 
