@@ -19,6 +19,7 @@ import (
 
 	activitypubapi "github.com/deicod/gotodon/internal/api/activitypub"
 	"github.com/deicod/gotodon/internal/api/admin"
+	compatapi "github.com/deicod/gotodon/internal/api/compat"
 	hostmetaapi "github.com/deicod/gotodon/internal/api/hostmeta"
 	manifestapi "github.com/deicod/gotodon/internal/api/manifest"
 	"github.com/deicod/gotodon/internal/api/middleware"
@@ -408,6 +409,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	federationHandler.RegisterInboxHandler(activitypub.TypeUpdate, updateService.HandleUpdate)
 	federationHandler.RegisterInboxHandler(activitypub.TypeDelete, deleteService.HandleDelete)
 	federationHandler.RegisterRoutes(mux)
+
+	compatHandler := compatapi.NewHandler(queries, cfg, federationHandler)
+	compatHandler.RegisterRoutes(mux)
 
 	if workerManager != nil {
 		remoteAccountResolver := federation.NewRemoteActorResolver(queries, cfg.Instance.LocalDomain)
