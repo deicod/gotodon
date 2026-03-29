@@ -501,6 +501,92 @@ func (q *Queries) GetDomainBlocksByAccountsAndDomain(ctx context.Context, arg Ge
 	return items, nil
 }
 
+const getFamiliarFollowers = `-- name: GetFamiliarFollowers :many
+SELECT a.id, a.username, a.domain, a.private_key, a.public_key, a.created_at, a.updated_at, a.note, a.display_name, a.uri, a.url, a.avatar_file_name, a.avatar_content_type, a.avatar_file_size, a.avatar_updated_at, a.header_file_name, a.header_content_type, a.header_file_size, a.header_updated_at, a.avatar_remote_url, a.locked, a.header_remote_url, a.last_webfingered_at, a.inbox_url, a.outbox_url, a.shared_inbox_url, a.followers_url, a.following_url, a.protocol, a.memorial, a.moved_to_account_id, a.featured_collection_url, a.fields, a.actor_type, a.discoverable, a.also_known_as, a.silenced_at, a.suspended_at, a.hide_collections, a.avatar_storage_schema_version, a.header_storage_schema_version, a.suspension_origin, a.sensitized_at, a.trendable, a.reviewed_at, a.requested_review_at, a.indexable, a.attribution_domains, a.id_scheme FROM accounts a
+JOIN follows requested_followers ON requested_followers.account_id = a.id
+JOIN follows requester_follows ON requester_follows.account_id = $1
+  AND requester_follows.target_account_id = a.id
+WHERE requested_followers.target_account_id = $2
+  AND a.suspended_at IS NULL
+  AND NOT (a.hide_collections IS TRUE)
+ORDER BY requested_followers.id DESC
+`
+
+type GetFamiliarFollowersParams struct {
+	AccountID       int64 `db:"account_id" json:"account_id"`
+	TargetAccountID int64 `db:"target_account_id" json:"target_account_id"`
+}
+
+func (q *Queries) GetFamiliarFollowers(ctx context.Context, arg GetFamiliarFollowersParams) ([]Account, error) {
+	rows, err := q.db.Query(ctx, getFamiliarFollowers, arg.AccountID, arg.TargetAccountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Account{}
+	for rows.Next() {
+		var i Account
+		if err := rows.Scan(
+			&i.ID,
+			&i.Username,
+			&i.Domain,
+			&i.PrivateKey,
+			&i.PublicKey,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Note,
+			&i.DisplayName,
+			&i.Uri,
+			&i.Url,
+			&i.AvatarFileName,
+			&i.AvatarContentType,
+			&i.AvatarFileSize,
+			&i.AvatarUpdatedAt,
+			&i.HeaderFileName,
+			&i.HeaderContentType,
+			&i.HeaderFileSize,
+			&i.HeaderUpdatedAt,
+			&i.AvatarRemoteUrl,
+			&i.Locked,
+			&i.HeaderRemoteUrl,
+			&i.LastWebfingeredAt,
+			&i.InboxUrl,
+			&i.OutboxUrl,
+			&i.SharedInboxUrl,
+			&i.FollowersUrl,
+			&i.FollowingUrl,
+			&i.Protocol,
+			&i.Memorial,
+			&i.MovedToAccountID,
+			&i.FeaturedCollectionUrl,
+			&i.Fields,
+			&i.ActorType,
+			&i.Discoverable,
+			&i.AlsoKnownAs,
+			&i.SilencedAt,
+			&i.SuspendedAt,
+			&i.HideCollections,
+			&i.AvatarStorageSchemaVersion,
+			&i.HeaderStorageSchemaVersion,
+			&i.SuspensionOrigin,
+			&i.SensitizedAt,
+			&i.Trendable,
+			&i.ReviewedAt,
+			&i.RequestedReviewAt,
+			&i.Indexable,
+			&i.AttributionDomains,
+			&i.IDScheme,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getFavourite = `-- name: GetFavourite :one
 SELECT id, created_at, updated_at, account_id, status_id FROM favourites WHERE account_id = $1 AND status_id = $2
 `

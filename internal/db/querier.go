@@ -330,6 +330,7 @@ type Querier interface {
 	GetDomainAllowByDomain(ctx context.Context, domain string) (DomainAllow, error)
 	GetDomainBlock(ctx context.Context, arg GetDomainBlockParams) (AccountDomainBlock, error)
 	GetDomainBlocksByAccountsAndDomain(ctx context.Context, arg GetDomainBlocksByAccountsAndDomainParams) ([]int64, error)
+	GetFamiliarFollowers(ctx context.Context, arg GetFamiliarFollowersParams) ([]Account, error)
 	GetFavourite(ctx context.Context, arg GetFavouriteParams) (Favourite, error)
 	GetFavouritedBy(ctx context.Context, arg GetFavouritedByParams) ([]Account, error)
 	GetFeaturedTagByTagID(ctx context.Context, arg GetFeaturedTagByTagIDParams) (FeaturedTag, error)

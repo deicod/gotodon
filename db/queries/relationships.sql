@@ -183,6 +183,16 @@ SELECT target_account_id FROM follows
 WHERE account_id = $1
   AND target_account_id = ANY(@target_account_ids::bigint[]);
 
+-- name: GetFamiliarFollowers :many
+SELECT a.* FROM accounts a
+JOIN follows requested_followers ON requested_followers.account_id = a.id
+JOIN follows requester_follows ON requester_follows.account_id = @account_id
+  AND requester_follows.target_account_id = a.id
+WHERE requested_followers.target_account_id = @target_account_id
+  AND a.suspended_at IS NULL
+  AND NOT (a.hide_collections IS TRUE)
+ORDER BY requested_followers.id DESC;
+
 -- name: CountFollowingByDomain :one
 SELECT COUNT(*)
 FROM follows f

@@ -156,6 +156,11 @@ type AccountRoleSummary struct {
 	Color string `json:"color"`
 }
 
+type familiarFollowersResult struct {
+	ID       string    `json:"id"`
+	Accounts []Account `json:"accounts"`
+}
+
 func (h *AccountsHandler) dbAccountToAPI(dbAcc db.Account) Account {
 	return SerializeAccount(h.cfg, dbAcc)
 }
@@ -1873,14 +1878,114 @@ func (h *AccountsHandler) SetNote(w http.ResponseWriter, r *http.Request) {
 
 // FamiliarFollowers handles GET /api/v1/accounts/familiar_followers
 func (h *AccountsHandler) FamiliarFollowers(w http.ResponseWriter, r *http.Request) {
-	_, ok := middleware.GetAccountID(r.Context())
+	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
 		return
 	}
 
-	// Return empty familiar followers for now
-	web.JSON(w, http.StatusOK, []map[string]any{})
+	if !h.useDB() {
+		web.JSONError(w, http.StatusInternalServerError, "Account data unavailable")
+		return
+	}
+
+	requestedIDs := parseFamiliarFollowerIDs(r)
+	if len(requestedIDs) == 0 {
+		web.JSON(w, http.StatusOK, []familiarFollowersResult{})
+		return
+	}
+
+	ctx := r.Context()
+	requestedAccounts, err := h.queries.GetAccountsByIDs(ctx, requestedIDs)
+	if err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to load accounts")
+		return
+	}
+
+	requestedByID := make(map[int64]db.Account, len(requestedAccounts))
+	for _, acc := range requestedAccounts {
+		if acc.SuspendedAt.Valid {
+			continue
+		}
+		requestedByID[acc.ID] = acc
+	}
+
+	results := make([]familiarFollowersResult, 0, len(requestedIDs))
+	for _, requestedID := range requestedIDs {
+		requestedAcc, ok := requestedByID[requestedID]
+		if !ok {
+			// Match Mastodon behavior: nonexistent and suspended requested accounts are omitted.
+			continue
+		}
+
+		result := familiarFollowersResult{
+			ID:       strconv.FormatInt(requestedID, 10),
+			Accounts: []Account{},
+		}
+		if requestedAcc.HideCollections.Valid && requestedAcc.HideCollections.Bool {
+			results = append(results, result)
+			continue
+		}
+
+		familiar, err := h.queries.GetFamiliarFollowers(ctx, db.GetFamiliarFollowersParams{
+			AccountID:       accountID,
+			TargetAccountID: requestedID,
+		})
+		if err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to load familiar followers")
+			return
+		}
+
+		serialized := serializeAccounts(ctx, h.queries, h.cfg, familiar, true)
+		result.Accounts = make([]Account, 0, len(familiar))
+		for _, follower := range familiar {
+			if acc, ok := serialized[follower.ID]; ok {
+				result.Accounts = append(result.Accounts, acc)
+			}
+		}
+
+		results = append(results, result)
+	}
+
+	web.JSON(w, http.StatusOK, results)
+}
+
+func parseFamiliarFollowerIDs(r *http.Request) []int64 {
+	rawPairs := strings.Split(r.URL.RawQuery, "&")
+	ids := make([]int64, 0, len(rawPairs))
+	seen := make(map[int64]struct{}, len(rawPairs))
+	for _, pair := range rawPairs {
+		if pair == "" {
+			continue
+		}
+
+		rawKey, rawID, _ := strings.Cut(pair, "=")
+		key, err := url.QueryUnescape(rawKey)
+		if err != nil {
+			continue
+		}
+		switch key {
+		case "id", "id[]", "account_id", "account_id[]":
+		default:
+			continue
+		}
+
+		rawID, err = url.QueryUnescape(rawID)
+		if err != nil {
+			continue
+		}
+
+		id, err := strconv.ParseInt(rawID, 10, 64)
+		if err != nil {
+			id = 0
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 // RemoveFromFollowers handles POST /api/v1/accounts/:id/remove_from_followers
