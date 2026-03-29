@@ -952,6 +952,43 @@ func (q *Queries) GetStatusByURI(ctx context.Context, uri pgtype.Text) (Status, 
 	return i, err
 }
 
+const getStatusByURL = `-- name: GetStatusByURL :one
+SELECT id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at, quote_approval_policy FROM statuses WHERE url = $1 AND deleted_at IS NULL
+`
+
+func (q *Queries) GetStatusByURL(ctx context.Context, url pgtype.Text) (Status, error) {
+	row := q.db.QueryRow(ctx, getStatusByURL, url)
+	var i Status
+	err := row.Scan(
+		&i.ID,
+		&i.Uri,
+		&i.Text,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.InReplyToID,
+		&i.ReblogOfID,
+		&i.Url,
+		&i.Sensitive,
+		&i.Visibility,
+		&i.SpoilerText,
+		&i.Reply,
+		&i.Language,
+		&i.ConversationID,
+		&i.Local,
+		&i.AccountID,
+		&i.ApplicationID,
+		&i.InReplyToAccountID,
+		&i.PollID,
+		&i.DeletedAt,
+		&i.EditedAt,
+		&i.Trendable,
+		&i.OrderedMediaAttachmentIds,
+		&i.FetchedRepliesAt,
+		&i.QuoteApprovalPolicy,
+	)
+	return i, err
+}
+
 const getStatusDescendants = `-- name: GetStatusDescendants :many
 SELECT id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at, quote_approval_policy FROM statuses
 WHERE in_reply_to_id = $1 AND deleted_at IS NULL

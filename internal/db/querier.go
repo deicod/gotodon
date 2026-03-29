@@ -422,6 +422,7 @@ type Querier interface {
 	GetStatusAncestors(ctx context.Context, statusID int64) ([]Status, error)
 	GetStatusByID(ctx context.Context, id int64) (Status, error)
 	GetStatusByURI(ctx context.Context, uri pgtype.Text) (Status, error)
+	GetStatusByURL(ctx context.Context, url pgtype.Text) (Status, error)
 	// Status cleanup queries
 	GetStatusCleanupCutoffID(ctx context.Context, arg GetStatusCleanupCutoffIDParams) (int64, error)
 	GetStatusDescendants(ctx context.Context, statusID pgtype.Int8) ([]Status, error)

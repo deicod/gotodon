@@ -19,6 +19,7 @@ import (
 
 	activitypubapi "github.com/deicod/gotodon/internal/api/activitypub"
 	"github.com/deicod/gotodon/internal/api/admin"
+	authorizeinteractionapi "github.com/deicod/gotodon/internal/api/authorizeinteraction"
 	compatapi "github.com/deicod/gotodon/internal/api/compat"
 	hostmetaapi "github.com/deicod/gotodon/internal/api/hostmeta"
 	manifestapi "github.com/deicod/gotodon/internal/api/manifest"
@@ -380,6 +381,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	webfingerHandler := webfingerapi.NewHandler(queries, cfg)
 	webfingerHandler.RegisterRoutes(mux)
 
+	remoteActorResolver := federation.NewRemoteActorResolver(queries, cfg.Instance.LocalDomain)
+	var authorizeInteractionHandler *authorizeinteractionapi.Handler
+
 	// ActivityPub Federation
 	federationHandler := activitypubapi.NewFederationHandler(queries, cfg.Instance.LocalDomain)
 	followService := federation.NewFollowService(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher(), nil)
@@ -387,6 +391,8 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	undoService := federation.NewUndoService(queries, cfg.Instance.LocalDomain)
 	createService := federation.NewCreateService(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher())
 	remoteStatusFetcher := federation.NewRemoteStatusFetcher(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher())
+	authorizeInteractionHandler = authorizeinteractionapi.NewHandler(queries, cfg, remoteActorResolver, remoteStatusFetcher)
+	authorizeInteractionHandler.RegisterRoutes(mux)
 	createService.SetStatusFetcher(remoteStatusFetcher)
 	if remoteStatusEnqueuer != nil {
 		statusesHandler.SetThreadFetcher(remoteStatusEnqueuer)

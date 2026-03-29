@@ -4,6 +4,9 @@ SELECT * FROM statuses WHERE id = $1 AND deleted_at IS NULL;
 -- name: GetStatusByURI :one
 SELECT * FROM statuses WHERE uri = $1 AND deleted_at IS NULL;
 
+-- name: GetStatusByURL :one
+SELECT * FROM statuses WHERE url = $1 AND deleted_at IS NULL;
+
 -- name: GetReblogByAccountAndOriginal :one
 SELECT * FROM statuses
 WHERE account_id = $1 AND reblog_of_id = $2 AND deleted_at IS NULL
