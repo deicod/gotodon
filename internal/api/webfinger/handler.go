@@ -195,8 +195,9 @@ func (h *Handler) parseURLResource(resource string) (resolvedResource, error) {
 
 func parseAcctLike(resource string) (username, domain string, ok bool) {
 	clean := strings.TrimSpace(resource)
-	clean = strings.TrimPrefix(clean, "acct:")
-	clean = strings.TrimPrefix(clean, "ACCT:")
+	if idx := strings.Index(clean, ":"); idx > 0 && strings.EqualFold(clean[:idx], "acct") {
+		clean = clean[idx+1:]
+	}
 	clean = strings.TrimPrefix(clean, "@")
 	parts := strings.SplitN(clean, "@", 2)
 	if len(parts) != 2 {

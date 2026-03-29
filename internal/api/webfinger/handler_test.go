@@ -156,6 +156,28 @@ func TestHandler_Show_AcctSuccess(t *testing.T) {
 	}
 }
 
+func TestHandler_Show_AcctMixedCaseSchemeSuccess(t *testing.T) {
+	h := NewHandler(&stubStore{
+		accounts: map[string]db.Account{
+			"alice": {
+				ID:       16,
+				Username: "alice",
+				Uri:      "https://social.example/users/alice",
+			},
+		},
+	}, &config.Config{
+		Instance: config.InstanceConfig{
+			LocalDomain: "social.example",
+		},
+	})
+
+	rec := performRequest(t, h, "aCcT:alice@social.example")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	assertSuccessHeaders(t, rec)
+}
+
 func TestHandler_Show_WebDomainResourceSuccessWithFederationSubject(t *testing.T) {
 	h := NewHandler(&stubStore{
 		accounts: map[string]db.Account{
