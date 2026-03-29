@@ -48,6 +48,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Get account ID from context
 	accountID := accountIDFromContext(r.Context())
+	accessTokenID := accessTokenIDFromContext(r.Context())
 
 	// Create subscriber
 	sub := NewSubscriber(fmt.Sprintf("ws-%d-%d", accountID, time.Now().UnixNano()), accountID)
@@ -61,6 +62,9 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for _, stream := range expandAccountScopedStreams(initialStreams, accountID) {
 			sub.Subscribe(stream)
 		}
+	}
+	if accessTokenID > 0 {
+		sub.Subscribe(AccessTokenStreamKey(accessTokenID))
 	}
 
 	// Set up ping/pong
@@ -120,6 +124,12 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 			case event, ok := <-sub.Events:
 				if !ok {
+					return
+				}
+				if event.Event == EventKill {
+					_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+					_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(10*time.Second))
+					_ = conn.Close()
 					return
 				}
 				msg := map[string]any{

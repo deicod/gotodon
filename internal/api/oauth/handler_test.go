@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -33,6 +34,23 @@ type stubOAuthStore struct {
 	nextTokenID     int64
 	lastUsed        []db.UpdateOAuthTokenLastUsedParams
 	deletedTokens   []pgtype.Int8
+}
+
+type publishedKillEvent struct {
+	eventType string
+	payload   any
+	streams   []string
+	ctxErr    error
+}
+
+type stubTokenKillPublisher struct {
+	events []publishedKillEvent
+	err    error
+}
+
+func (s *stubTokenKillPublisher) PublishEventToRedis(ctx context.Context, eventType string, payload any, streams []string) error {
+	s.events = append(s.events, publishedKillEvent{eventType: eventType, payload: payload, streams: streams, ctxErr: ctx.Err()})
+	return s.err
 }
 
 func newStubOAuthStore() *stubOAuthStore {
@@ -223,7 +241,7 @@ func TestTokenHandler_AuthorizationCodeScopesPreserved(t *testing.T) {
 		CreatedAt:       pgtype.Timestamptz{Time: time.Now(), Valid: true},
 	}
 
-	handler := NewHandler(store, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}})
+	handler := NewHandler(store, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
 	form := url.Values{
 		"grant_type":    []string{"authorization_code"},
 		"client_id":     []string{"client"},
@@ -264,7 +282,7 @@ func TestTokenHandler_ClientCredentialsInvalidScope(t *testing.T) {
 		Confidential: true,
 	})
 
-	handler := NewHandler(store, nil)
+	handler := NewHandler(store, nil, nil)
 	form := url.Values{
 		"grant_type":    []string{"client_credentials"},
 		"client_id":     []string{"client"},
@@ -304,7 +322,7 @@ func TestTokenHandler_PasswordGrant(t *testing.T) {
 		ConfirmedAt:       pgtype.Timestamptz{Time: time.Now(), Valid: true},
 	})
 
-	handler := NewHandler(store, nil)
+	handler := NewHandler(store, nil, nil)
 	form := url.Values{
 		"grant_type":    []string{"password"},
 		"client_id":     []string{"client"},
@@ -363,7 +381,8 @@ func TestTokenHandler_RefreshToken(t *testing.T) {
 	}
 	store.updateToken(oldToken)
 
-	handler := NewHandler(store, nil)
+	killPublisher := &stubTokenKillPublisher{}
+	handler := NewHandler(store, nil, killPublisher)
 	form := url.Values{
 		"grant_type":    []string{"refresh_token"},
 		"client_id":     []string{"client"},
@@ -384,6 +403,134 @@ func TestTokenHandler_RefreshToken(t *testing.T) {
 	if len(store.deletedTokens) == 0 || store.deletedTokens[0].Int64 != oldToken.ID {
 		t.Fatalf("expected push subscription deletion for old token")
 	}
+	if len(killPublisher.events) != 1 {
+		t.Fatalf("kill events = %d, want 1", len(killPublisher.events))
+	}
+	if killPublisher.events[0].streams[0] != "access_token:9" {
+		t.Fatalf("kill stream = %q, want %q", killPublisher.events[0].streams[0], "access_token:9")
+	}
+}
+
+func TestRevoke_PublishesKillForRevokedAccessToken(t *testing.T) {
+	store := newStubOAuthStore()
+	store.updateToken(db.OauthAccessToken{
+		ID:           44,
+		Token:        "token44",
+		RefreshToken: pgtype.Text{String: "refresh44", Valid: true},
+		CreatedAt:    pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	})
+
+	killPublisher := &stubTokenKillPublisher{}
+	handler := NewHandler(store, nil, killPublisher)
+
+	form := url.Values{"token": []string{"token44"}}
+	req := httptest.NewRequest(http.MethodPost, "/oauth/revoke", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.Revoke(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !store.tokensByToken["token44"].RevokedAt.Valid {
+		t.Fatalf("expected token to be revoked")
+	}
+	if len(killPublisher.events) != 1 {
+		t.Fatalf("kill events = %d, want 1", len(killPublisher.events))
+	}
+	if killPublisher.events[0].streams[0] != "access_token:44" {
+		t.Fatalf("kill stream = %q, want %q", killPublisher.events[0].streams[0], "access_token:44")
+	}
+}
+
+func TestRevoke_KillPublishFailureDoesNotBreakSuccess(t *testing.T) {
+	store := newStubOAuthStore()
+	store.updateToken(db.OauthAccessToken{
+		ID:        55,
+		Token:     "token55",
+		CreatedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	})
+
+	killPublisher := &stubTokenKillPublisher{err: errors.New("redis down")}
+	handler := NewHandler(store, nil, killPublisher)
+
+	form := url.Values{"token": []string{"token55"}}
+	req := httptest.NewRequest(http.MethodPost, "/oauth/revoke", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.Revoke(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !store.tokensByToken["token55"].RevokedAt.Valid {
+		t.Fatalf("expected token to be revoked despite kill publish failure")
+	}
+}
+
+func TestTokenHandler_RefreshTokenKillPublishFailureDoesNotBreakSuccess(t *testing.T) {
+	store := newStubOAuthStore()
+	app := db.OauthApplication{
+		ID:           2,
+		Uid:          "client",
+		Secret:       "secret",
+		Scopes:       "read",
+		Confidential: true,
+	}
+	store.addApp(app)
+	store.addUser(db.User{
+		ID:          5,
+		Email:       "user@example.com",
+		AccountID:   77,
+		Approved:    true,
+		ConfirmedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	})
+	store.updateToken(db.OauthAccessToken{
+		ID:              9,
+		Token:           "oldtoken",
+		RefreshToken:    pgtype.Text{String: "refresh123", Valid: true},
+		Scopes:          pgtype.Text{String: "read", Valid: true},
+		ApplicationID:   pgtype.Int8{Int64: app.ID, Valid: true},
+		ResourceOwnerID: pgtype.Int8{Int64: 5, Valid: true},
+		CreatedAt:       pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	})
+
+	killPublisher := &stubTokenKillPublisher{err: errors.New("redis down")}
+	handler := NewHandler(store, nil, killPublisher)
+	form := url.Values{
+		"grant_type":    []string{"refresh_token"},
+		"client_id":     []string{"client"},
+		"client_secret": []string{"secret"},
+		"refresh_token": []string{"refresh123"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.Token(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !store.tokensByToken["oldtoken"].RevokedAt.Valid {
+		t.Fatalf("expected old token to be revoked despite kill publish failure")
+	}
+}
+
+func TestPublishTokenKillUsesLiveContext(t *testing.T) {
+	killPublisher := &stubTokenKillPublisher{}
+	handler := NewHandler(newStubOAuthStore(), nil, killPublisher)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	handler.publishTokenKill(ctx, 88)
+
+	if len(killPublisher.events) != 1 {
+		t.Fatalf("kill events = %d, want 1", len(killPublisher.events))
+	}
+	if killPublisher.events[0].ctxErr != nil {
+		t.Fatalf("publish context err = %v, want nil", killPublisher.events[0].ctxErr)
+	}
 }
 
 func TestAuthorizePost_Deny(t *testing.T) {
@@ -397,7 +544,7 @@ func TestAuthorizePost_Deny(t *testing.T) {
 		Confidential: true,
 	})
 
-	handler := NewHandler(store, nil)
+	handler := NewHandler(store, nil, nil)
 	form := url.Values{
 		"client_id":     []string{"client"},
 		"redirect_uri":  []string{"https://app.example/callback"},
@@ -448,7 +595,7 @@ func TestAuthorizePost_PKCEGrant(t *testing.T) {
 	sum := sha256.Sum256([]byte(verifier))
 	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
 
-	handler := NewHandler(store, nil)
+	handler := NewHandler(store, nil, nil)
 	form := url.Values{
 		"client_id":             []string{"client"},
 		"redirect_uri":          []string{"https://app.example/callback"},
@@ -493,7 +640,7 @@ func TestUserinfoRequiresProfileScope(t *testing.T) {
 		AvatarRemoteUrl: pgtype.Text{String: "https://cdn.example/avatar.png", Valid: true},
 	})
 
-	handler := NewHandler(store, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}})
+	handler := NewHandler(store, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
 	req := httptest.NewRequest(http.MethodGet, "/oauth/userinfo", nil)
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
 	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "read:accounts")
@@ -516,7 +663,7 @@ func TestUserinfoSuccess(t *testing.T) {
 		AvatarRemoteUrl: pgtype.Text{String: "https://cdn.example/avatar.png", Valid: true},
 	})
 
-	handler := NewHandler(store, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}})
+	handler := NewHandler(store, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
 	req := httptest.NewRequest(http.MethodGet, "/oauth/userinfo", nil)
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
 	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "profile")
@@ -542,7 +689,7 @@ func TestUserinfoSuccess(t *testing.T) {
 }
 
 func TestMetadata(t *testing.T) {
-	handler := NewHandler(newStubOAuthStore(), &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}})
+	handler := NewHandler(newStubOAuthStore(), &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil)
 	rec := httptest.NewRecorder()
 	handler.Metadata(rec, req)

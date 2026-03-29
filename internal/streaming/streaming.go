@@ -23,6 +23,7 @@ const (
 	EventNotification         = "notification"
 	EventFiltersChanged       = "filters_changed"
 	EventConversation         = "conversation"
+	EventKill                 = "kill"
 	EventAnnouncement         = "announcement"
 	EventAnnouncementReaction = "announcement.reaction"
 	EventAnnouncementDelete   = "announcement.delete"
@@ -33,6 +34,7 @@ const (
 const (
 	StreamUser             = "user"
 	StreamUserNotification = "user:notification"
+	StreamAccessToken      = "access_token"
 	StreamPublic           = "public"
 	StreamPublicLocal      = "public:local"
 	StreamPublicRemote     = "public:remote"
@@ -57,6 +59,11 @@ func UserNotificationStreamKey(accountID int64) string {
 // DirectStreamKey returns the account-scoped stream key for the direct stream.
 func DirectStreamKey(accountID int64) string {
 	return fmt.Sprintf("%s:%d", StreamDirect, accountID)
+}
+
+// AccessTokenStreamKey returns the token-scoped stream key used for token lifecycle events.
+func AccessTokenStreamKey(accessTokenID int64) string {
+	return fmt.Sprintf("%s:%d", StreamAccessToken, accessTokenID)
 }
 
 type streamRequestError struct {
@@ -442,6 +449,16 @@ func accountIDFromContext(ctx context.Context) int64 {
 	return 0
 }
 
+func accessTokenIDFromContext(ctx context.Context) int64 {
+	if id, ok := ctx.Value(middleware.ContextKeyTokenID).(int64); ok {
+		return id
+	}
+	if id, ok := ctx.Value("token_id").(int64); ok {
+		return id
+	}
+	return 0
+}
+
 // SSEHandler handles Server-Sent Events connections
 type SSEHandler struct {
 	hub *Hub
@@ -478,11 +495,15 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Get account ID from context (if authenticated)
 	accountID := accountIDFromContext(r.Context())
+	accessTokenID := accessTokenIDFromContext(r.Context())
 
 	// Create subscriber
 	sub := NewSubscriber(fmt.Sprintf("sse-%d-%d", accountID, time.Now().UnixNano()), accountID)
 	for _, stream := range expandAccountScopedStreams(subscriptions, accountID) {
 		sub.Subscribe(stream)
+	}
+	if accessTokenID > 0 {
+		sub.Subscribe(AccessTokenStreamKey(accessTokenID))
 	}
 
 	h.hub.Register(sub)
@@ -503,6 +524,9 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		case event, ok := <-sub.Events:
 			if !ok {
+				return
+			}
+			if event.Event == EventKill {
 				return
 			}
 			_, _ = fmt.Fprintf(w, "event: %s\n", event.Event)

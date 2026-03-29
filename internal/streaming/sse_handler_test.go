@@ -2,11 +2,14 @@ package streaming
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/deicod/gotodon/internal/api/middleware"
 )
 
 func TestSSEHandler_MissingTag(t *testing.T) {
@@ -56,5 +59,37 @@ func TestSSEHandler_PathStreamEvent(t *testing.T) {
 	}
 	if !strings.Contains(body, "data: payload") {
 		t.Fatalf("response missing payload: %q", body)
+	}
+}
+
+func TestSSEHandler_TokenKillClosesConnection(t *testing.T) {
+	hub := NewHub()
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	defer hubCancel()
+	go hub.Run(hubCtx)
+
+	handler := NewSSEHandler(hub)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), middleware.ContextKeyTokenID, int64(42))
+		handler.ServeHTTP(w, r.WithContext(ctx))
+	}))
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/streaming/public", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	time.Sleep(20 * time.Millisecond)
+	hub.Broadcast([]string{AccessTokenStreamKey(42)}, &Event{Event: EventKill, Payload: ""})
+
+	_, err = io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
 	}
 }

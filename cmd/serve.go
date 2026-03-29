@@ -27,12 +27,12 @@ import (
 	nodeinfoapi "github.com/deicod/gotodon/internal/api/nodeinfo"
 	oauthapi "github.com/deicod/gotodon/internal/api/oauth"
 	oembedapi "github.com/deicod/gotodon/internal/api/oembed"
-	wellknownapi "github.com/deicod/gotodon/internal/api/wellknown"
 	v1 "github.com/deicod/gotodon/internal/api/v1"
 	v1alpha "github.com/deicod/gotodon/internal/api/v1alpha"
 	v2 "github.com/deicod/gotodon/internal/api/v2"
 	webapi "github.com/deicod/gotodon/internal/api/web"
 	webfingerapi "github.com/deicod/gotodon/internal/api/webfinger"
+	wellknownapi "github.com/deicod/gotodon/internal/api/wellknown"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/federation"
@@ -364,7 +364,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	webPushSubscriptionsHandler.RegisterRoutes(mux)
 
 	// Register OAuth handlers
-	oauthHandler := oauthapi.NewHandler(queries, cfg)
+	oauthHandler := oauthapi.NewHandler(queries, cfg, streamingHub)
 	oauthHandler.RegisterRoutes(mux)
 
 	oembedHandler := oembedapi.NewHandler(queries, cfg)

@@ -3,6 +3,7 @@ package streaming
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/deicod/gotodon/internal/api/middleware"
 )
 
 type wsTestEnv struct {
@@ -42,11 +45,11 @@ func newWSTestEnv(t *testing.T) wsTestEnv {
 	return wsTestEnv{hub: hub, server: server, cancel: cancel}
 }
 
-func dialWebSocket(t *testing.T, serverURL, path string) *websocket.Conn {
+func dialWebSocket(t *testing.T, serverURL, path string, header http.Header) *websocket.Conn {
 	t.Helper()
 
 	wsURL := "ws" + strings.TrimPrefix(serverURL, "http") + path
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, header)
 	if err != nil {
 		t.Fatalf("dial websocket: %v", err)
 	}
@@ -71,7 +74,7 @@ func readWSJSON(t *testing.T, conn *websocket.Conn, v any) {
 func TestWSHandler_InitialQuerySubscription(t *testing.T) {
 	env := newWSTestEnv(t)
 
-	conn := dialWebSocket(t, env.server.URL, "/api/v1/streaming?stream=public")
+	conn := dialWebSocket(t, env.server.URL, "/api/v1/streaming?stream=public", nil)
 	defer func() { _ = conn.Close() }()
 
 	time.Sleep(10 * time.Millisecond)
@@ -98,7 +101,7 @@ func TestWSHandler_InitialQuerySubscription(t *testing.T) {
 func TestWSHandler_InitialPathSubscription(t *testing.T) {
 	env := newWSTestEnv(t)
 
-	conn := dialWebSocket(t, env.server.URL, "/api/v1/streaming/public")
+	conn := dialWebSocket(t, env.server.URL, "/api/v1/streaming/public", nil)
 	defer func() { _ = conn.Close() }()
 
 	time.Sleep(10 * time.Millisecond)
@@ -125,7 +128,7 @@ func TestWSHandler_InitialPathSubscription(t *testing.T) {
 func TestWSHandler_InitialPathHashtagSubscription(t *testing.T) {
 	env := newWSTestEnv(t)
 
-	conn := dialWebSocket(t, env.server.URL, "/api/v1/streaming/hashtag?tag=go")
+	conn := dialWebSocket(t, env.server.URL, "/api/v1/streaming/hashtag?tag=go", nil)
 	defer func() { _ = conn.Close() }()
 
 	time.Sleep(10 * time.Millisecond)
@@ -152,7 +155,7 @@ func TestWSHandler_InitialPathHashtagSubscription(t *testing.T) {
 func TestWSHandler_SubscribeUnsubscribe(t *testing.T) {
 	env := newWSTestEnv(t)
 
-	conn := dialWebSocket(t, env.server.URL, "/api/v1/streaming")
+	conn := dialWebSocket(t, env.server.URL, "/api/v1/streaming", nil)
 	defer func() { _ = conn.Close() }()
 
 	subscribe := map[string]string{
@@ -207,7 +210,7 @@ func TestWSHandler_InvalidQuery(t *testing.T) {
 	env := newWSTestEnv(t)
 
 	values := url.Values{"stream": []string{StreamHashtag}}
-	conn := dialWebSocket(t, env.server.URL, "/api/v1/streaming?"+values.Encode())
+	conn := dialWebSocket(t, env.server.URL, "/api/v1/streaming?"+values.Encode(), nil)
 	defer func() { _ = conn.Close() }()
 
 	var payload struct {
@@ -221,5 +224,38 @@ func TestWSHandler_InvalidQuery(t *testing.T) {
 	}
 	if payload.Error != "Missing tag name parameter" {
 		t.Fatalf("error = %q, want missing tag error", payload.Error)
+	}
+}
+
+func TestWSHandler_TokenKillClosesConnection(t *testing.T) {
+	hub := NewHub()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go hub.Run(ctx)
+
+	mux := http.NewServeMux()
+	wsHandler := NewWSHandler(hub)
+	mux.Handle("/api/v1/streaming", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), middleware.ContextKeyTokenID, int64(321))
+		wsHandler.ServeHTTP(w, r.WithContext(ctx))
+	}))
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	conn := dialWebSocket(t, server.URL, "/api/v1/streaming?stream=public", nil)
+	defer func() { _ = conn.Close() }()
+
+	time.Sleep(15 * time.Millisecond)
+	hub.Broadcast([]string{AccessTokenStreamKey(321)}, &Event{Event: EventKill, Payload: ""})
+
+	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	_, _, err := conn.ReadMessage()
+	if err == nil {
+		t.Fatal("expected websocket to close on kill event")
+	}
+	var closeErr *websocket.CloseError
+	if !errors.As(err, &closeErr) {
+		t.Fatalf("expected close error, got %v", err)
 	}
 }

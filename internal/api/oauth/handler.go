@@ -20,6 +20,7 @@ import (
 	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/streaming"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/oauth"
 )
@@ -47,13 +48,18 @@ type oauthQuerier interface {
 
 // Handler handles OAuth endpoints
 type Handler struct {
-	queries oauthQuerier
-	cfg     *config.Config
+	queries     oauthQuerier
+	cfg         *config.Config
+	killEmitter tokenKillPublisher
+}
+
+type tokenKillPublisher interface {
+	PublishEventToRedis(ctx context.Context, eventType string, payload any, streams []string) error
 }
 
 // NewHandler creates a new OAuth handler
-func NewHandler(queries oauthQuerier, cfg *config.Config) *Handler {
-	return &Handler{queries: queries, cfg: cfg}
+func NewHandler(queries oauthQuerier, cfg *config.Config, killEmitter tokenKillPublisher) *Handler {
+	return &Handler{queries: queries, cfg: cfg, killEmitter: killEmitter}
 }
 
 // TokenRequest is the request body for POST /oauth/token
@@ -333,7 +339,9 @@ func (h *Handler) handleRefreshToken(w http.ResponseWriter, r *http.Request, req
 		return
 	}
 
-	_ = h.queries.RevokeOAuthAccessToken(ctx, oldToken.Token)
+	if err := h.queries.RevokeOAuthAccessToken(ctx, oldToken.Token); err == nil {
+		h.publishTokenKill(ctx, oldToken.ID)
+	}
 	if oldToken.ID != 0 {
 		_ = h.queries.DeletePushSubscription(ctx, pgtype.Int8{Int64: oldToken.ID, Valid: true})
 	}
@@ -372,18 +380,31 @@ func (h *Handler) Revoke(w http.ResponseWriter, r *http.Request) {
 
 	// Try access token, then refresh token.
 	if token, err := h.queries.GetOAuthAccessToken(ctx, req.Token); err == nil {
-		_ = h.queries.RevokeOAuthAccessToken(ctx, token.Token)
+		if err := h.queries.RevokeOAuthAccessToken(ctx, token.Token); err == nil {
+			h.publishTokenKill(ctx, token.ID)
+		}
 		if token.ID != 0 {
 			_ = h.queries.DeletePushSubscription(ctx, pgtype.Int8{Int64: token.ID, Valid: true})
 		}
 	} else if token, err := h.queries.GetOAuthAccessTokenByRefresh(ctx, pgtype.Text{String: req.Token, Valid: true}); err == nil {
-		_ = h.queries.RevokeOAuthAccessToken(ctx, token.Token)
+		if err := h.queries.RevokeOAuthAccessToken(ctx, token.Token); err == nil {
+			h.publishTokenKill(ctx, token.ID)
+		}
 		if token.ID != 0 {
 			_ = h.queries.DeletePushSubscription(ctx, pgtype.Int8{Int64: token.ID, Valid: true})
 		}
 	}
 
 	web.JSON(w, http.StatusOK, map[string]any{})
+}
+
+func (h *Handler) publishTokenKill(_ context.Context, tokenID int64) {
+	if h.killEmitter == nil || tokenID <= 0 {
+		return
+	}
+	publishCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = h.killEmitter.PublishEventToRedis(publishCtx, streaming.EventKill, "", []string{streaming.AccessTokenStreamKey(tokenID)})
 }
 
 // Authorize handles GET /oauth/authorize

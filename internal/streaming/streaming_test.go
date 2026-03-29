@@ -161,6 +161,9 @@ func TestEventConstants(t *testing.T) {
 	if EventNotification != "notification" {
 		t.Errorf("EventNotification = %q, want %q", EventNotification, "notification")
 	}
+	if EventKill != "kill" {
+		t.Errorf("EventKill = %q, want %q", EventKill, "kill")
+	}
 }
 
 func TestStreamConstants(t *testing.T) {
@@ -173,6 +176,9 @@ func TestStreamConstants(t *testing.T) {
 	}
 	if StreamDirect != "direct" {
 		t.Errorf("StreamDirect = %q, want %q", StreamDirect, "direct")
+	}
+	if StreamAccessToken != "access_token" {
+		t.Errorf("StreamAccessToken = %q, want %q", StreamAccessToken, "access_token")
 	}
 }
 
@@ -209,5 +215,11 @@ func TestExpandAccountScopedStreams(t *testing.T) {
 	got = expandAccountScopedStreams(streams, 0)
 	if !reflect.DeepEqual(got, streams) {
 		t.Fatalf("expandAccountScopedStreams (no account) = %#v, want %#v", got, streams)
+	}
+}
+
+func TestAccessTokenStreamKey(t *testing.T) {
+	if got := AccessTokenStreamKey(42); got != "access_token:42" {
+		t.Fatalf("AccessTokenStreamKey = %q, want %q", got, "access_token:42")
 	}
 }
