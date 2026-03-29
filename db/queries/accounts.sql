@@ -58,7 +58,13 @@ UPDATE accounts SET
     avatar_remote_url = COALESCE(sqlc.narg('avatar_remote_url'), avatar_remote_url),
     header_remote_url = COALESCE(sqlc.narg('header_remote_url'), header_remote_url),
     avatar_file_name = COALESCE(sqlc.narg('avatar_file_name'), avatar_file_name),
+    avatar_content_type = COALESCE(sqlc.narg('avatar_content_type'), avatar_content_type),
+    avatar_file_size = COALESCE(sqlc.narg('avatar_file_size'), avatar_file_size),
+    avatar_updated_at = COALESCE(sqlc.narg('avatar_updated_at'), avatar_updated_at),
     header_file_name = COALESCE(sqlc.narg('header_file_name'), header_file_name),
+    header_content_type = COALESCE(sqlc.narg('header_content_type'), header_content_type),
+    header_file_size = COALESCE(sqlc.narg('header_file_size'), header_file_size),
+    header_updated_at = COALESCE(sqlc.narg('header_updated_at'), header_updated_at),
     last_webfingered_at = COALESCE(sqlc.narg('last_webfingered_at'), last_webfingered_at),
     attribution_domains = COALESCE(sqlc.narg('attribution_domains'), attribution_domains),
     updated_at = now()

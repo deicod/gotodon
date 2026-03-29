@@ -230,6 +230,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	mediaStorage := media.NewLocalStorage("./uploads", fmt.Sprintf("https://%s/files", cfg.Instance.LocalDomain))
 	mediaUploader := media.NewUploader(mediaStorage)
+	accountsHandler.SetProfileMediaUploader(mediaUploader)
 	mediaHandler := v1.NewMediaHandler(queries, mediaUploader)
 	if mediaProcessingEnqueuer != nil {
 		mediaHandler.SetProcessingEnqueuer(mediaProcessingEnqueuer)

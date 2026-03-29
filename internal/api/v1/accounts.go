@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -24,6 +25,7 @@ import (
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/federation"
+	"github.com/deicod/gotodon/internal/media"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/activitypub"
 	"github.com/deicod/gotodon/pkg/oauth"
@@ -31,11 +33,17 @@ import (
 
 // AccountsHandler handles account-related endpoints
 type AccountsHandler struct {
-	queries  db.Querier
-	pool     *pgxpool.Pool
-	cfg      *config.Config
-	outgoing federation.OutgoingDeliverer
-	resolver *federation.RemoteActorResolver
+	queries              db.Querier
+	pool                 *pgxpool.Pool
+	cfg                  *config.Config
+	outgoing             federation.OutgoingDeliverer
+	resolver             *federation.RemoteActorResolver
+	profileMediaUploader profileMediaUploader
+}
+
+type profileMediaUploader interface {
+	Upload(ctx context.Context, accountID int64, filename string, data []byte) (*media.UploadResult, error)
+	Delete(ctx context.Context, path string) error
 }
 
 const (
@@ -46,6 +54,8 @@ const (
 	accountNoteLengthLimit    = 500
 	accountNoteCommentMax     = 2000
 	accountNoteURLPlaceholder = "xxxxxxxxxxxxxxxxxxxxxxx"
+	profileMediaFileSizeLimit = 8 * 1024 * 1024
+	maxProfileMediaBodySize   = 2*profileMediaFileSizeLimit + 1024*1024
 )
 
 var (
@@ -71,6 +81,14 @@ func (h *AccountsHandler) SetRemoteAccountRefresher(refresher federation.RemoteA
 		return
 	}
 	h.resolver.SetRefresher(refresher)
+}
+
+// SetProfileMediaUploader configures profile media uploads (avatar/header).
+func (h *AccountsHandler) SetProfileMediaUploader(uploader profileMediaUploader) {
+	if h == nil {
+		return
+	}
+	h.profileMediaUploader = uploader
 }
 
 func (h *AccountsHandler) useDB() bool {
@@ -255,10 +273,28 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	contentType := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
+	multipartCredentials := strings.HasPrefix(contentType, "multipart/form-data")
+	if multipartCredentials {
+		r.Body = http.MaxBytesReader(w, r.Body, maxProfileMediaBodySize)
+	}
+
 	var req UpdateCredentialsRequest
-	if err := web.Bind(r, &req); err != nil {
+	if err := bindUpdateCredentialsRequest(r, &req); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if multipartCredentials && (errors.As(err, &maxBytesErr) || strings.Contains(err.Error(), "request body too large")) {
+			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: File is too large")
+			return
+		}
 		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
 		return
+	}
+	if multipartCredentials && r.MultipartForm != nil {
+		defer func() {
+			if err := r.MultipartForm.RemoveAll(); err != nil {
+				fmt.Printf("Failed to clean up multipart form files: %v\n", err)
+			}
+		}()
 	}
 
 	ctx := r.Context()
@@ -370,42 +406,23 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
+	var (
+		fields          []UpdateCredentialsField
+		fieldsProvided  bool
+		existingFields  []byte
+		existingAccount db.Account
+		hasExisting     bool
+	)
 	if h.useDB() {
-		params := db.UpdateAccountParams{ID: accountID}
-		if req.DisplayName != nil {
-			params.DisplayName = pgtype.Text{String: *req.DisplayName, Valid: true}
-		}
-		if req.Note != nil {
-			params.Note = pgtype.Text{String: *req.Note, Valid: true}
-		}
-		if req.Locked != nil {
-			params.Locked = pgtype.Bool{Bool: *req.Locked, Valid: true}
-		}
-		if req.Discoverable != nil {
-			params.Discoverable = pgtype.Bool{Bool: *req.Discoverable, Valid: true}
-		}
-		if req.Indexable != nil {
-			params.Indexable = pgtype.Bool{Bool: *req.Indexable, Valid: true}
-		}
-		if req.HideCollections != nil {
-			params.HideCollections = pgtype.Bool{Bool: *req.HideCollections, Valid: true}
-		}
-		if req.Bot != nil {
-			actorType := ""
-			if *req.Bot {
-				actorType = "Service"
-			}
-			params.ActorType = pgtype.Text{String: actorType, Valid: true}
-		}
-		if req.AttributionDomains != nil {
-			params.AttributionDomains = normalizedAttributionDomains
-		}
-
-		fields, fieldsProvided, err := parseUpdateCredentialsFields(r, req)
-		if err != nil {
+		var parseErr error
+		fields, fieldsProvided, parseErr = parseUpdateCredentialsFields(r, req)
+		if parseErr != nil {
 			web.JSONError(w, http.StatusBadRequest, "Invalid request body")
 			return
 		}
+		existingFields = nil
+		avatarRequested := multipartFormHasFile(r, "avatar")
+		headerRequested := multipartFormHasFile(r, "header")
 		if fieldsProvided && hasProfileFieldWithValueMissingLabel(fields) {
 			description := "fields with values must have labels"
 			web.JSON(w, http.StatusUnprocessableEntity, mastodonValidationErrorResponse{
@@ -436,16 +453,82 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 			})
 			return
 		}
-		if fieldsProvided {
-			existingFields := []byte{}
+		if fieldsProvided || avatarRequested || headerRequested {
 			dbAcc, err := h.queries.GetAccountByID(ctx, accountID)
 			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 				web.JSONError(w, http.StatusInternalServerError, "Failed to fetch account")
 				return
 			}
 			if err == nil {
+				existingAccount = dbAcc
+				hasExisting = true
 				existingFields = dbAcc.Fields
 			}
+		}
+	}
+
+	avatarUpload, avatarProvided, err := h.uploadProfileMedia(r.Context(), accountID, r, "avatar")
+	if err != nil {
+		writeProfileMediaUploadError(w, err, "avatar")
+		return
+	}
+
+	headerUpload, headerProvided, err := h.uploadProfileMedia(r.Context(), accountID, r, "header")
+	if err != nil {
+		if cleanupErr := h.cleanupUploadedProfileMedia(ctx, profileUploadPath(avatarUpload)); cleanupErr != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Failed to clean up uploaded media")
+			return
+		}
+		writeProfileMediaUploadError(w, err, "header")
+		return
+	}
+
+	if h.useDB() {
+		params := db.UpdateAccountParams{ID: accountID}
+		if req.DisplayName != nil {
+			params.DisplayName = pgtype.Text{String: *req.DisplayName, Valid: true}
+		}
+		if req.Note != nil {
+			params.Note = pgtype.Text{String: *req.Note, Valid: true}
+		}
+		if req.Locked != nil {
+			params.Locked = pgtype.Bool{Bool: *req.Locked, Valid: true}
+		}
+		if req.Discoverable != nil {
+			params.Discoverable = pgtype.Bool{Bool: *req.Discoverable, Valid: true}
+		}
+		if req.Indexable != nil {
+			params.Indexable = pgtype.Bool{Bool: *req.Indexable, Valid: true}
+		}
+		if req.HideCollections != nil {
+			params.HideCollections = pgtype.Bool{Bool: *req.HideCollections, Valid: true}
+		}
+		if req.Bot != nil {
+			actorType := ""
+			if *req.Bot {
+				actorType = "Service"
+			}
+			params.ActorType = pgtype.Text{String: actorType, Valid: true}
+		}
+		if req.AttributionDomains != nil {
+			params.AttributionDomains = normalizedAttributionDomains
+		}
+		uploadedAt := time.Now().UTC()
+		if avatarProvided {
+			params.AvatarFileName = pgtype.Text{String: avatarUpload.Path, Valid: true}
+			params.AvatarContentType = pgtype.Text{String: avatarUpload.ContentType, Valid: true}
+			params.AvatarFileSize = pgtype.Int4{Int32: int32(avatarUpload.Size), Valid: true}
+			params.AvatarUpdatedAt = pgtype.Timestamptz{Time: uploadedAt, Valid: true}
+			params.AvatarRemoteUrl = pgtype.Text{String: "", Valid: true}
+		}
+		if headerProvided {
+			params.HeaderFileName = pgtype.Text{String: headerUpload.Path, Valid: true}
+			params.HeaderContentType = pgtype.Text{String: headerUpload.ContentType, Valid: true}
+			params.HeaderFileSize = pgtype.Int4{Int32: int32(headerUpload.Size), Valid: true}
+			params.HeaderUpdatedAt = pgtype.Timestamptz{Time: uploadedAt, Valid: true}
+			params.HeaderRemoteUrl = pgtype.Text{String: "", Valid: true}
+		}
+		if fieldsProvided {
 			encoded, err := json.Marshal(preserveVerifiedAtFields(existingFields, fields))
 			if err != nil {
 				web.JSONError(w, http.StatusInternalServerError, "Failed to encode fields")
@@ -456,8 +539,30 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 
 		dbAcc, err := h.queries.UpdateAccount(ctx, params)
 		if err != nil {
+			if cleanupErr := h.cleanupUploadedProfileMedia(ctx, profileUploadPath(avatarUpload), profileUploadPath(headerUpload)); cleanupErr != nil {
+				web.JSONError(w, http.StatusInternalServerError, "Failed to clean up uploaded media")
+				return
+			}
 			web.JSONError(w, http.StatusInternalServerError, "Failed to update account")
 			return
+		}
+		if hasExisting {
+			var replacedPaths []string
+			if avatarProvided {
+				oldAvatarPath := strings.TrimSpace(existingAccount.AvatarFileName.String)
+				if oldAvatarPath != "" && oldAvatarPath != avatarUpload.Path {
+					replacedPaths = append(replacedPaths, oldAvatarPath)
+				}
+			}
+			if headerProvided {
+				oldHeaderPath := strings.TrimSpace(existingAccount.HeaderFileName.String)
+				if oldHeaderPath != "" && oldHeaderPath != headerUpload.Path {
+					replacedPaths = append(replacedPaths, oldHeaderPath)
+				}
+			}
+			if cleanupErr := h.cleanupUploadedProfileMedia(ctx, replacedPaths...); cleanupErr != nil {
+				fmt.Printf("Failed to clean up replaced profile media: %v\n", cleanupErr)
+			}
 		}
 
 		// Update user settings (source params)
@@ -492,6 +597,231 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 	}
 
 	h.VerifyCredentials(w, r)
+}
+
+var errProfileMediaUploaderNotConfigured = errors.New("profile media uploader not configured")
+
+func bindUpdateCredentialsRequest(r *http.Request, req *UpdateCredentialsRequest) error {
+	contentType := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
+	if strings.HasPrefix(contentType, "multipart/form-data") {
+		if err := r.ParseMultipartForm(media.MaxImageSize + 1024); err != nil {
+			return err
+		}
+		values := r.PostForm
+		locked, err := formBoolPtr(values, "locked")
+		if err != nil {
+			return err
+		}
+		bot, err := formBoolPtr(values, "bot")
+		if err != nil {
+			return err
+		}
+		discoverable, err := formBoolPtr(values, "discoverable")
+		if err != nil {
+			return err
+		}
+		hideCollections, err := formBoolPtr(values, "hide_collections")
+		if err != nil {
+			return err
+		}
+		indexable, err := formBoolPtr(values, "indexable")
+		if err != nil {
+			return err
+		}
+		*req = UpdateCredentialsRequest{
+			DisplayName:        formStringPtr(values, "display_name"),
+			Note:               formStringPtr(values, "note"),
+			Locked:             locked,
+			Bot:                bot,
+			Discoverable:       discoverable,
+			HideCollections:    hideCollections,
+			Indexable:          indexable,
+			AttributionDomains: formStringSlice(values, "attribution_domains"),
+		}
+		if len(req.AttributionDomains) == 0 {
+			req.AttributionDomains = formStringSlice(values, "attribution_domains[]")
+		}
+		source, err := formSource(values)
+		if err != nil {
+			return err
+		}
+		if source != nil {
+			req.Source = source
+		}
+		return nil
+	}
+
+	return web.Bind(r, req)
+}
+
+func formStringPtr(values url.Values, key string) *string {
+	value, ok := values[key]
+	if !ok || len(value) == 0 {
+		return nil
+	}
+	v := value[0]
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	return &v
+}
+
+func formBoolPtr(values url.Values, key string) (*bool, error) {
+	value, ok := values[key]
+	if !ok || len(value) == 0 {
+		return nil, nil
+	}
+	parsed, err := parseBoolFormValue(value[0])
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
+}
+
+func formStringSlice(values url.Values, key string) []string {
+	out, ok := values[key]
+	if !ok || len(out) == 0 {
+		return nil
+	}
+	copied := make([]string, len(out))
+	copy(copied, out)
+	return copied
+}
+
+func formSource(values url.Values) (*UpdateCredentialsSource, error) {
+	sensitive, err := formBoolPtr(values, "source[sensitive]")
+	if err != nil {
+		return nil, err
+	}
+	source := &UpdateCredentialsSource{
+		Privacy:     formStringPtr(values, "source[privacy]"),
+		Sensitive:   sensitive,
+		Language:    formStringPtr(values, "source[language]"),
+		QuotePolicy: formOptionalStringPtr(values, "source[quote_policy]"),
+	}
+	if source.Privacy == nil && source.Sensitive == nil && source.Language == nil && source.QuotePolicy == nil {
+		return nil, nil
+	}
+	return source, nil
+}
+
+func formOptionalStringPtr(values url.Values, key string) *string {
+	value, ok := values[key]
+	if !ok || len(value) == 0 {
+		return nil
+	}
+	v := value[0]
+	return &v
+}
+
+func parseBoolFormValue(value string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "1", "t", "yes", "y", "on":
+		return true, nil
+	case "false", "0", "f", "no", "n", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid boolean value")
+	}
+}
+
+func writeProfileMediaUploadError(w http.ResponseWriter, err error, field string) {
+	switch {
+	case errors.Is(err, errProfileMediaUploaderNotConfigured):
+		web.JSONError(w, http.StatusInternalServerError, "Media storage unavailable")
+	case errors.Is(err, media.ErrUnsupportedType):
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: File type is not supported")
+	case errors.Is(err, media.ErrFileTooLarge):
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: File is too large")
+	default:
+		web.JSONError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to upload %s", field))
+	}
+}
+
+func (h *AccountsHandler) cleanupUploadedProfileMedia(ctx context.Context, paths ...string) error {
+	if h == nil || h.profileMediaUploader == nil {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(paths))
+	var cleanupErr error
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		if err := h.profileMediaUploader.Delete(ctx, path); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		}
+	}
+	return cleanupErr
+}
+
+func multipartFormHasFile(r *http.Request, field string) bool {
+	if r == nil || r.MultipartForm == nil || r.MultipartForm.File == nil {
+		return false
+	}
+	return len(r.MultipartForm.File[field]) > 0
+}
+
+func profileUploadPath(upload *media.UploadResult) string {
+	if upload == nil {
+		return ""
+	}
+	return strings.TrimSpace(upload.Path)
+}
+
+func profileMediaSizeLimit(field string) int64 {
+	switch field {
+	case "avatar", "header":
+		return profileMediaFileSizeLimit
+	default:
+		return media.MaxImageSize
+	}
+}
+
+func (h *AccountsHandler) uploadProfileMedia(ctx context.Context, accountID int64, r *http.Request, field string) (*media.UploadResult, bool, error) {
+	contentType := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
+	if !strings.HasPrefix(contentType, "multipart/form-data") {
+		return nil, false, nil
+	}
+
+	file, header, err := r.FormFile(field)
+	if err != nil {
+		if errors.Is(err, http.ErrMissingFile) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	defer func() { _ = file.Close() }()
+
+	if h.profileMediaUploader == nil {
+		return nil, true, errProfileMediaUploaderNotConfigured
+	}
+
+	maxSize := profileMediaSizeLimit(field)
+	data, err := io.ReadAll(io.LimitReader(file, maxSize+1))
+	if err != nil {
+		return nil, true, err
+	}
+	if int64(len(data)) > maxSize {
+		return nil, true, media.ErrFileTooLarge
+	}
+
+	result, err := h.profileMediaUploader.Upload(ctx, accountID, header.Filename, data)
+	if err != nil {
+		return nil, true, err
+	}
+	if result == nil || strings.TrimSpace(result.Path) == "" {
+		return nil, true, errors.New("empty upload result")
+	}
+	result.Path = strings.TrimSpace(result.Path)
+	result.ContentType = strings.TrimSpace(result.ContentType)
+	return result, true, nil
 }
 
 func parseUpdateCredentialsFields(r *http.Request, req UpdateCredentialsRequest) ([]UpdateCredentialsField, bool, error) {

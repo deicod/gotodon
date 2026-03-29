@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,12 +20,14 @@ import (
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/media"
 )
 
 type stubAccountUpdateQueries struct {
 	db.Querier
 	updateCalled         bool
 	updateParams         db.UpdateAccountParams
+	updateErr            error
 	updateSettingsCalled bool
 	updateSettingsParams db.UpdateUserSettingsParams
 	account              db.Account
@@ -32,10 +35,85 @@ type stubAccountUpdateQueries struct {
 	user                 db.User
 }
 
+type stubProfileMediaUploader struct {
+	avatarPath       string
+	headerPath       string
+	avatarErr        error
+	headerErr        error
+	calls            []stubProfileUploadCall
+	deletedPaths     []string
+	deleteErr        error
+	forceGenericPath string
+}
+
+type stubProfileUploadCall struct {
+	AccountID int64
+	Filename  string
+	Data      []byte
+}
+
+func (s *stubProfileMediaUploader) Upload(ctx context.Context, accountID int64, filename string, data []byte) (*media.UploadResult, error) {
+	call := stubProfileUploadCall{
+		AccountID: accountID,
+		Filename:  filename,
+		Data:      append([]byte(nil), data...),
+	}
+	s.calls = append(s.calls, call)
+
+	switch filename {
+	case "avatar.png":
+		if s.avatarErr != nil {
+			return nil, s.avatarErr
+		}
+		path := s.avatarPath
+		if path == "" {
+			path = "media_attachments/files/1/avatar.png"
+		}
+		return &media.UploadResult{Path: path, ContentType: media.DetectContentType(data), Size: int64(len(data))}, nil
+	case "header.png":
+		if s.headerErr != nil {
+			return nil, s.headerErr
+		}
+		path := s.headerPath
+		if path == "" {
+			path = "media_attachments/files/1/header.png"
+		}
+		return &media.UploadResult{Path: path, ContentType: media.DetectContentType(data), Size: int64(len(data))}, nil
+	default:
+		if s.forceGenericPath != "" {
+			return &media.UploadResult{Path: s.forceGenericPath, ContentType: media.DetectContentType(data), Size: int64(len(data))}, nil
+		}
+		return &media.UploadResult{Path: "media_attachments/files/1/" + filename, ContentType: media.DetectContentType(data), Size: int64(len(data))}, nil
+	}
+}
+
+func (s *stubProfileMediaUploader) Delete(ctx context.Context, path string) error {
+	s.deletedPaths = append(s.deletedPaths, path)
+	return s.deleteErr
+}
+
 func (s *stubAccountUpdateQueries) UpdateAccount(ctx context.Context, arg db.UpdateAccountParams) (db.Account, error) {
 	s.updateCalled = true
 	s.updateParams = arg
-	return db.Account{ID: arg.ID, Username: "alice", Fields: arg.Fields}, nil
+	if s.updateErr != nil {
+		return db.Account{}, s.updateErr
+	}
+	return db.Account{
+		ID:                arg.ID,
+		Username:          "alice",
+		DisplayName:       arg.DisplayName.String,
+		Fields:            arg.Fields,
+		AvatarFileName:    arg.AvatarFileName,
+		AvatarContentType: arg.AvatarContentType,
+		AvatarFileSize:    arg.AvatarFileSize,
+		AvatarUpdatedAt:   arg.AvatarUpdatedAt,
+		HeaderFileName:    arg.HeaderFileName,
+		HeaderContentType: arg.HeaderContentType,
+		HeaderFileSize:    arg.HeaderFileSize,
+		HeaderUpdatedAt:   arg.HeaderUpdatedAt,
+		AvatarRemoteUrl:   arg.AvatarRemoteUrl,
+		HeaderRemoteUrl:   arg.HeaderRemoteUrl.String,
+	}, nil
 }
 
 func (s *stubAccountUpdateQueries) GetUserByAccountID(ctx context.Context, accountID int64) (db.User, error) {
@@ -1264,6 +1342,350 @@ func TestAccountsHandler_UpdateCredentials_AttributionDomainsOverLimitReturnsMas
 	}
 }
 
+func TestAccountsHandler_UpdateCredentials_MultipartAvatarHeaderUploads(t *testing.T) {
+	stub := &stubAccountUpdateQueries{
+		account: db.Account{
+			ID:              1,
+			Username:        "alice",
+			AvatarRemoteUrl: pgtype.Text{String: "https://cdn.example/avatar-remote.png", Valid: true},
+			HeaderRemoteUrl: "https://cdn.example/header-remote.png",
+		},
+	}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+	uploader := &stubProfileMediaUploader{
+		avatarPath: "media_attachments/files/1/2026/03/29/avatar-local.png",
+		headerPath: "media_attachments/files/1/2026/03/29/header-local.png",
+	}
+	h.SetProfileMediaUploader(uploader)
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	avatarPart, err := writer.CreateFormFile("avatar", "avatar.png")
+	if err != nil {
+		t.Fatalf("create avatar form file: %v", err)
+	}
+	if _, err := avatarPart.Write(minimalPNGBytes()); err != nil {
+		t.Fatalf("write avatar content: %v", err)
+	}
+
+	headerPart, err := writer.CreateFormFile("header", "header.png")
+	if err != nil {
+		t.Fatalf("create header form file: %v", err)
+	}
+	if _, err := headerPart.Write(minimalPNGBytes()); err != nil {
+		t.Fatalf("write header content: %v", err)
+	}
+
+	if err := writer.WriteField("display_name", "Alice Updated"); err != nil {
+		t.Fatalf("write display_name field: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", bytes.NewReader(body.Bytes()))
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "write:accounts")
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body=%s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if !stub.updateCalled {
+		t.Fatal("expected UpdateAccount to be called")
+	}
+	if got := stub.updateParams.DisplayName.String; got != "Alice Updated" {
+		t.Fatalf("display_name = %q, want %q", got, "Alice Updated")
+	}
+	if !stub.updateParams.AvatarFileName.Valid || stub.updateParams.AvatarFileName.String != uploader.avatarPath {
+		t.Fatalf("avatar_file_name = %+v, want valid path %q", stub.updateParams.AvatarFileName, uploader.avatarPath)
+	}
+	if !stub.updateParams.AvatarContentType.Valid || stub.updateParams.AvatarContentType.String != "image/png" {
+		t.Fatalf("avatar_content_type = %+v, want %q", stub.updateParams.AvatarContentType, "image/png")
+	}
+	if !stub.updateParams.AvatarFileSize.Valid || stub.updateParams.AvatarFileSize.Int32 != int32(len(minimalPNGBytes())) {
+		t.Fatalf("avatar_file_size = %+v, want %d", stub.updateParams.AvatarFileSize, len(minimalPNGBytes()))
+	}
+	if !stub.updateParams.AvatarUpdatedAt.Valid {
+		t.Fatalf("avatar_updated_at = %+v, want valid timestamp", stub.updateParams.AvatarUpdatedAt)
+	}
+	if !stub.updateParams.HeaderFileName.Valid || stub.updateParams.HeaderFileName.String != uploader.headerPath {
+		t.Fatalf("header_file_name = %+v, want valid path %q", stub.updateParams.HeaderFileName, uploader.headerPath)
+	}
+	if !stub.updateParams.HeaderContentType.Valid || stub.updateParams.HeaderContentType.String != "image/png" {
+		t.Fatalf("header_content_type = %+v, want %q", stub.updateParams.HeaderContentType, "image/png")
+	}
+	if !stub.updateParams.HeaderFileSize.Valid || stub.updateParams.HeaderFileSize.Int32 != int32(len(minimalPNGBytes())) {
+		t.Fatalf("header_file_size = %+v, want %d", stub.updateParams.HeaderFileSize, len(minimalPNGBytes()))
+	}
+	if !stub.updateParams.HeaderUpdatedAt.Valid {
+		t.Fatalf("header_updated_at = %+v, want valid timestamp", stub.updateParams.HeaderUpdatedAt)
+	}
+	if !stub.updateParams.AvatarRemoteUrl.Valid || stub.updateParams.AvatarRemoteUrl.String != "" {
+		t.Fatalf("avatar_remote_url = %+v, want explicit empty string", stub.updateParams.AvatarRemoteUrl)
+	}
+	if !stub.updateParams.HeaderRemoteUrl.Valid || stub.updateParams.HeaderRemoteUrl.String != "" {
+		t.Fatalf("header_remote_url = %+v, want explicit empty string", stub.updateParams.HeaderRemoteUrl)
+	}
+	if len(uploader.calls) != 2 {
+		t.Fatalf("uploader calls = %d, want 2", len(uploader.calls))
+	}
+
+	var resp CredentialAccount
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if strings.Contains(resp.Avatar, "cdn.example") {
+		t.Fatalf("avatar response should not use stale remote URL: %q", resp.Avatar)
+	}
+	if strings.Contains(resp.Header, "cdn.example") {
+		t.Fatalf("header response should not use stale remote URL: %q", resp.Header)
+	}
+	if !strings.Contains(resp.Avatar, uploader.avatarPath) {
+		t.Fatalf("avatar = %q, want to contain %q", resp.Avatar, uploader.avatarPath)
+	}
+	if !strings.Contains(resp.Header, uploader.headerPath) {
+		t.Fatalf("header = %q, want to contain %q", resp.Header, uploader.headerPath)
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_MultipartReplacementDeletesPreviousLocalMedia(t *testing.T) {
+	stub := &stubAccountUpdateQueries{
+		account: db.Account{
+			ID:             1,
+			Username:       "alice",
+			AvatarFileName: pgtype.Text{String: "media_attachments/files/1/old-avatar.png", Valid: true},
+			HeaderFileName: pgtype.Text{String: "media_attachments/files/1/old-header.png", Valid: true},
+		},
+	}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+	uploader := &stubProfileMediaUploader{
+		avatarPath: "media_attachments/files/1/new-avatar.png",
+		headerPath: "media_attachments/files/1/new-header.png",
+	}
+	h.SetProfileMediaUploader(uploader)
+
+	req := multipartUpdateCredentialsRequest(t, map[string][]byte{
+		"avatar": minimalPNGBytes(),
+		"header": minimalPNGBytes(),
+	}, nil)
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body=%s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if len(uploader.deletedPaths) != 2 ||
+		uploader.deletedPaths[0] != stub.account.AvatarFileName.String ||
+		uploader.deletedPaths[1] != stub.account.HeaderFileName.String {
+		t.Fatalf("deleted paths = %#v, want [%q %q]", uploader.deletedPaths, stub.account.AvatarFileName.String, stub.account.HeaderFileName.String)
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_MultipartUploadWithoutUploaderReturns500(t *testing.T) {
+	stub := &stubAccountUpdateQueries{}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+	req := multipartUpdateCredentialsRequest(t, map[string][]byte{"avatar": minimalPNGBytes()}, nil)
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+	if stub.updateCalled {
+		t.Fatal("expected UpdateAccount not to be called")
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_MultipartUploadValidationErrorsReturn422(t *testing.T) {
+	tests := []struct {
+		name       string
+		uploadErr  error
+		wantSubstr string
+	}{
+		{
+			name:       "unsupported type",
+			uploadErr:  media.ErrUnsupportedType,
+			wantSubstr: "File type is not supported",
+		},
+		{
+			name:       "too large",
+			uploadErr:  media.ErrFileTooLarge,
+			wantSubstr: "File is too large",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stub := &stubAccountUpdateQueries{}
+			h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+			uploader := &stubProfileMediaUploader{
+				avatarErr: tt.uploadErr,
+			}
+			h.SetProfileMediaUploader(uploader)
+
+			req := multipartUpdateCredentialsRequest(t, map[string][]byte{"avatar": minimalPNGBytes()}, nil)
+			ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+			req = req.WithContext(ctx)
+			rec := httptest.NewRecorder()
+
+			h.UpdateCredentials(rec, req)
+
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+			}
+			if stub.updateCalled {
+				t.Fatal("expected UpdateAccount not to be called")
+			}
+			if !strings.Contains(rec.Body.String(), tt.wantSubstr) {
+				t.Fatalf("body = %q, want to contain %q", rec.Body.String(), tt.wantSubstr)
+			}
+		})
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_MultipartValidationHappensBeforeUpload(t *testing.T) {
+	stub := &stubAccountUpdateQueries{}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+	uploader := &stubProfileMediaUploader{}
+	h.SetProfileMediaUploader(uploader)
+
+	req := multipartUpdateCredentialsRequest(t, map[string][]byte{"avatar": minimalPNGBytes()}, map[string]string{
+		"display_name": strings.Repeat("x", accountDisplayNameMax+1),
+	})
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+	if len(uploader.calls) != 0 {
+		t.Fatalf("uploader calls = %d, want 0", len(uploader.calls))
+	}
+	if stub.updateCalled {
+		t.Fatal("expected UpdateAccount not to be called")
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_MultipartHeaderFailureCleansUpAvatar(t *testing.T) {
+	stub := &stubAccountUpdateQueries{}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+	uploader := &stubProfileMediaUploader{
+		avatarPath: "media_attachments/files/1/avatar.png",
+		headerErr:  media.ErrUnsupportedType,
+	}
+	h.SetProfileMediaUploader(uploader)
+
+	req := multipartUpdateCredentialsRequest(t, map[string][]byte{
+		"avatar": minimalPNGBytes(),
+		"header": minimalPNGBytes(),
+	}, nil)
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+	if len(uploader.deletedPaths) != 1 || uploader.deletedPaths[0] != uploader.avatarPath {
+		t.Fatalf("deleted paths = %#v, want [%q]", uploader.deletedPaths, uploader.avatarPath)
+	}
+	if stub.updateCalled {
+		t.Fatal("expected UpdateAccount not to be called")
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_MultipartUpdateFailureCleansUpUploads(t *testing.T) {
+	stub := &stubAccountUpdateQueries{updateErr: errors.New("update failed")}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+	uploader := &stubProfileMediaUploader{
+		avatarPath: "media_attachments/files/1/avatar.png",
+		headerPath: "media_attachments/files/1/header.png",
+	}
+	h.SetProfileMediaUploader(uploader)
+
+	req := multipartUpdateCredentialsRequest(t, map[string][]byte{
+		"avatar": minimalPNGBytes(),
+		"header": minimalPNGBytes(),
+	}, nil)
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+	if len(uploader.deletedPaths) != 2 || uploader.deletedPaths[0] != uploader.avatarPath || uploader.deletedPaths[1] != uploader.headerPath {
+		t.Fatalf("deleted paths = %#v, want [%q %q]", uploader.deletedPaths, uploader.avatarPath, uploader.headerPath)
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_MultipartAvatarOverProfileLimitReturns422(t *testing.T) {
+	stub := &stubAccountUpdateQueries{}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+	uploader := &stubProfileMediaUploader{}
+	h.SetProfileMediaUploader(uploader)
+
+	req := multipartUpdateCredentialsRequest(t, map[string][]byte{
+		"avatar": make([]byte, int(profileMediaFileSizeLimit)+1),
+	}, nil)
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+	if !strings.Contains(rec.Body.String(), "File is too large") {
+		t.Fatalf("body = %q, want to contain %q", rec.Body.String(), "File is too large")
+	}
+	if len(uploader.calls) != 0 {
+		t.Fatalf("uploader calls = %d, want 0", len(uploader.calls))
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_MultipartInvalidBooleanReturnsBadRequest(t *testing.T) {
+	stub := &stubAccountUpdateQueries{}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+	uploader := &stubProfileMediaUploader{}
+	h.SetProfileMediaUploader(uploader)
+
+	req := multipartUpdateCredentialsRequest(t, nil, map[string]string{"locked": "definitely-not-bool"})
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	if stub.updateCalled {
+		t.Fatal("expected UpdateAccount not to be called")
+	}
+}
+
 func decodeUpdateFields(t *testing.T, raw []byte) []UpdateCredentialsField {
 	t.Helper()
 	if len(raw) == 0 {
@@ -1286,4 +1708,46 @@ func decodeStoredFields(t *testing.T, raw []byte) []Field {
 		t.Fatalf("unmarshal stored fields: %v", err)
 	}
 	return fields
+}
+
+func multipartUpdateCredentialsRequest(t *testing.T, files map[string][]byte, fields map[string]string) *http.Request {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	for fieldName, fileData := range files {
+		part, err := writer.CreateFormFile(fieldName, fieldName+".png")
+		if err != nil {
+			t.Fatalf("create form file %q: %v", fieldName, err)
+		}
+		if _, err := part.Write(fileData); err != nil {
+			t.Fatalf("write form file %q: %v", fieldName, err)
+		}
+	}
+	for key, value := range fields {
+		if err := writer.WriteField(key, value); err != nil {
+			t.Fatalf("write form field %q: %v", key, err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", bytes.NewReader(body.Bytes()))
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	return req
+}
+
+func minimalPNGBytes() []byte {
+	return []byte{
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+		0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41,
+		0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+		0x00, 0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92,
+		0xef, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+		0x44, 0xae, 0x42, 0x60, 0x82,
+	}
 }
