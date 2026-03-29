@@ -1,9 +1,13 @@
 package v1
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	"github.com/deicod/gotodon/internal/api/middleware"
 )
 
 func TestPreferencesHandler_GetDefaults(t *testing.T) {
@@ -37,6 +41,70 @@ func TestPreferencesHandler_GetDefaults(t *testing.T) {
 	}
 	if resp.ReadingAutoplayGifs {
 		t.Fatalf("reading:autoplay:gifs = true, want false")
+	}
+}
+
+func TestPreferencesHandler_Get_UnauthorizedWithoutAccountContext(t *testing.T) {
+	h := NewPreferencesHandler(nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/preferences", nil)
+	rec := httptest.NewRecorder()
+
+	h.Get(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestPreferencesHandler_Get_ForbiddenWithWrongScope(t *testing.T) {
+	h := NewPreferencesHandler(nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/preferences", nil)
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(12345))
+	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "write write:accounts")
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.Get(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+	var errResp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if got, want := errResp["error"], "This action is outside the authorized scopes"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+}
+
+func TestPreferencesHandler_Get_AllowsReadAccountsScope(t *testing.T) {
+	h := NewPreferencesHandler(nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/preferences", nil)
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(12345))
+	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "read:accounts")
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.Get(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestPreferencesHandler_Get_AllowsReadScopeHierarchy(t *testing.T) {
+	h := NewPreferencesHandler(nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/preferences", nil)
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(12345))
+	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "read")
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.Get(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
 }
 

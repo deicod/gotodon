@@ -14,6 +14,7 @@ import (
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 // PreferencesHandler handles preferences endpoints
@@ -60,6 +61,11 @@ func (h *PreferencesHandler) Get(w http.ResponseWriter, r *http.Request) {
 	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
 		web.JSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	scopes := middleware.GetScopes(r.Context())
+	if scopes != "" && !oauth.HasScope(scopes, "read:accounts") {
+		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
 		return
 	}
 
