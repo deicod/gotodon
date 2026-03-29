@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/rivo/uniseg"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/auth"
@@ -36,8 +38,15 @@ type AccountsHandler struct {
 }
 
 const (
-	defaultAccountsLimit = 40
-	maxProfileFields     = 4
+	defaultAccountsLimit      = 40
+	maxProfileFields          = 4
+	accountNoteLengthLimit    = 500
+	accountNoteURLPlaceholder = "xxxxxxxxxxxxxxxxxxxxxxx"
+)
+
+var (
+	accountNoteURLRegex           = regexp.MustCompile(`https?://[^\s<>()]+`)
+	accountNoteRemoteMentionRegex = regexp.MustCompile(`@([a-zA-Z0-9_]+)@([a-zA-Z0-9_]+(?:[.-]+[a-zA-Z0-9_]+)*)`)
 )
 
 // NewAccountsHandler creates a new accounts handler
@@ -214,6 +223,16 @@ type UpdateCredentialsSource struct {
 	QuotePolicy *string `json:"quote_policy" form:"quote_policy"`
 }
 
+type mastodonValidationDetail struct {
+	Error       string `json:"error"`
+	Description string `json:"description"`
+}
+
+type mastodonValidationErrorResponse struct {
+	Error   string                                `json:"error"`
+	Details map[string][]mastodonValidationDetail `json:"details"`
+}
+
 // UpdateCredentials handles PATCH /api/v1/accounts/update_credentials
 func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Request) {
 	accountID, ok := middleware.GetAccountID(r.Context())
@@ -260,6 +279,22 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 			web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Quote policy is invalid")
 			return
 		}
+	}
+
+	if req.Note != nil && accountNoteLength(*req.Note) > accountNoteLengthLimit {
+		description := fmt.Sprintf("character limit of %d exceeded", accountNoteLengthLimit)
+		web.JSON(w, http.StatusUnprocessableEntity, mastodonValidationErrorResponse{
+			Error: fmt.Sprintf("Validation failed: Note %s", description),
+			Details: map[string][]mastodonValidationDetail{
+				"note": {
+					{
+						Error:       "ERR_TOO_LONG",
+						Description: description,
+					},
+				},
+			},
+		})
+		return
 	}
 
 	if h.useDB() {
@@ -496,6 +531,54 @@ func normalizeAttributionDomains(domains []string) []string {
 		normalized = append(normalized, trimmed)
 	}
 	return normalized
+}
+
+func accountNoteLength(note string) int {
+	countable := accountNoteURLRegex.ReplaceAllStringFunc(note, normalizeAccountNoteURLForLength)
+	countable = accountNoteRemoteMentionRegex.ReplaceAllString(countable, "@$1")
+
+	graphemes := uniseg.NewGraphemes(countable)
+	count := 0
+	for graphemes.Next() {
+		count++
+	}
+	return count
+}
+
+func normalizeAccountNoteURLForLength(match string) string {
+	urlPart, suffix := splitAccountNoteURLSuffix(match)
+	if urlPart == "" {
+		return match
+	}
+	if shouldCountAccountNoteURLSuffixAsURL(urlPart, suffix) {
+		return accountNoteURLPlaceholder
+	}
+	return accountNoteURLPlaceholder + suffix
+}
+
+func splitAccountNoteURLSuffix(match string) (urlPart, suffix string) {
+	idx := len(match)
+	for idx > 0 {
+		switch match[idx-1] {
+		case '.', ',', '!', '?', ';', ':':
+			idx--
+		default:
+			return match[:idx], match[idx:]
+		}
+	}
+	return match, ""
+}
+
+func shouldCountAccountNoteURLSuffixAsURL(urlPart, suffix string) bool {
+	if len(suffix) != 1 {
+		return false
+	}
+	switch suffix[0] {
+	case '!', '?', ';', ':':
+		return strings.HasSuffix(urlPart, "/")
+	default:
+		return false
+	}
 }
 
 // Get handles GET /api/v1/accounts/:id

@@ -270,6 +270,128 @@ func TestAccountsHandler_UpdateCredentials_FieldsAttributesLimit(t *testing.T) {
 	}
 }
 
+func TestAccountsHandler_UpdateCredentials_NoteTooLongReturnsMastodonValidationPayload(t *testing.T) {
+	stub := &stubAccountUpdateQueries{}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+	body := `{"note":"` + strings.Repeat("a", 2*accountNoteLengthLimit) + `"}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+	if stub.updateCalled {
+		t.Fatal("expected UpdateAccount not to be called")
+	}
+	if stub.updateSettingsCalled {
+		t.Fatal("expected UpdateUserSettings not to be called")
+	}
+
+	var got struct {
+		Error   string `json:"error"`
+		Details struct {
+			Note []struct {
+				Error       string `json:"error"`
+				Description string `json:"description"`
+			} `json:"note"`
+		} `json:"details"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if !strings.HasPrefix(got.Error, "Validation failed") {
+		t.Fatalf("error = %q, want prefix %q", got.Error, "Validation failed")
+	}
+	if len(got.Details.Note) != 1 {
+		t.Fatalf("details.note length = %d, want 1", len(got.Details.Note))
+	}
+	if got.Details.Note[0].Error != "ERR_TOO_LONG" {
+		t.Fatalf("details.note[0].error = %q, want %q", got.Details.Note[0].Error, "ERR_TOO_LONG")
+	}
+	if !strings.Contains(got.Details.Note[0].Description, "character limit of 500 exceeded") {
+		t.Fatalf("details.note[0].description = %q, want to mention %q", got.Details.Note[0].Description, "character limit of 500 exceeded")
+	}
+}
+
+func TestAccountsHandler_UpdateCredentials_NoteLengthBoundaryValidUpdatesAccount(t *testing.T) {
+	stub := &stubAccountUpdateQueries{}
+	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+	note := strings.Repeat("a", accountNoteLengthLimit)
+	body := `{"note":"` + note + `"}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.UpdateCredentials(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !stub.updateCalled {
+		t.Fatal("expected UpdateAccount to be called")
+	}
+	if got := stub.updateParams.Note.String; got != note {
+		t.Fatalf("updated note = %q, want %q", got, note)
+	}
+}
+
+func TestAccountNoteLength_URLTrailingPunctuationIsPreserved(t *testing.T) {
+	got := accountNoteLength("https://example.com.")
+	want := len(accountNoteURLPlaceholder) + 1
+	if got != want {
+		t.Fatalf("accountNoteLength = %d, want %d", got, want)
+	}
+}
+
+func TestAccountNoteLength_URLTrailingCommaIsPreserved(t *testing.T) {
+	got := accountNoteLength("https://example.com,")
+	want := len(accountNoteURLPlaceholder) + 1
+	if got != want {
+		t.Fatalf("accountNoteLength = %d, want %d", got, want)
+	}
+}
+
+func TestAccountNoteLength_URLPathExclamationRemainsWeightedAsURL(t *testing.T) {
+	got := accountNoteLength("https://example.com/!")
+	want := len(accountNoteURLPlaceholder)
+	if got != want {
+		t.Fatalf("accountNoteLength = %d, want %d", got, want)
+	}
+}
+
+func TestAccountNoteLength_URLPathTrailingDotIsPreserved(t *testing.T) {
+	got := accountNoteLength("https://example.com/path.")
+	want := len(accountNoteURLPlaceholder) + 1
+	if got != want {
+		t.Fatalf("accountNoteLength = %d, want %d", got, want)
+	}
+}
+
+func TestAccountNoteLength_RemoteMentionTrailingPunctuationIsPreserved(t *testing.T) {
+	got := accountNoteLength("@alice@example.com.")
+	want := len("@alice.")
+	if got != want {
+		t.Fatalf("accountNoteLength = %d, want %d", got, want)
+	}
+}
+
+func TestAccountNoteLength_RemoteMentionSingleLabelDomainIsNormalized(t *testing.T) {
+	got := accountNoteLength("@alice@example")
+	want := len("@alice")
+	if got != want {
+		t.Fatalf("accountNoteLength = %d, want %d", got, want)
+	}
+}
+
 func TestAccountsHandler_UpdateCredentials_SourceJSON(t *testing.T) {
 	stub := &stubAccountUpdateQueries{}
 	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
