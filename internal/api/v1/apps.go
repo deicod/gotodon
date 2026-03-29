@@ -54,13 +54,16 @@ type CreateAppRequest struct {
 
 // CreateAppResponse is the response for POST /api/v1/apps
 type CreateAppResponse struct {
-	ID           string  `json:"id"`
-	Name         string  `json:"name"`
-	Website      *string `json:"website"`
-	RedirectURI  string  `json:"redirect_uri"`
-	ClientID     string  `json:"client_id"`
-	ClientSecret string  `json:"client_secret"`
-	VapidKey     string  `json:"vapid_key,omitempty"`
+	ID                    string   `json:"id"`
+	ClientID              string   `json:"client_id"`
+	ClientSecret          string   `json:"client_secret"`
+	ClientSecretExpiresAt int64    `json:"client_secret_expires_at"`
+	Name                  string   `json:"name"`
+	Website               *string  `json:"website"`
+	Scopes                []string `json:"scopes"`
+	RedirectURIs          []string `json:"redirect_uris"`
+	RedirectURI           string   `json:"redirect_uri"`
+	VapidKey              string   `json:"vapid_key,omitempty"`
 }
 
 // Create handles POST /api/v1/apps
@@ -135,26 +138,38 @@ func (h *AppsHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		normalizedScopeList := oauth.ParseScopes(dbApp.Scopes)
+		redirectURIs := splitAppRedirectURIs(dbApp.RedirectUri)
+
 		web.JSON(w, http.StatusOK, CreateAppResponse{
-			ID:           strconv.FormatInt(dbApp.ID, 10),
-			Name:         dbApp.Name,
-			Website:      website,
-			RedirectURI:  dbApp.RedirectUri,
-			ClientID:     dbApp.Uid,
-			ClientSecret: dbApp.Secret,
-			VapidKey:     h.vapidKey(),
+			ID:                    strconv.FormatInt(dbApp.ID, 10),
+			ClientID:              dbApp.Uid,
+			ClientSecret:          dbApp.Secret,
+			ClientSecretExpiresAt: 0,
+			Name:                  dbApp.Name,
+			Website:               website,
+			Scopes:                normalizedScopeList,
+			RedirectURIs:          redirectURIs,
+			RedirectURI:           dbApp.RedirectUri,
+			VapidKey:              h.vapidKey(),
 		})
 		return
 	}
 
+	normalizedScopeList := oauth.ParseScopes(normalizedScopes)
+	redirectURIList := splitAppRedirectURIs(req.RedirectURIs)
+
 	web.JSON(w, http.StatusOK, CreateAppResponse{
-		ID:           "1",
-		Name:         req.ClientName,
-		Website:      website,
-		RedirectURI:  req.RedirectURIs,
-		ClientID:     clientID,
-		ClientSecret: clientSecret,
-		VapidKey:     h.vapidKey(),
+		ID:                    "1",
+		ClientID:              clientID,
+		ClientSecret:          clientSecret,
+		ClientSecretExpiresAt: 0,
+		Name:                  req.ClientName,
+		Website:               website,
+		Scopes:                normalizedScopeList,
+		RedirectURIs:          redirectURIList,
+		RedirectURI:           req.RedirectURIs,
+		VapidKey:              h.vapidKey(),
 	})
 }
 

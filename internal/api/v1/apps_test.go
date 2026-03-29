@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -33,7 +34,10 @@ func (s appsTestTokenValidator) ValidateToken(_ context.Context, _ string) (*mid
 }
 
 func (s *stubAppsQueries) CreateOAuthApplication(_ context.Context, _ db.CreateOAuthApplicationParams) (db.OauthApplication, error) {
-	return db.OauthApplication{}, nil
+	if s.err != nil {
+		return db.OauthApplication{}, s.err
+	}
+	return s.app, nil
 }
 
 func (s *stubAppsQueries) GetOAuthApplication(_ context.Context, _ int64) (db.OauthApplication, error) {
@@ -60,6 +64,160 @@ func TestAppsHandler_VerifyCredentials_NoAppContextReturnsUnauthorized(t *testin
 	}
 	if errResp["error"] != "The access token is invalid" {
 		t.Fatalf("error = %v, want %q", errResp["error"], "The access token is invalid")
+	}
+}
+
+func TestAppsHandler_Create_SuccessPayloadShape_DBPath(t *testing.T) {
+	stub := &stubAppsQueries{
+		app: db.OauthApplication{
+			ID:          99,
+			Name:        "Parity App",
+			Uid:         "generated-client-id",
+			Secret:      "generated-client-secret",
+			Scopes:      "write read:statuses",
+			RedirectUri: "https://example.com/callback\nhttps://example.com/alt",
+			Website: pgtype.Text{
+				String: "https://example.com",
+				Valid:  true,
+			},
+		},
+	}
+
+	cfg := &config.Config{}
+	cfg.Secrets.VAPIDPublic = "test-vapid-key"
+	h := NewAppsHandler(stub, cfg)
+
+	body := strings.NewReader(`{
+		"client_name":"Parity App",
+		"redirect_uris":"https://example.com/callback\nhttps://example.com/alt",
+		"scopes":"write read:statuses",
+		"website":"https://example.com"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/apps", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.Create(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	if got := resp["id"]; got != "99" {
+		t.Fatalf("id = %v, want %q", got, "99")
+	}
+	if got := resp["client_id"]; got != "generated-client-id" {
+		t.Fatalf("client_id = %v, want %q", got, "generated-client-id")
+	}
+	if got := resp["client_secret"]; got != "generated-client-secret" {
+		t.Fatalf("client_secret = %v, want %q", got, "generated-client-secret")
+	}
+	if got := resp["client_secret_expires_at"]; got != float64(0) {
+		t.Fatalf("client_secret_expires_at = %v, want %v", got, float64(0))
+	}
+	if got := resp["name"]; got != "Parity App" {
+		t.Fatalf("name = %v, want %q", got, "Parity App")
+	}
+	if got := resp["website"]; got != "https://example.com" {
+		t.Fatalf("website = %v, want %q", got, "https://example.com")
+	}
+	if got := resp["vapid_key"]; got != "test-vapid-key" {
+		t.Fatalf("vapid_key = %v, want %q", got, "test-vapid-key")
+	}
+
+	scopes, ok := resp["scopes"].([]any)
+	if !ok {
+		t.Fatalf("scopes type = %T, want []any", resp["scopes"])
+	}
+	if len(scopes) != 2 || scopes[0] != "write" || scopes[1] != "read:statuses" {
+		t.Fatalf("scopes = %#v, want [write read:statuses]", scopes)
+	}
+
+	redirectURIs, ok := resp["redirect_uris"].([]any)
+	if !ok {
+		t.Fatalf("redirect_uris type = %T, want []any", resp["redirect_uris"])
+	}
+	if len(redirectURIs) != 2 || redirectURIs[0] != "https://example.com/callback" || redirectURIs[1] != "https://example.com/alt" {
+		t.Fatalf("redirect_uris = %#v, want [https://example.com/callback https://example.com/alt]", redirectURIs)
+	}
+	if got := resp["redirect_uri"]; got != "https://example.com/callback\nhttps://example.com/alt" {
+		t.Fatalf("redirect_uri = %v, want raw newline-delimited string", got)
+	}
+}
+
+func TestAppsHandler_Create_SuccessPayloadShape_NoDBFallback(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Secrets.VAPIDPublic = "test-vapid-key"
+	h := NewAppsHandler(nil, cfg)
+
+	body := strings.NewReader(`{
+		"client_name":"Parity App",
+		"redirect_uris":"https://example.com/callback\nhttps://example.com/alt",
+		"scopes":"write read:statuses",
+		"website":"https://example.com"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/apps", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.Create(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	if got := resp["id"]; got != "1" {
+		t.Fatalf("id = %v, want %q", got, "1")
+	}
+	if got := resp["client_secret_expires_at"]; got != float64(0) {
+		t.Fatalf("client_secret_expires_at = %v, want %v", got, float64(0))
+	}
+	if got := resp["name"]; got != "Parity App" {
+		t.Fatalf("name = %v, want %q", got, "Parity App")
+	}
+	if got := resp["website"]; got != "https://example.com" {
+		t.Fatalf("website = %v, want %q", got, "https://example.com")
+	}
+	if got := resp["vapid_key"]; got != "test-vapid-key" {
+		t.Fatalf("vapid_key = %v, want %q", got, "test-vapid-key")
+	}
+
+	clientID, ok := resp["client_id"].(string)
+	if !ok || strings.TrimSpace(clientID) == "" {
+		t.Fatalf("client_id = %v, want non-empty string", resp["client_id"])
+	}
+	clientSecret, ok := resp["client_secret"].(string)
+	if !ok || strings.TrimSpace(clientSecret) == "" {
+		t.Fatalf("client_secret = %v, want non-empty string", resp["client_secret"])
+	}
+
+	scopes, ok := resp["scopes"].([]any)
+	if !ok {
+		t.Fatalf("scopes type = %T, want []any", resp["scopes"])
+	}
+	if len(scopes) != 2 || scopes[0] != "write" || scopes[1] != "read:statuses" {
+		t.Fatalf("scopes = %#v, want [write read:statuses]", scopes)
+	}
+
+	redirectURIs, ok := resp["redirect_uris"].([]any)
+	if !ok {
+		t.Fatalf("redirect_uris type = %T, want []any", resp["redirect_uris"])
+	}
+	if len(redirectURIs) != 2 || redirectURIs[0] != "https://example.com/callback" || redirectURIs[1] != "https://example.com/alt" {
+		t.Fatalf("redirect_uris = %#v, want [https://example.com/callback https://example.com/alt]", redirectURIs)
+	}
+	if got := resp["redirect_uri"]; got != "https://example.com/callback\nhttps://example.com/alt" {
+		t.Fatalf("redirect_uri = %v, want raw newline-delimited string", got)
 	}
 }
 
