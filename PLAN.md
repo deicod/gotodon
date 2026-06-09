@@ -1,5 +1,9 @@
 # Gotodon <-> Mastodon 4.5.3 Compatibility Plan
 
+> **SUPERSEDED (2026-06-09):** This document's subsystem ratings predate ~50 commits of
+> OAuth, discovery, AP-collections, and account work and are no longer accurate.
+> See `GAP_CLOSURE_PLAN.md` for the current assessment and active task list.
+
 Last updated: 2026-01-30
 Target: Mastodon 4.5.3
 Scope: Server-side compatibility (schema, API v1/v2/admin, federation, streaming, OAuth/OIDC, background jobs/services, tests).
