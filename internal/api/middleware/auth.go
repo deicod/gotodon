@@ -35,6 +35,14 @@ type TokenValidator interface {
 	ValidateToken(ctx context.Context, token string) (*TokenInfo, error)
 }
 
+// Pending reasons for tokens whose user cannot use the full API yet.
+const (
+	// PendingUnconfirmed marks users that have not confirmed their email.
+	PendingUnconfirmed = "unconfirmed"
+	// PendingApproval marks users awaiting staff approval.
+	PendingApproval = "pending_approval"
+)
+
 // TokenInfo contains information about a validated token
 type TokenInfo struct {
 	TokenID   int64
@@ -42,6 +50,32 @@ type TokenInfo struct {
 	AccountID *int64 // nil for app-only tokens
 	AppID     int64
 	Scopes    string
+	// PendingReason is set when the token's user is not functional yet
+	// (unconfirmed email or pending approval). Such requests may only reach
+	// the endpoints needed to finish onboarding.
+	PendingReason string
+}
+
+// pendingAllowedRoutes are the endpoints a non-functional (unconfirmed or
+// unapproved) user may still call, mirroring Mastodon's skip_require_functional
+// controllers: checking/resending the confirmation email, inspecting their own
+// credentials, and logging out.
+var pendingAllowedRoutes = map[string]bool{
+	"POST /api/v1/emails/confirmations":       true,
+	"GET /api/v1/emails/check_confirmation":   true,
+	"GET /api/v1/accounts/verify_credentials": true,
+	"POST /oauth/revoke":                      true,
+}
+
+func pendingUserAllowed(r *http.Request) bool {
+	return pendingAllowedRoutes[r.Method+" "+r.URL.Path]
+}
+
+func pendingErrorMessage(reason string) string {
+	if reason == PendingApproval {
+		return "Your login is currently pending approval"
+	}
+	return "Your login is missing a confirmed e-mail address"
 }
 
 // RequireAuth returns middleware that requires authentication
@@ -57,6 +91,10 @@ func RequireAuth(validator TokenValidator) func(http.Handler) http.Handler {
 			info, err := validator.ValidateToken(r.Context(), token)
 			if err != nil {
 				web.JSONError(w, http.StatusUnauthorized, authErrorMessage(err))
+				return
+			}
+			if info.PendingReason != "" && !pendingUserAllowed(r) {
+				web.JSONError(w, http.StatusForbidden, pendingErrorMessage(info.PendingReason))
 				return
 			}
 
@@ -92,6 +130,10 @@ func Authenticate(validator TokenValidator) func(http.Handler) http.Handler {
 			info, err := validator.ValidateToken(ctx, token)
 			if err != nil {
 				web.JSONError(w, http.StatusUnauthorized, authErrorMessage(err))
+				return
+			}
+			if info.PendingReason != "" && !pendingUserAllowed(r) {
+				web.JSONError(w, http.StatusForbidden, pendingErrorMessage(info.PendingReason))
 				return
 			}
 
@@ -208,6 +250,11 @@ func queryAccessToken(r *http.Request) string {
 		return token
 	}
 	return ""
+}
+
+// ClientIP resolves the originating client IP, honoring proxy headers.
+func ClientIP(r *http.Request) string {
+	return clientIP(r)
 }
 
 func clientIP(r *http.Request) string {

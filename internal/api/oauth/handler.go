@@ -21,6 +21,7 @@ import (
 	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/mailer"
 	"github.com/deicod/gotodon/internal/streaming"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/oauth"
@@ -52,6 +53,9 @@ type oauthQuerier interface {
 	GetUserByEmail(ctx context.Context, email string) (db.User, error)
 	GetAccountByID(ctx context.Context, id int64) (db.Account, error)
 	DeletePushSubscription(ctx context.Context, accessTokenID pgtype.Int8) error
+	CreateLoginActivity(ctx context.Context, arg db.CreateLoginActivityParams) (db.LoginActivity, error)
+	CountSuccessfulLoginActivitiesByMaskedIP(ctx context.Context, arg db.CountSuccessfulLoginActivitiesByMaskedIPParams) (int64, error)
+	UpdateUserSignIn(ctx context.Context, id int64) error
 }
 
 // Handler handles OAuth endpoints
@@ -59,6 +63,7 @@ type Handler struct {
 	queries     oauthQuerier
 	cfg         *config.Config
 	killEmitter tokenKillPublisher
+	mail        mailer.Deliverer
 }
 
 type tokenKillPublisher interface {
@@ -469,11 +474,13 @@ func (h *Handler) AuthorizePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.authenticateUser(ctx, email, password)
+	user, failureReason, err := h.authenticateUser(ctx, email, password)
 	if err != nil {
+		h.recordLoginFailure(ctx, r, user, failureReason)
 		writeOAuthError(w, http.StatusUnauthorized, "invalid_grant", "Invalid credentials")
 		return
 	}
+	h.recordLoginSuccess(ctx, r, user)
 
 	code, err := oauth.GenerateToken(32)
 	if err != nil {
@@ -724,18 +731,18 @@ func normalizeScopes(scopeStr string) ([]string, string, error) {
 	return scopes, oauth.NormalizeScopes(scopes), nil
 }
 
-func (h *Handler) authenticateUser(ctx context.Context, email, password string) (db.User, error) {
+func (h *Handler) authenticateUser(ctx context.Context, email, password string) (db.User, string, error) {
 	user, err := h.queries.GetUserByEmail(ctx, email)
 	if err != nil {
-		return db.User{}, err
+		return db.User{}, "", err
 	}
 	if user.Disabled || !user.Approved || !user.ConfirmedAt.Valid {
-		return db.User{}, errors.New("user not eligible")
+		return user, "account_inactive", errors.New("user not eligible")
 	}
 	if !auth.CheckPassword(password, user.EncryptedPassword) {
-		return db.User{}, errors.New("invalid password")
+		return user, "invalid_password", errors.New("invalid password")
 	}
-	return user, nil
+	return user, "", nil
 }
 
 func (h *Handler) issueAccessToken(ctx context.Context, app db.OauthApplication, ownerID *int64, scopes string, allowReuse bool) (TokenResponse, error) {

@@ -35,6 +35,9 @@ type stubOAuthStore struct {
 	nextTokenID     int64
 	lastUsed        []db.UpdateOAuthTokenLastUsedParams
 	deletedTokens   []pgtype.Int8
+	loginActivities []db.CreateLoginActivityParams
+	signInUpdates   []int64
+	knownIPCount    int64
 }
 
 type publishedKillEvent struct {
@@ -262,6 +265,20 @@ func (s *stubOAuthStore) DeletePushSubscription(ctx context.Context, accessToken
 
 func (s *stubOAuthStore) UpdateOAuthTokenLastUsed(ctx context.Context, arg db.UpdateOAuthTokenLastUsedParams) error {
 	s.lastUsed = append(s.lastUsed, arg)
+	return nil
+}
+
+func (s *stubOAuthStore) CreateLoginActivity(ctx context.Context, arg db.CreateLoginActivityParams) (db.LoginActivity, error) {
+	s.loginActivities = append(s.loginActivities, arg)
+	return db.LoginActivity{ID: int64(len(s.loginActivities))}, nil
+}
+
+func (s *stubOAuthStore) CountSuccessfulLoginActivitiesByMaskedIP(ctx context.Context, arg db.CountSuccessfulLoginActivitiesByMaskedIPParams) (int64, error) {
+	return s.knownIPCount, nil
+}
+
+func (s *stubOAuthStore) UpdateUserSignIn(ctx context.Context, id int64) error {
+	s.signInUpdates = append(s.signInUpdates, id)
 	return nil
 }
 

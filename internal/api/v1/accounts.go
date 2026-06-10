@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -25,6 +26,7 @@ import (
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/federation"
+	"github.com/deicod/gotodon/internal/mailer"
 	"github.com/deicod/gotodon/internal/media"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/activitypub"
@@ -39,6 +41,7 @@ type AccountsHandler struct {
 	outgoing             federation.OutgoingDeliverer
 	resolver             *federation.RemoteActorResolver
 	profileMediaUploader profileMediaUploader
+	mail                 mailer.Deliverer
 }
 
 type profileMediaUploader interface {
@@ -89,6 +92,15 @@ func (h *AccountsHandler) SetProfileMediaUploader(uploader profileMediaUploader)
 		return
 	}
 	h.profileMediaUploader = uploader
+}
+
+// SetMailDeliverer enables confirmation emails for new registrations. When no
+// deliverer is configured, registrations are confirmed immediately.
+func (h *AccountsHandler) SetMailDeliverer(deliverer mailer.Deliverer) {
+	if h == nil {
+		return
+	}
+	h.mail = deliverer
 }
 
 func (h *AccountsHandler) useDB() bool {
@@ -1182,6 +1194,12 @@ func (h *AccountsHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	registrationsMode := strings.ToLower(strings.TrimSpace(h.cfg.Instance.RegistrationsMode))
+	if h.cfg.Instance.SingleUserMode || registrationsMode == "none" {
+		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
+		return
+	}
+
 	if req.Username == "" {
 		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Username can't be blank")
 		return
@@ -1244,15 +1262,44 @@ func (h *AccountsHandler) Register(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Confirm the user immediately for now
+		// Approval-mode registrations stay unapproved until staff review.
+		approved := registrationsMode != "approved"
+
+		// With a mail deliverer configured the account starts unconfirmed and
+		// receives confirmation instructions; otherwise confirm immediately so
+		// instances without SMTP stay usable.
 		now := time.Now()
+		confirmedAt := pgtype.Timestamptz{Time: now, Valid: true}
+		confirmationToken := pgtype.Text{Valid: false}
+		confirmationSentAt := pgtype.Timestamptz{Valid: false}
+		if h.mail != nil {
+			token, err := auth.GenerateConfirmationToken()
+			if err != nil {
+				web.JSONError(w, http.StatusInternalServerError, "Failed to generate confirmation token")
+				return
+			}
+			confirmedAt = pgtype.Timestamptz{Valid: false}
+			confirmationToken = pgtype.Text{String: token, Valid: true}
+			confirmationSentAt = pgtype.Timestamptz{Time: now, Valid: true}
+		}
+
+		// The column is varchar(255); ignore junk that would fail the insert.
+		locale := pgtype.Text{Valid: false}
+		if trimmed := strings.TrimSpace(req.Locale); trimmed != "" && len(trimmed) <= 255 {
+			locale = pgtype.Text{String: trimmed, Valid: true}
+		}
+
 		dbUser, err := qtx.CreateUser(ctx, db.CreateUserParams{
-			Email:             req.Email,
-			EncryptedPassword: hashedPassword,
-			AccountID:         dbAcc.ID,
-			ConfirmedAt:       pgtype.Timestamptz{Time: now, Valid: true},
-			InviteID:          pgtype.Int8{Valid: false},
-			RoleID:            pgtype.Int8{Valid: false},
+			Email:              req.Email,
+			EncryptedPassword:  hashedPassword,
+			AccountID:          dbAcc.ID,
+			ConfirmedAt:        confirmedAt,
+			InviteID:           pgtype.Int8{Valid: false},
+			RoleID:             pgtype.Int8{Valid: false},
+			ConfirmationToken:  confirmationToken,
+			ConfirmationSentAt: confirmationSentAt,
+			Locale:             locale,
+			Approved:           approved,
 		})
 		if err != nil {
 			// Check for unique constraint violation (code 23505)
@@ -1288,6 +1335,12 @@ func (h *AccountsHandler) Register(w http.ResponseWriter, r *http.Request) {
 		if err := tx.Commit(ctx); err != nil {
 			web.JSONError(w, http.StatusInternalServerError, "Failed to commit transaction")
 			return
+		}
+
+		if h.mail != nil && confirmationToken.Valid {
+			if err := h.mail.Deliver(ctx, confirmationMail(h.cfg, dbUser.Email, locale.String, confirmationToken.String, approved)); err != nil {
+				slog.Error("Failed to enqueue confirmation mail", "error", err)
+			}
 		}
 
 		createdAt := time.Now()

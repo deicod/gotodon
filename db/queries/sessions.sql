@@ -63,6 +63,14 @@ WHERE user_id = $1 AND success = true
 ORDER BY created_at DESC
 LIMIT 1;
 
+-- name: CountSuccessfulLoginActivitiesByMaskedIP :one
+SELECT COUNT(*)
+FROM login_activities
+WHERE user_id = $1
+  AND success = true
+  AND ip IS NOT NULL
+  AND ip <<= (@masked_ip::text)::inet;
+
 -- WebAuthn Credentials queries
 
 -- name: GetWebAuthnCredential :one

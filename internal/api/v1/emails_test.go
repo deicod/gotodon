@@ -33,6 +33,8 @@ type stubEmailsQueries struct {
 	getErr       error
 	updateCalled bool
 	updateParams db.UpdateUserConfirmationTokenParams
+	emailUpdated bool
+	emailParams  db.UpdateUserEmailParams
 }
 
 func (s *stubEmailsQueries) GetUserByAccountID(_ context.Context, _ int64) (db.User, error) {
@@ -45,6 +47,12 @@ func (s *stubEmailsQueries) GetUserByAccountID(_ context.Context, _ int64) (db.U
 func (s *stubEmailsQueries) UpdateUserConfirmationToken(_ context.Context, arg db.UpdateUserConfirmationTokenParams) error {
 	s.updateCalled = true
 	s.updateParams = arg
+	return nil
+}
+
+func (s *stubEmailsQueries) UpdateUserEmail(_ context.Context, arg db.UpdateUserEmailParams) error {
+	s.emailUpdated = true
+	s.emailParams = arg
 	return nil
 }
 

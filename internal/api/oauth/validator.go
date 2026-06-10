@@ -68,8 +68,16 @@ func (v *TokenValidator) ValidateToken(ctx context.Context, token string) (*midd
 
 	if dbToken.ResourceOwnerID.Valid {
 		user, err := v.queries.GetUserByID(ctx, dbToken.ResourceOwnerID.Int64)
-		if err != nil || user.Disabled || !user.Approved || !user.ConfirmedAt.Valid {
+		if err != nil || user.Disabled {
 			return nil, oauth.ErrInvalidToken
+		}
+		// Unconfirmed or unapproved users keep a valid token but may only
+		// reach onboarding endpoints; the middleware enforces the restriction.
+		switch {
+		case !user.ConfirmedAt.Valid:
+			info.PendingReason = middleware.PendingUnconfirmed
+		case !user.Approved:
+			info.PendingReason = middleware.PendingApproval
 		}
 		userID := user.ID
 		accountID := user.AccountID

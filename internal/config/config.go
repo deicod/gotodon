@@ -17,6 +17,7 @@ type Config struct {
 	Secrets     SecretsConfig     `mapstructure:"secrets"`
 	Instance    InstanceConfig    `mapstructure:"instance"`
 	Translation TranslationConfig `mapstructure:"translation"`
+	Mail        MailConfig        `mapstructure:"mail"`
 }
 
 // ServerConfig holds HTTP server configuration.
@@ -84,6 +85,18 @@ type InstanceConfig struct {
 	RegistrationsMode string `mapstructure:"registrations_mode"` // open, none, approved
 }
 
+// PublicWebDomain returns the browser-facing domain, preferring web_domain
+// over local_domain, with a development fallback.
+func (c InstanceConfig) PublicWebDomain() string {
+	if domain := strings.TrimSpace(c.WebDomain); domain != "" {
+		return domain
+	}
+	if domain := strings.TrimSpace(c.LocalDomain); domain != "" {
+		return domain
+	}
+	return "localhost:3000"
+}
+
 // TranslationConfig holds translation service configuration.
 type TranslationConfig struct {
 	Backend  string `mapstructure:"backend"` // none, deepl, libretranslate
@@ -95,6 +108,28 @@ type TranslationConfig struct {
 // Enabled returns true if translation is configured
 func (c *TranslationConfig) Enabled() bool {
 	return c.Backend != "" && c.Backend != "none"
+}
+
+// MailConfig holds outbound SMTP configuration.
+type MailConfig struct {
+	SMTPServer      string `mapstructure:"smtp_server"`
+	SMTPPort        int    `mapstructure:"smtp_port"`
+	SMTPLogin       string `mapstructure:"smtp_login"`
+	SMTPPassword    string `mapstructure:"smtp_password"`
+	SMTPAuthMethod  string `mapstructure:"smtp_auth_method"` // plain, login, cram_md5, none
+	SMTPFromAddress string `mapstructure:"smtp_from_address"`
+	SMTPDomain      string `mapstructure:"smtp_domain"`          // HELO/EHLO domain
+	SMTPSSL         bool   `mapstructure:"smtp_ssl"`             // implicit TLS (SMTPS)
+	SMTPStartTLS    string `mapstructure:"smtp_enable_starttls"` // auto, always, never
+	SMTPNoVerify    bool   `mapstructure:"smtp_tls_no_verify"`   // skip certificate verification
+	// SMTPVerifyMode mirrors Mastodon's SMTP_OPENSSL_VERIFY_MODE (peer, none);
+	// "none" implies SMTPNoVerify.
+	SMTPVerifyMode string `mapstructure:"smtp_openssl_verify_mode"`
+}
+
+// Enabled returns true if outbound mail is configured.
+func (c *MailConfig) Enabled() bool {
+	return c.SMTPServer != ""
 }
 
 // Load reads configuration from file and environment variables.
@@ -122,6 +157,10 @@ func Load() (*Config, error) {
 		"low":      1,
 	})
 	v.SetDefault("instance.registrations_mode", "open")
+	v.SetDefault("mail.smtp_port", 587)
+	v.SetDefault("mail.smtp_auth_method", "plain")
+	v.SetDefault("mail.smtp_enable_starttls", "auto")
+	v.SetDefault("mail.smtp_from_address", "notifications@localhost")
 
 	// Config file settings
 	v.SetConfigName("gotodon")
@@ -152,6 +191,17 @@ func Load() (*Config, error) {
 	_ = v.BindEnv("secrets.otp_secret", "OTP_SECRET")
 	_ = v.BindEnv("secrets.vapid_private_key", "VAPID_PRIVATE_KEY")
 	_ = v.BindEnv("secrets.vapid_public_key", "VAPID_PUBLIC_KEY")
+	// Mail env vars (Mastodon compatible)
+	_ = v.BindEnv("mail.smtp_server", "SMTP_SERVER")
+	_ = v.BindEnv("mail.smtp_port", "SMTP_PORT")
+	_ = v.BindEnv("mail.smtp_login", "SMTP_LOGIN")
+	_ = v.BindEnv("mail.smtp_password", "SMTP_PASSWORD")
+	_ = v.BindEnv("mail.smtp_auth_method", "SMTP_AUTH_METHOD")
+	_ = v.BindEnv("mail.smtp_from_address", "SMTP_FROM_ADDRESS")
+	_ = v.BindEnv("mail.smtp_domain", "SMTP_DOMAIN")
+	_ = v.BindEnv("mail.smtp_ssl", "SMTP_SSL")
+	_ = v.BindEnv("mail.smtp_enable_starttls", "SMTP_ENABLE_STARTTLS")
+	_ = v.BindEnv("mail.smtp_openssl_verify_mode", "SMTP_OPENSSL_VERIFY_MODE")
 	// Translation service env vars (Mastodon compatible)
 	_ = v.BindEnv("translation.api_key", "DEEPL_API_KEY")
 	_ = v.BindEnv("translation.plan", "DEEPL_PLAN")
@@ -167,6 +217,11 @@ func Load() (*Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshaling config: %w", err)
+	}
+
+	// Mastodon expresses TLS verification as SMTP_OPENSSL_VERIFY_MODE=none|peer.
+	if strings.EqualFold(cfg.Mail.SMTPVerifyMode, "none") {
+		cfg.Mail.SMTPNoVerify = true
 	}
 
 	return &cfg, nil

@@ -1,8 +1,9 @@
 -- name: CreateUser :one
 INSERT INTO users (
-    email, encrypted_password, account_id, confirmed_at, invite_id, role_id
+    email, encrypted_password, account_id, confirmed_at, invite_id, role_id,
+    confirmation_token, confirmation_sent_at, locale, approved
 ) VALUES (
-    $1, $2, $3, $4, $5, $6
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
 ) RETURNING *;
 
 -- name: GetUserByEmail :one
@@ -59,3 +60,48 @@ WHERE COALESCE(current_sign_in_at, last_sign_in_at) >= $1
 SELECT r.* FROM user_roles r
 JOIN users u ON u.role_id = r.id
 WHERE u.id = $1;
+
+-- name: ConfirmUser :exec
+UPDATE users
+SET confirmed_at = now(),
+    confirmation_token = NULL,
+    updated_at = now()
+WHERE id = $1;
+
+-- name: UpdateUserEmail :exec
+UPDATE users
+SET email = $2,
+    updated_at = now()
+WHERE id = $1;
+
+-- name: UpdateUserResetPasswordToken :exec
+UPDATE users
+SET reset_password_token = $2,
+    reset_password_sent_at = now(),
+    updated_at = now()
+WHERE id = $1;
+
+-- name: UpdateUserPassword :exec
+UPDATE users
+SET encrypted_password = $2,
+    reset_password_token = NULL,
+    reset_password_sent_at = NULL,
+    updated_at = now()
+WHERE id = $1;
+
+-- name: UpdateUserSignIn :exec
+UPDATE users
+SET sign_in_count = sign_in_count + 1,
+    last_sign_in_at = current_sign_in_at,
+    current_sign_in_at = now(),
+    updated_at = now()
+WHERE id = $1;
+
+-- name: ListUsersWithPermission :many
+-- The administrator flag (bit 0) implies every permission, mirroring Mastodon's UserRole.
+SELECT u.* FROM users u
+JOIN user_roles r ON r.id = u.role_id
+WHERE ((r.permissions & @permission::bigint) != 0 OR (r.permissions & 1) != 0)
+  AND u.disabled = false
+  AND u.approved = true
+  AND u.confirmed_at IS NOT NULL;

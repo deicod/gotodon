@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	activitypubapi "github.com/deicod/gotodon/internal/api/activitypub"
 	"github.com/deicod/gotodon/internal/api/admin"
 	authorizeinteractionapi "github.com/deicod/gotodon/internal/api/authorizeinteraction"
+	authwebapi "github.com/deicod/gotodon/internal/api/authweb"
 	compatapi "github.com/deicod/gotodon/internal/api/compat"
 	hostmetaapi "github.com/deicod/gotodon/internal/api/hostmeta"
 	manifestapi "github.com/deicod/gotodon/internal/api/manifest"
@@ -36,6 +38,7 @@ import (
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/federation"
+	"github.com/deicod/gotodon/internal/mailer"
 	"github.com/deicod/gotodon/internal/media"
 	"github.com/deicod/gotodon/internal/services"
 	"github.com/deicod/gotodon/internal/streaming"
@@ -174,6 +177,39 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		deliveryEnqueuer = deliveryQueue
 	}
 
+	// Outbound mail: queued through workers when available, otherwise sent
+	// in-process. Without SMTP configured, registrations auto-confirm.
+	var (
+		mailService   *mailer.Service
+		mailDeliverer mailer.Deliverer
+	)
+	if cfg.Mail.Enabled() {
+		mailSender, err := mailer.NewSMTPSender(cfg.Mail)
+		if err != nil {
+			return fmt.Errorf("initializing mailer: %w", err)
+		}
+		instanceProvider := func(ctx context.Context) mailer.InstanceInfo {
+			title := "Gotodon"
+			if rows, err := queries.GetSettingsByVars(ctx, []string{"site_title"}); err == nil {
+				for _, row := range rows {
+					if row.Var == "site_title" && row.Value.Valid && strings.TrimSpace(row.Value.String) != "" {
+						title = row.Value.String
+					}
+				}
+			}
+			return mailer.InstanceInfo{Title: title, Domain: cfg.Instance.PublicWebDomain()}
+		}
+		mailService = mailer.NewService(mailSender, cfg.Mail.SMTPFromAddress, instanceProvider)
+		if workerManager != nil {
+			mailDeliverer = workers.NewMailEnqueuer(workerManager.Client())
+		} else {
+			mailDeliverer = mailer.NewDirectDeliverer(mailService, logger)
+		}
+		logger.Info("Outbound mail enabled", "server", cfg.Mail.SMTPServer)
+	} else {
+		logger.Warn("SMTP not configured; transactional mail is disabled and new registrations are confirmed immediately")
+	}
+
 	outgoingService := federation.NewOutgoingService(queries, cfg.Instance.LocalDomain, deliveryEnqueuer)
 
 	var pubSubHandler http.Handler
@@ -200,6 +236,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	accountsHandler := v1.NewAccountsHandler(queries, pool, cfg, outgoingService)
 	if remoteAccountEnqueuer != nil {
 		accountsHandler.SetRemoteAccountRefresher(remoteAccountEnqueuer)
+	}
+	if mailDeliverer != nil {
+		accountsHandler.SetMailDeliverer(mailDeliverer)
 	}
 	accountsHandler.RegisterRoutes(mux)
 
@@ -325,6 +364,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	v1AnnualReportsHandler.RegisterRoutes(mux)
 
 	v1EmailsHandler := v1.NewEmailsHandler(queries)
+	if mailDeliverer != nil {
+		v1EmailsHandler.SetMailDeliverer(cfg, mailDeliverer)
+	}
 	v1EmailsHandler.RegisterRoutes(mux)
 
 	v1PeersHandler := v1.NewPeersHandler(queries)
@@ -366,7 +408,14 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	// Register OAuth handlers
 	oauthHandler := oauthapi.NewHandler(queries, cfg, streamingHub)
+	if mailDeliverer != nil {
+		oauthHandler.SetMailDeliverer(mailDeliverer)
+	}
 	oauthHandler.RegisterRoutes(mux)
+
+	// Browser-facing confirmation and password reset flows.
+	authwebHandler := authwebapi.NewHandler(queries, cfg, mailDeliverer)
+	authwebHandler.RegisterRoutes(mux)
 
 	oembedHandler := oembedapi.NewHandler(queries, cfg)
 	oembedHandler.RegisterRoutes(mux)
@@ -426,7 +475,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	if workerManager != nil {
 		remoteAccountResolver := federation.NewRemoteActorResolver(queries, cfg.Instance.LocalDomain)
-		if err := workerManager.Register(
+		registrars := []workers.Registrar{
 			&workers.DeliveryRegistrar{Store: queries, Deliver: deliveryService.DeliverActivity},
 			&workers.RemoteAccountRegistrar{Resolver: remoteAccountResolver},
 			&workers.RemoteStatusRegistrar{Fetcher: remoteStatusFetcher, Lookup: queries},
@@ -435,7 +484,11 @@ func runServer(cmd *cobra.Command, _ []string) error {
 			&workers.LinkCrawlerRegistrar{Crawler: linkCrawler},
 			&workers.StatusCleanupRegistrar{Runner: statusCleanup},
 			&workers.MediaCleanupRegistrar{Runner: mediaCleanup},
-		); err != nil {
+		}
+		if mailService != nil {
+			registrars = append(registrars, &workers.MailRegistrar{Service: mailService})
+		}
+		if err := workerManager.Register(registrars...); err != nil {
 			return fmt.Errorf("registering workers: %w", err)
 		}
 		startErr := make(chan error, 1)
@@ -520,6 +573,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	// V1 Reports (User API)
 	v1ReportsHandler := v1.NewReportsHandler(queries)
+	if mailDeliverer != nil {
+		v1ReportsHandler.SetMailDeliverer(cfg, mailDeliverer)
+	}
 	mux.HandleFunc("POST /api/v1/reports", v1ReportsHandler.Create)
 
 	// Health check
