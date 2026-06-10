@@ -54,19 +54,19 @@ No email is ever sent. Registration (`POST /api/v1/accounts`) generates a confir
 token that goes nowhere; `/api/v1/emails/confirmations` "resends" nothing; password
 reset and security mails don't exist. Reference: `mastodon/app/mailers/*`.
 
-- [ ] G1.1 Add `internal/mailer` package: SMTP client (host/port/TLS/auth from config),
+- [x] G1.1 Add `internal/mailer` package: SMTP client (host/port/TLS/auth from config),
       async send via worker queue, plain-text templates with i18n-ready strings.
       Config keys mirroring Mastodon's `SMTP_*` env vars.
-- [ ] G1.2 Wire confirmation mail into registration and
+- [x] G1.2 Wire confirmation mail into registration and
       `POST /api/v1/emails/confirmations`; add `GET /auth/confirmation` (or equivalent
       link target) to consume the token and set `users.confirmed_at`.
-- [ ] G1.3 Password reset flow: request + token consumption endpoints
+- [x] G1.3 Password reset flow: request + token consumption endpoints
       (Mastodon: devise `recoverable`), mail template, token expiry.
-- [ ] G1.4 Security mails: new sign-in from unknown IP (optional, config-gated),
+- [x] G1.4 Security mails: new sign-in from unknown IP (optional, config-gated),
       password/email changed notices.
-- [ ] G1.5 Admin mails: new report notification, new pending account notification to
+- [x] G1.5 Admin mails: new report notification, new pending account notification to
       moderators (`AdminMailer`).
-- [ ] G1.6 Tests: mailer unit tests with a fake SMTP sink; handler tests asserting
+- [x] G1.6 Tests: mailer unit tests with a fake SMTP sink; handler tests asserting
       enqueue.
 
 ### G2 · Web Push delivery — P0
