@@ -47,3 +47,6 @@ SET data = $2,
     updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: ListPushSubscriptionsByUserID :many
+SELECT * FROM web_push_subscriptions WHERE user_id = $1 ORDER BY id;

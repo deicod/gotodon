@@ -372,6 +372,7 @@ type Querier interface {
 	GetMutesByAccountIDs(ctx context.Context, arg GetMutesByAccountIDsParams) ([]Mute, error)
 	GetMutesFromAccounts(ctx context.Context, arg GetMutesFromAccountsParams) ([]Mute, error)
 	GetNotification(ctx context.Context, arg GetNotificationParams) (Notification, error)
+	GetNotificationByID(ctx context.Context, id int64) (Notification, error)
 	// Notification Permissions queries
 	GetNotificationPermission(ctx context.Context, arg GetNotificationPermissionParams) (NotificationPermission, error)
 	// Notification Policies queries
@@ -382,6 +383,7 @@ type Querier interface {
 	GetOAuthAccessGrantByToken(ctx context.Context, token string) (OauthAccessGrant, error)
 	GetOAuthAccessGrantByTokenIncludingRevoked(ctx context.Context, token string) (OauthAccessGrant, error)
 	GetOAuthAccessToken(ctx context.Context, token string) (OauthAccessToken, error)
+	GetOAuthAccessTokenByID(ctx context.Context, id int64) (OauthAccessToken, error)
 	GetOAuthAccessTokenByRefresh(ctx context.Context, refreshToken pgtype.Text) (OauthAccessToken, error)
 	GetOAuthAccessTokenByRefreshIncludingRevoked(ctx context.Context, refreshToken pgtype.Text) (OauthAccessToken, error)
 	GetOAuthAccessTokenByTokenIncludingRevoked(ctx context.Context, token string) (OauthAccessToken, error)
@@ -533,6 +535,7 @@ type Querier interface {
 	ListPendingTrendingStatuses(ctx context.Context, arg ListPendingTrendingStatusesParams) ([]Status, error)
 	ListPinnedStatusIDs(ctx context.Context, arg ListPinnedStatusIDsParams) ([]int64, error)
 	ListPublicDomainBlocks(ctx context.Context) ([]DomainBlock, error)
+	ListPushSubscriptionsByUserID(ctx context.Context, userID pgtype.Int8) ([]WebPushSubscription, error)
 	ListRebloggedStatusIDs(ctx context.Context, arg ListRebloggedStatusIDsParams) ([]pgtype.Int8, error)
 	ListRuleTranslations(ctx context.Context, ruleID int64) ([]RuleTranslation, error)
 	ListRules(ctx context.Context) ([]Rule, error)

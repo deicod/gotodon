@@ -30,10 +30,17 @@ type UpdateStore interface {
 
 // UpdateService processes incoming Update activities.
 type UpdateService struct {
-	store       UpdateStore
-	localDomain string
-	fetcher     activitypub.ActorFetcher
-	helper      *CreateService
+	store         UpdateStore
+	localDomain   string
+	fetcher       activitypub.ActorFetcher
+	helper        *CreateService
+	pushPublisher PushNotificationPublisher
+}
+
+// SetPushPublisher enables Web Push delivery for mention notifications
+// created by status edits.
+func (s *UpdateService) SetPushPublisher(publisher PushNotificationPublisher) {
+	s.pushPublisher = publisher
 }
 
 // NewUpdateService creates an Update service for incoming edits.
@@ -565,7 +572,7 @@ func (s *UpdateService) syncMentions(ctx context.Context, authorID, statusID int
 		return err
 	}
 
-	_, err = s.store.CreateNotifications(ctx, db.CreateNotificationsParams{
+	notifs, err := s.store.CreateNotifications(ctx, db.CreateNotificationsParams{
 		Column1:       newIDs,
 		FromAccountID: authorID,
 		ActivityType:  "Status",
@@ -575,6 +582,7 @@ func (s *UpdateService) syncMentions(ctx context.Context, authorID, statusID int
 	if err != nil {
 		return err
 	}
+	publishPushNotifications(ctx, s.pushPublisher, notifs)
 
 	return nil
 }

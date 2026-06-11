@@ -1,6 +1,6 @@
 # Gotodon Port Status & Gap-Closure Plan
 
-Last updated: 2026-06-09
+Last updated: 2026-06-10
 Target: Mastodon 4.5.3 (server-side compatibility)
 Supersedes: `PLAN.md` (last updated 2026-01-30; its subsystem ratings are stale)
 
@@ -31,13 +31,13 @@ Supersedes: `PLAN.md` (last updated 2026-01-30; its subsystem ratings are stale)
 | Streaming | **High** | SSE/WS, wildcard route, multistream, full event set incl. `status.update`, `filters_changed`, `announcement.*`, `conversation`. |
 | Search | **Done (by design)** | Postgres FTS (`websearch_to_tsquery`) instead of Elasticsearch. |
 | Workers | **Medium** | 8 workers (delivery, remote account/status, scheduled status, media processing, link crawler, status/media cleanup) vs Mastodon's ~75. Most gaps map to missing features below. |
-| **Email** | **Missing** | No SMTP/mailer at all (G1). |
-| **Web Push delivery** | **Missing** | Subscriptions stored, VAPID configured, but pushes are never sent (G2). |
+| **Email** | **Done** | `internal/mailer` + worker queue; confirmation, reset, security, admin mails (G1). |
+| **Web Push delivery** | **Done** | `internal/push`: RFC 8291/8292, Mastodon-shaped payloads, dead-subscription cleanup, hooked into notification creation (G2). |
 | **FASP** | **Missing** | Tables exist, zero endpoints/logic (G9). |
 | Tests | **Good unit coverage** | All packages pass. No integration or client/federation compatibility suites (G13). |
 
-The short version: **routes, schema, payloads, OAuth, discovery, and AP serving are in
-good shape. The remaining work is the "engine room": email, push delivery, federation
+The short version: **routes, schema, payloads, OAuth, discovery, AP serving, email,
+and web push are in good shape. The remaining work is the "engine room": federation
 side-effects (votes, reports, migration, quotes), account lifecycle depth, scheduled
 maintenance jobs, and the 4.5-era FASP subsystem.**
 
@@ -75,16 +75,20 @@ reset and security mails don't exist. Reference: `mastodon/app/mailers/*`.
 notification is ever pushed. Reference: `mastodon/app/workers/web/push_notification_worker.rb`,
 `Webpush` payload format in `app/serializers/web/notification_serializer.rb`.
 
-- [ ] G2.1 Implement RFC 8291 (aes128gcm) message encryption + RFC 8292 VAPID signing
+- [x] G2.1 Implement RFC 8291 (aes128gcm) message encryption + RFC 8292 VAPID signing
       in `internal/push` (or vendor a maintained Go webpush library).
-- [ ] G2.2 Add `web_push_delivery` worker: on notification creation, match subscription
+- [x] G2.2 Add `web_push_delivery` worker: on notification creation, match subscription
       `data.alerts` against notification type, build Mastodon-shaped payload
       (`access_token`, `preferred_locale`, `notification_id`, `notification_type`,
       `icon`, `title`, `body`), POST to endpoint.
-- [ ] G2.3 Handle 404/410 responses by deleting dead subscriptions (Mastodon behavior).
-- [ ] G2.4 Hook into the existing notification pipeline (everywhere `CreateNotification`
+- [x] G2.3 Handle 404/410 responses by deleting dead subscriptions (Mastodon behavior:
+      any 4xx except 408/429 deletes the subscription).
+- [x] G2.4 Hook into the existing notification pipeline (everywhere `CreateNotification`
       is called: statuses, federation create/like/announce/update, follows, reports).
-- [ ] G2.5 Tests: encryption round-trip vectors, payload shape, dead-subscription
+      Note: only mention/favourite/reblog notifications are created today; follow and
+      report notification creation does not exist yet and will pick up push delivery
+      automatically once routed through `push.Publisher`.
+- [x] G2.5 Tests: encryption round-trip vectors, payload shape, dead-subscription
       cleanup, alert-preference filtering.
 
 ### G3 · Account lifecycle (deletion / suspension side-effects) — P0

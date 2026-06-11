@@ -146,6 +146,41 @@ func (q *Queries) GetPushSubscriptionByID(ctx context.Context, id int64) (WebPus
 	return i, err
 }
 
+const listPushSubscriptionsByUserID = `-- name: ListPushSubscriptionsByUserID :many
+SELECT id, endpoint, key_p256dh, key_auth, data, created_at, updated_at, access_token_id, user_id, standard FROM web_push_subscriptions WHERE user_id = $1 ORDER BY id
+`
+
+func (q *Queries) ListPushSubscriptionsByUserID(ctx context.Context, userID pgtype.Int8) ([]WebPushSubscription, error) {
+	rows, err := q.db.Query(ctx, listPushSubscriptionsByUserID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []WebPushSubscription{}
+	for rows.Next() {
+		var i WebPushSubscription
+		if err := rows.Scan(
+			&i.ID,
+			&i.Endpoint,
+			&i.KeyP256dh,
+			&i.KeyAuth,
+			&i.Data,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.AccessTokenID,
+			&i.UserID,
+			&i.Standard,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updatePushSubscription = `-- name: UpdatePushSubscription :one
 UPDATE web_push_subscriptions
 SET data = $2,

@@ -811,6 +811,7 @@ func (h *PushHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Subscription struct {
 			Endpoint string `json:"endpoint"`
+			Standard bool   `json:"standard"`
 			Keys     struct {
 				P256DH string `json:"p256dh"`
 				Auth   string `json:"auth"`
@@ -851,7 +852,7 @@ func (h *PushHandler) Create(w http.ResponseWriter, r *http.Request) {
 		KeyAuth:       pgtype.Text{String: authKey, Valid: true},
 		Data:          dataBytes,
 		UserID:        pgtype.Int8{Int64: userID, Valid: userID > 0},
-		Standard:      false,
+		Standard:      req.Subscription.Standard,
 	})
 	if err == nil {
 		web.JSON(w, http.StatusOK, PushSubscription{
@@ -875,7 +876,7 @@ func (h *PushHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Data:          dataBytes,
 		UserID:        pgtype.Int8{Int64: userID, Valid: userID > 0},
 		AccessTokenID: pgtype.Int8{Int64: tokenID, Valid: true},
-		Standard:      false,
+		Standard:      req.Subscription.Standard,
 	})
 	if err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Failed to create subscription")

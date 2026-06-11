@@ -207,6 +207,28 @@ func (q *Queries) GetNotification(ctx context.Context, arg GetNotificationParams
 	return i, err
 }
 
+const getNotificationByID = `-- name: GetNotificationByID :one
+SELECT id, activity_id, activity_type, created_at, updated_at, account_id, from_account_id, type, filtered, group_key FROM notifications WHERE id = $1
+`
+
+func (q *Queries) GetNotificationByID(ctx context.Context, id int64) (Notification, error) {
+	row := q.db.QueryRow(ctx, getNotificationByID, id)
+	var i Notification
+	err := row.Scan(
+		&i.ID,
+		&i.ActivityID,
+		&i.ActivityType,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AccountID,
+		&i.FromAccountID,
+		&i.Type,
+		&i.Filtered,
+		&i.GroupKey,
+	)
+	return i, err
+}
+
 const listNotifications = `-- name: ListNotifications :many
 SELECT id, activity_id, activity_type, created_at, updated_at, account_id, from_account_id, type, filtered, group_key FROM notifications
 WHERE account_id = $1

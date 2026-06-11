@@ -127,3 +127,6 @@ WHERE token = $1;
 
 -- name: RevokeOAuthAccessGrant :exec
 UPDATE oauth_access_grants SET revoked_at = now() WHERE token = $1;
+
+-- name: GetOAuthAccessTokenByID :one
+SELECT * FROM oauth_access_tokens WHERE id = $1;

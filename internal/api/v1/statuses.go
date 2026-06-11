@@ -76,13 +76,20 @@ const (
 
 // StatusesHandler handles status-related endpoints
 type StatusesHandler struct {
-	queries   db.Querier
-	pool      *pgxpool.Pool
-	publisher streaming.Publisher
-	cfg       *config.Config
-	outgoing  federation.OutgoingDeliverer
-	threader  federation.ThreadFetcher
-	linker    LinkCrawlerEnqueuer
+	queries       db.Querier
+	pool          *pgxpool.Pool
+	publisher     streaming.Publisher
+	cfg           *config.Config
+	outgoing      federation.OutgoingDeliverer
+	threader      federation.ThreadFetcher
+	linker        LinkCrawlerEnqueuer
+	pushPublisher PushNotificationPublisher
+}
+
+// PushNotificationPublisher fans out Web Push deliveries for freshly created
+// notifications (implemented by push.Publisher).
+type PushNotificationPublisher interface {
+	PublishNotification(ctx context.Context, notification db.Notification)
 }
 
 // NewStatusesHandler creates a new statuses handler
@@ -99,6 +106,12 @@ func NewStatusesHandler(queries db.Querier, pool *pgxpool.Pool, publisher stream
 // SetThreadFetcher enables remote thread resolution for context requests.
 func (h *StatusesHandler) SetThreadFetcher(fetcher federation.ThreadFetcher) {
 	h.threader = fetcher
+}
+
+// SetPushPublisher enables Web Push delivery for notifications created by
+// this handler.
+func (h *StatusesHandler) SetPushPublisher(publisher PushNotificationPublisher) {
+	h.pushPublisher = publisher
 }
 
 // LinkCrawlerEnqueuer schedules link crawler jobs for preview cards.
@@ -932,6 +945,12 @@ func (h *StatusesHandler) publishCreatedStatus(ctx context.Context, accountID in
 
 		if result.Status.Visibility == VisibilityDirect {
 			h.publishConversationEvents(ctx, result.Status, result.Sender, result.ActiveMentions)
+		}
+	}
+
+	if h.pushPublisher != nil {
+		for _, task := range result.NotifTasks {
+			h.pushPublisher.PublishNotification(ctx, task.Notification)
 		}
 	}
 
@@ -2429,14 +2448,16 @@ func (h *StatusesHandler) Edit(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// 4. Add new mentions and notifications
+		var newNotifTasks []notificationTask
 		if len(newMentions) > 0 {
 			// Check mute/block for new mentions only
 			// Reuse parts of processMentions logic
-			_, _, err := h.createMentionsAndNotifications(r.Context(), qtx, statusID, accountID, newMentions)
+			_, tasks, err := h.createMentionsAndNotifications(r.Context(), qtx, statusID, accountID, newMentions)
 			if err != nil {
 				web.JSONError(w, http.StatusInternalServerError, "Failed to add new mentions")
 				return
 			}
+			newNotifTasks = tasks
 		}
 
 		// Handle Hashtags Sync (Replace all)
@@ -2473,6 +2494,11 @@ func (h *StatusesHandler) Edit(w http.ResponseWriter, r *http.Request) {
 		}
 		if h.publisher != nil {
 			h.publishStatusUpdate(r.Context(), s, statusStreamsForPublish(updatedStatus.AccountID, updatedStatus.Visibility, streamTags))
+		}
+		if h.pushPublisher != nil {
+			for _, task := range newNotifTasks {
+				h.pushPublisher.PublishNotification(r.Context(), task.Notification)
+			}
 		}
 		web.JSON(w, http.StatusOK, s)
 		return
@@ -2668,7 +2694,7 @@ func (h *StatusesHandler) createMentionsAndNotifications(ctx context.Context, q 
 		notifAccountIDs = append(notifAccountIDs, targetIDs...)
 
 		// Bulk Create Notifications
-		_, err := q.CreateNotifications(ctx, db.CreateNotificationsParams{
+		notifs, err := q.CreateNotifications(ctx, db.CreateNotificationsParams{
 			Column1:       notifAccountIDs,
 			FromAccountID: accountID,
 			ActivityType:  "Status",
@@ -2679,12 +2705,15 @@ func (h *StatusesHandler) createMentionsAndNotifications(ctx context.Context, q 
 			return mentions, tasks, err
 		}
 
-		// Note: We don't construct the full return objects here to save complexity as Edit doesn't necessarily return them in the same way,
-		// but the original processMentions did.
-		// For now, we return empty mentions/tasks as we just wanted side effects.
-		// If we need them for return value (e.g. streaming), we should rebuild them.
-		// But for Edit, we usually just return the Status which has "Mentions" list.
-		// Notifications are async.
+		// Return the created notifications so the caller can fan out push
+		// deliveries after the surrounding transaction commits.
+		for _, notif := range notifs {
+			tasks = append(tasks, notificationTask{Notification: notif})
+		}
+
+		// Unlike processMentions, tasks carry only the Notification (for push
+		// fan-out); mentions stay empty since Edit returns the Status, whose
+		// "Mentions" list is rebuilt separately.
 	}
 
 	return mentions, tasks, nil

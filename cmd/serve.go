@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/mail"
 	"os"
 	"os/signal"
 	"strings"
@@ -40,6 +41,7 @@ import (
 	"github.com/deicod/gotodon/internal/federation"
 	"github.com/deicod/gotodon/internal/mailer"
 	"github.com/deicod/gotodon/internal/media"
+	"github.com/deicod/gotodon/internal/push"
 	"github.com/deicod/gotodon/internal/services"
 	"github.com/deicod/gotodon/internal/streaming"
 	"github.com/deicod/gotodon/internal/web"
@@ -208,6 +210,43 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		logger.Info("Outbound mail enabled", "server", cfg.Mail.SMTPServer)
 	} else {
 		logger.Warn("SMTP not configured; transactional mail is disabled and new registrations are confirmed immediately")
+	}
+
+	// Web Push: notification payloads are encrypted per RFC 8291 and signed
+	// with the instance VAPID key (RFC 8292), queued through workers when
+	// available.
+	var (
+		pushService   *push.Service
+		pushPublisher *push.Publisher
+	)
+	if strings.TrimSpace(cfg.Secrets.VAPIDPrivate) != "" {
+		vapidKey, err := push.NewVAPIDKey(cfg.Secrets.VAPIDPrivate, cfg.Secrets.VAPIDPublic)
+		if err != nil {
+			return fmt.Errorf("initializing web push: %w", err)
+		}
+		// Serve the canonical (unpadded base64url) public key as server_key
+		// even when the configured value is empty or padded/standard base64,
+		// so client subscriptions always use the key requests are signed with.
+		cfg.Secrets.VAPIDPublic = vapidKey.PublicKey()
+		subject := "https://" + cfg.Instance.PublicWebDomain()
+		if from := strings.TrimSpace(cfg.Mail.SMTPFromAddress); cfg.Mail.Enabled() && from != "" {
+			// The configured from address may carry a display name
+			// ("Name <a@b>"); the VAPID sub claim needs the bare address.
+			if addr, err := mail.ParseAddress(from); err == nil {
+				subject = "mailto:" + addr.Address
+			}
+		}
+		pushService = push.NewService(queries, push.NewClient(vapidKey, subject, nil), cfg, logger)
+		var pushDeliverer push.Deliverer
+		if workerManager != nil {
+			pushDeliverer = workers.NewPushEnqueuer(workerManager.Client())
+		} else {
+			pushDeliverer = push.NewDirectDeliverer(pushService, logger)
+		}
+		pushPublisher = push.NewPublisher(pushService, pushDeliverer, logger)
+		logger.Info("Web Push delivery enabled")
+	} else {
+		logger.Warn("VAPID keys not configured; Web Push notifications are disabled")
 	}
 
 	outgoingService := federation.NewOutgoingService(queries, cfg.Instance.LocalDomain, deliveryEnqueuer)
@@ -458,6 +497,13 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	blockService := federation.NewBlockService(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher())
 	updateService := federation.NewUpdateService(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher())
 	deleteService := federation.NewDeleteService(queries, cfg.Instance.LocalDomain)
+	if pushPublisher != nil {
+		statusesHandler.SetPushPublisher(pushPublisher)
+		createService.SetPushPublisher(pushPublisher)
+		announceService.SetPushPublisher(pushPublisher)
+		likeService.SetPushPublisher(pushPublisher)
+		updateService.SetPushPublisher(pushPublisher)
+	}
 	federationHandler.RegisterInboxHandler(activitypub.TypeFollow, followService.HandleFollow)
 	federationHandler.RegisterInboxHandler(activitypub.TypeAccept, followResponseService.HandleAccept)
 	federationHandler.RegisterInboxHandler(activitypub.TypeReject, followResponseService.HandleReject)
@@ -487,6 +533,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		}
 		if mailService != nil {
 			registrars = append(registrars, &workers.MailRegistrar{Service: mailService})
+		}
+		if pushService != nil {
+			registrars = append(registrars, &workers.PushRegistrar{Service: pushService})
 		}
 		if err := workerManager.Register(registrars...); err != nil {
 			return fmt.Errorf("registering workers: %w", err)

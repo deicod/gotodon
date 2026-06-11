@@ -62,3 +62,6 @@ WHERE account_id = $1
   AND type = $2
   AND activity_type = $3
   AND activity_id = $4;
+
+-- name: GetNotificationByID :one
+SELECT * FROM notifications WHERE id = $1;

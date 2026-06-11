@@ -274,6 +274,29 @@ func (q *Queries) GetOAuthAccessToken(ctx context.Context, token string) (OauthA
 	return i, err
 }
 
+const getOAuthAccessTokenByID = `-- name: GetOAuthAccessTokenByID :one
+SELECT id, token, refresh_token, expires_in, revoked_at, created_at, scopes, application_id, resource_owner_id, last_used_at, last_used_ip FROM oauth_access_tokens WHERE id = $1
+`
+
+func (q *Queries) GetOAuthAccessTokenByID(ctx context.Context, id int64) (OauthAccessToken, error) {
+	row := q.db.QueryRow(ctx, getOAuthAccessTokenByID, id)
+	var i OauthAccessToken
+	err := row.Scan(
+		&i.ID,
+		&i.Token,
+		&i.RefreshToken,
+		&i.ExpiresIn,
+		&i.RevokedAt,
+		&i.CreatedAt,
+		&i.Scopes,
+		&i.ApplicationID,
+		&i.ResourceOwnerID,
+		&i.LastUsedAt,
+		&i.LastUsedIp,
+	)
+	return i, err
+}
+
 const getOAuthAccessTokenByRefresh = `-- name: GetOAuthAccessTokenByRefresh :one
 SELECT id, token, refresh_token, expires_in, revoked_at, created_at, scopes, application_id, resource_owner_id, last_used_at, last_used_ip FROM oauth_access_tokens 
 WHERE refresh_token = $1 AND revoked_at IS NULL

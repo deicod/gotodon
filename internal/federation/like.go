@@ -22,10 +22,16 @@ type LikeStore interface {
 
 // LikeService processes incoming Like activities (favourites).
 type LikeService struct {
-	store       LikeStore
-	localDomain string
-	fetcher     activitypub.ActorFetcher
-	helper      *CreateService
+	store         LikeStore
+	localDomain   string
+	fetcher       activitypub.ActorFetcher
+	helper        *CreateService
+	pushPublisher PushNotificationPublisher
+}
+
+// SetPushPublisher enables Web Push delivery for favourite notifications.
+func (s *LikeService) SetPushPublisher(publisher PushNotificationPublisher) {
+	s.pushPublisher = publisher
 }
 
 // NewLikeService creates a service for Like activities.
@@ -135,14 +141,18 @@ func (s *LikeService) notifyFavourite(ctx context.Context, liker db.Account, sta
 		return err
 	}
 
-	_, err = s.store.CreateNotifications(ctx, db.CreateNotificationsParams{
+	notifs, err := s.store.CreateNotifications(ctx, db.CreateNotificationsParams{
 		Column1:       []int64{status.AccountID},
 		FromAccountID: liker.ID,
 		ActivityType:  "Status",
 		ActivityID:    status.ID,
 		Type:          pgtype.Text{String: "favourite", Valid: true},
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	publishPushNotifications(ctx, s.pushPublisher, notifs)
+	return nil
 }
 
 func (s *LikeService) isNotificationSuppressed(ctx context.Context, accountID, likerID int64) (bool, error) {

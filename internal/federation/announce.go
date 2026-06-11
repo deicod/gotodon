@@ -36,6 +36,12 @@ type AnnounceService struct {
 	fetcher       activitypub.ActorFetcher
 	objectFetcher ObjectFetcher
 	helper        *CreateService
+	pushPublisher PushNotificationPublisher
+}
+
+// SetPushPublisher enables Web Push delivery for reblog notifications.
+func (s *AnnounceService) SetPushPublisher(publisher PushNotificationPublisher) {
+	s.pushPublisher = publisher
 }
 
 // NewAnnounceService creates a service for Announce activities.
@@ -274,14 +280,18 @@ func (s *AnnounceService) notifyReblog(ctx context.Context, announcer db.Account
 		return err
 	}
 
-	_, err = s.store.CreateNotifications(ctx, db.CreateNotificationsParams{
+	notifs, err := s.store.CreateNotifications(ctx, db.CreateNotificationsParams{
 		Column1:       []int64{original.AccountID},
 		FromAccountID: announcer.ID,
 		ActivityType:  "Status",
 		ActivityID:    original.ID,
 		Type:          pgtype.Text{String: "reblog", Valid: true},
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	publishPushNotifications(ctx, s.pushPublisher, notifs)
+	return nil
 }
 
 func (s *AnnounceService) isNotificationSuppressed(ctx context.Context, accountID, announcerID int64) (bool, error) {

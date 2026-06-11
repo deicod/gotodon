@@ -48,12 +48,19 @@ type createOptions struct {
 	skipMentions bool
 }
 
+// PushNotificationPublisher fans out Web Push deliveries for freshly created
+// notifications (implemented by push.Publisher).
+type PushNotificationPublisher interface {
+	PublishNotification(ctx context.Context, notification db.Notification)
+}
+
 // CreateService processes incoming Create Note activities.
 type CreateService struct {
 	store         CreateStore
 	fetcher       activitypub.ActorFetcher
 	localDomain   string
 	statusFetcher StatusFetcher
+	pushPublisher PushNotificationPublisher
 }
 
 // NewCreateService creates a Create service for incoming notes.
@@ -63,6 +70,11 @@ func NewCreateService(store CreateStore, localDomain string, fetcher activitypub
 		fetcher:     fetcher,
 		localDomain: localDomain,
 	}
+}
+
+// SetPushPublisher enables Web Push delivery for mention notifications.
+func (s *CreateService) SetPushPublisher(publisher PushNotificationPublisher) {
+	s.pushPublisher = publisher
 }
 
 // SetStatusFetcher configures the optional status fetcher for missing replies.
@@ -485,7 +497,7 @@ func (s *CreateService) processMentions(ctx context.Context, authorID, statusID 
 		return nil, err
 	}
 
-	_, err = s.store.CreateNotifications(ctx, db.CreateNotificationsParams{
+	notifs, err := s.store.CreateNotifications(ctx, db.CreateNotificationsParams{
 		Column1:       targetIDs,
 		FromAccountID: authorID,
 		ActivityType:  "Status",
@@ -495,8 +507,20 @@ func (s *CreateService) processMentions(ctx context.Context, authorID, statusID 
 	if err != nil {
 		return nil, err
 	}
+	publishPushNotifications(ctx, s.pushPublisher, notifs)
 
 	return activeAccounts, nil
+}
+
+// publishPushNotifications fans freshly created notifications out to Web
+// Push; it is shared by every federation service that creates notifications.
+func publishPushNotifications(ctx context.Context, publisher PushNotificationPublisher, notifs []db.Notification) {
+	if publisher == nil {
+		return
+	}
+	for _, notif := range notifs {
+		publisher.PublishNotification(ctx, notif)
+	}
 }
 
 func (s *CreateService) resolveMentionAccounts(ctx context.Context, mentions []mentionRef) ([]db.Account, error) {
