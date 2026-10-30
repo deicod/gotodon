@@ -81,54 +81,40 @@ func (h *FederationHandler) verifySignedRequest(w http.ResponseWriter, r *http.R
 		return "", false
 	}
 
-	keyID := signatureKeyID(r.Header.Get("Signature"))
-	if keyID == "" {
+	if r.Header.Get("Signature") == "" {
 		web.JSONError(w, http.StatusUnauthorized, "Missing HTTP signature")
 		return "", false
 	}
 
-	actorURI := actorURIFromKeyID(keyID)
+	sig, err := activitypub.NewHTTPVerifier().ParseRequest(r, nil)
+	if err != nil {
+		web.JSONError(w, http.StatusUnauthorized, "Signature verification failed")
+		return "", false
+	}
+
+	actorURI := actorURIFromKeyID(sig.KeyID)
 	if actorURI == "" {
 		web.JSONError(w, http.StatusUnauthorized, "Signature verification failed")
 		return "", false
 	}
 
 	actor, err := h.actorFetcher.FetchActor(r.Context(), actorURI)
-	if err != nil || actor.PublicKey == nil || actor.PublicKey.PublicKeyPem == "" {
+	if err != nil {
 		web.JSONError(w, http.StatusUnauthorized, "Signature verification failed")
 		return "", false
 	}
 
-	verifier := activitypub.NewHTTPVerifier()
-	if err := verifier.VerifyRequest(r, actor.PublicKey.PublicKeyPem); err != nil {
+	if err := activitypub.VerifyKeyOwner(actor, actorURI, sig.KeyID); err != nil {
 		web.JSONError(w, http.StatusUnauthorized, "Signature verification failed")
 		return "", false
 	}
 
-	if actor.ID != "" {
-		actorURI = actor.ID
+	if err := sig.Verify(actor.PublicKey.PublicKeyPem); err != nil {
+		web.JSONError(w, http.StatusUnauthorized, "Signature verification failed")
+		return "", false
 	}
+
 	return actorURI, true
-}
-
-func signatureKeyID(header string) string {
-	if strings.TrimSpace(header) == "" {
-		return ""
-	}
-	for _, part := range strings.Split(header, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		kv := strings.SplitN(part, "=", 2)
-		if len(kv) != 2 {
-			continue
-		}
-		if strings.TrimSpace(kv[0]) == "keyId" {
-			return strings.Trim(strings.TrimSpace(kv[1]), `"`)
-		}
-	}
-	return ""
 }
 
 func actorURIFromKeyID(keyID string) string {

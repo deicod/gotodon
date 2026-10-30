@@ -3,6 +3,11 @@ package activitypub
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -465,6 +470,7 @@ func TestFederationHandler_PostInbox_VerifiesSignature(t *testing.T) {
 	handler := &FederationHandler{
 		domain: "example.com",
 		actorFetcher: stubActorFetcher{actor: &activitypub.Actor{
+			Object: activitypub.Object{ID: actorURI},
 			PublicKey: &activitypub.PublicKey{
 				ID:           actorURI + "#main-key",
 				Owner:        actorURI,
@@ -544,6 +550,7 @@ func TestFederationHandler_PostInbox_DigestMismatch(t *testing.T) {
 	handler := &FederationHandler{
 		domain: "example.com",
 		actorFetcher: stubActorFetcher{actor: &activitypub.Actor{
+			Object: activitypub.Object{ID: actorURI},
 			PublicKey: &activitypub.PublicKey{
 				ID:           actorURI + "#main-key",
 				Owner:        actorURI,
@@ -591,6 +598,7 @@ func TestFederationHandler_PostInbox_RoutesActivity(t *testing.T) {
 	handler := &FederationHandler{
 		domain: "example.com",
 		actorFetcher: stubActorFetcher{actor: &activitypub.Actor{
+			Object: activitypub.Object{ID: actorURI},
 			PublicKey: &activitypub.PublicKey{
 				ID:           actorURI + "#main-key",
 				Owner:        actorURI,
@@ -664,6 +672,7 @@ func TestFederationHandler_PostInbox_RoutesAcceptReject(t *testing.T) {
 			handler := &FederationHandler{
 				domain: "example.com",
 				actorFetcher: stubActorFetcher{actor: &activitypub.Actor{
+					Object: activitypub.Object{ID: actorURI},
 					PublicKey: &activitypub.PublicKey{
 						ID:           actorURI + "#main-key",
 						Owner:        actorURI,
@@ -727,6 +736,7 @@ func TestFederationHandler_PostInbox_ArrayTypeRoutes(t *testing.T) {
 	handler := &FederationHandler{
 		domain: "example.com",
 		actorFetcher: stubActorFetcher{actor: &activitypub.Actor{
+			Object: activitypub.Object{ID: actorURI},
 			PublicKey: &activitypub.PublicKey{
 				ID:           actorURI + "#main-key",
 				Owner:        actorURI,
@@ -775,6 +785,7 @@ func TestFederationHandler_PostInbox_MissingType(t *testing.T) {
 	handler := &FederationHandler{
 		domain: "example.com",
 		actorFetcher: stubActorFetcher{actor: &activitypub.Actor{
+			Object: activitypub.Object{ID: actorURI},
 			PublicKey: &activitypub.PublicKey{
 				ID:           actorURI + "#main-key",
 				Owner:        actorURI,
@@ -821,6 +832,7 @@ func TestFederationHandler_PostInbox_HandlerErrorStatus(t *testing.T) {
 	handler := &FederationHandler{
 		domain: "example.com",
 		actorFetcher: stubActorFetcher{actor: &activitypub.Actor{
+			Object: activitypub.Object{ID: actorURI},
 			PublicKey: &activitypub.PublicKey{
 				ID:           actorURI + "#main-key",
 				Owner:        actorURI,
@@ -1289,6 +1301,179 @@ func TestFederationHandler_GetFollowersSynchronization(t *testing.T) {
 	}
 	if items[0] != "https://remote.example/users/bob" {
 		t.Fatalf("orderedItems[0] = %v, want %q", items[0], "https://remote.example/users/bob")
+	}
+}
+
+// signDateOnly signs req over the Date header alone, the draft-cavage default
+// that gives no request or body integrity.
+func signDateOnly(t *testing.T, req *http.Request, key *rsa.PrivateKey, keyID string) {
+	t.Helper()
+
+	req.Header.Set("Date", time.Now().UTC().Format(http.TimeFormat))
+	hashed := sha256.Sum256([]byte("date: " + req.Header.Get("Date")))
+	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hashed[:])
+	if err != nil {
+		t.Fatalf("SignPKCS1v15() error = %v", err)
+	}
+	req.Header.Set("Signature", fmt.Sprintf(
+		`keyId="%s",algorithm="rsa-sha256",headers="date",signature="%s"`,
+		keyID, base64.StdEncoding.EncodeToString(signature),
+	))
+}
+
+func TestFederationHandler_GetFollowersSynchronization_RejectsInvalidSignatures(t *testing.T) {
+	store := newStubActivityPubStore()
+	store.addAccount(db.Account{ID: 1, Username: "alice", Uri: "https://example.com/users/alice"})
+	store.followerURIsByAccount[1] = []string{"https://remote.example/users/bob"}
+
+	priv, pub, err := activitypub.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair() error = %v", err)
+	}
+	privateKeyPEM := activitypub.EncodePrivateKey(priv)
+	publicKeyPEM, err := activitypub.EncodePublicKey(pub)
+	if err != nil {
+		t.Fatalf("EncodePublicKey() error = %v", err)
+	}
+	otherPriv, otherPub, err := activitypub.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair() error = %v", err)
+	}
+	otherPublicKeyPEM, err := activitypub.EncodePublicKey(otherPub)
+	if err != nil {
+		t.Fatalf("EncodePublicKey() error = %v", err)
+	}
+
+	actorURI := "https://remote.example/users/admin"
+	otherURI := "https://remote.example/users/mallory"
+	store.addAccount(db.Account{ID: 5, Uri: actorURI, PublicKey: publicKeyPEM})
+	store.addAccount(db.Account{ID: 6, Uri: otherURI, PublicKey: otherPublicKeyPEM})
+
+	handler := NewFederationHandler(store, "example.com")
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	syncURL := "https://example.com/users/alice/followers_synchronization"
+	tests := []struct {
+		name    string
+		request func(t *testing.T) *http.Request
+	}{
+		{
+			name: "missing signature",
+			request: func(t *testing.T) *http.Request {
+				return httptest.NewRequest(http.MethodGet, syncURL, nil)
+			},
+		},
+		{
+			name: "date-only signature",
+			request: func(t *testing.T) *http.Request {
+				req := httptest.NewRequest(http.MethodGet, syncURL, nil)
+				signDateOnly(t, req, priv, actorURI+"#main-key")
+				return req
+			},
+		},
+		{
+			name: "stale signature",
+			request: func(t *testing.T) *http.Request {
+				req := httptest.NewRequest(http.MethodGet, syncURL, nil)
+				req.Header.Set("Date", time.Now().Add(-2*time.Hour).UTC().Format(http.TimeFormat))
+				signer, err := activitypub.NewHTTPSigner(actorURI+"#main-key", privateKeyPEM)
+				if err != nil {
+					t.Fatalf("NewHTTPSigner() error = %v", err)
+				}
+				if err := signer.Sign(req, nil); err != nil {
+					t.Fatalf("Sign() error = %v", err)
+				}
+				return req
+			},
+		},
+		{
+			name: "signed with key of another actor",
+			request: func(t *testing.T) *http.Request {
+				return signedGetRequest(t, syncURL, actorURI+"#main-key", activitypub.EncodePrivateKey(otherPriv))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, tt.request(t))
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+			}
+		})
+	}
+}
+
+func TestFederationHandler_PostInbox_CachedActorKey(t *testing.T) {
+	priv, pub, err := activitypub.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair() error = %v", err)
+	}
+	privateKeyPEM := activitypub.EncodePrivateKey(priv)
+	publicKeyPEM, err := activitypub.EncodePublicKey(pub)
+	if err != nil {
+		t.Fatalf("EncodePublicKey() error = %v", err)
+	}
+	otherPriv, otherPub, err := activitypub.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair() error = %v", err)
+	}
+	otherPublicKeyPEM, err := activitypub.EncodePublicKey(otherPub)
+	if err != nil {
+		t.Fatalf("EncodePublicKey() error = %v", err)
+	}
+
+	actorURI := "https://remote.example/users/alice"
+	otherURI := "https://remote.example/users/mallory"
+	store := newStubActivityPubStore()
+	store.addAccount(db.Account{ID: 5, Username: "alice", Uri: actorURI, PublicKey: publicKeyPEM})
+	store.addAccount(db.Account{ID: 6, Username: "mallory", Uri: otherURI, PublicKey: otherPublicKeyPEM})
+
+	handler := NewFederationHandler(store, "example.com")
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	body, err := json.Marshal(activitypub.Activity{
+		Type:           activitypub.TypeFollow,
+		Actor:          actorURI,
+		ActivityObject: "https://example.com/users/bob",
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	tests := []struct {
+		name          string
+		keyID         string
+		privateKeyPEM string
+		dateOnly      bool
+		wantStatus    int
+	}{
+		{name: "fragment key id", keyID: actorURI + "#main-key", privateKeyPEM: privateKeyPEM, wantStatus: http.StatusAccepted},
+		{name: "path key id", keyID: actorURI + "/main-key", privateKeyPEM: privateKeyPEM, wantStatus: http.StatusAccepted},
+		{name: "key id of another actor", keyID: otherURI + "#main-key", privateKeyPEM: privateKeyPEM, wantStatus: http.StatusUnauthorized},
+		{name: "signed by another actor", keyID: otherURI + "#main-key", privateKeyPEM: activitypub.EncodePrivateKey(otherPriv), wantStatus: http.StatusUnauthorized},
+		{name: "date-only signature", keyID: actorURI + "#main-key", dateOnly: true, wantStatus: http.StatusUnauthorized},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var req *http.Request
+			if tt.dateOnly {
+				req = httptest.NewRequest(http.MethodPost, "https://example.com/inbox", bytes.NewReader(body))
+				signDateOnly(t, req, priv, tt.keyID)
+			} else {
+				req = signedInboxRequest(t, body, tt.keyID, tt.privateKeyPEM)
+			}
+
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+		})
 	}
 }
 

@@ -34,7 +34,7 @@ func TestDeliveryService_DeliversSignedRequest(t *testing.T) {
 		gotDigest = r.Header.Get("Digest")
 
 		verifier := activitypub.NewHTTPVerifier()
-		if err := verifier.VerifyRequest(r, publicPEM); err != nil {
+		if err := verifier.VerifyRequest(r, body, publicPEM); err != nil {
 			t.Errorf("VerifyRequest error: %v", err)
 		}
 

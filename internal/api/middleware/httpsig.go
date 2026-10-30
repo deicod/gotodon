@@ -2,19 +2,18 @@ package middleware
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/activitypub"
 )
 
-// VerifyHTTPSignature validates ActivityPub HTTP Signatures on incoming requests.
+// VerifyHTTPSignature validates ActivityPub HTTP Signatures on incoming
+// requests. The signature must cover (request-target), host, date (or
+// (created)) and the Digest header, the signed digest must match the body,
+// and the signing key must belong to the activity's actor.
 func VerifyHTTPSignature(fetcher activitypub.ActorFetcher) func(http.Handler) http.Handler {
 	verifier := activitypub.NewHTTPVerifier()
 
@@ -43,6 +42,14 @@ func VerifyHTTPSignature(fetcher activitypub.ActorFetcher) func(http.Handler) ht
 				return
 			}
 
+			// Reject weak, stale or digest-mismatched signatures before
+			// fetching any remote key.
+			sig, err := verifier.ParseRequest(r, body)
+			if err != nil {
+				web.JSONError(w, http.StatusUnauthorized, "Signature verification failed")
+				return
+			}
+
 			var raw map[string]any
 			if err := json.Unmarshal(body, &raw); err != nil {
 				web.JSONError(w, http.StatusBadRequest, "Invalid activity payload")
@@ -56,17 +63,17 @@ func VerifyHTTPSignature(fetcher activitypub.ActorFetcher) func(http.Handler) ht
 			}
 
 			actor, err := fetcher.FetchActor(r.Context(), actorURI)
-			if err != nil || actor.PublicKey == nil || actor.PublicKey.PublicKeyPem == "" {
+			if err != nil {
 				web.JSONError(w, http.StatusUnauthorized, "Signature verification failed")
 				return
 			}
 
-			if err := verifyDigest(r.Header.Get("Digest"), body); err != nil {
+			if err := activitypub.VerifyKeyOwner(actor, actorURI, sig.KeyID); err != nil {
 				web.JSONError(w, http.StatusUnauthorized, "Signature verification failed")
 				return
 			}
 
-			if err := verifier.VerifyRequest(r, actor.PublicKey.PublicKeyPem); err != nil {
+			if err := sig.Verify(actor.PublicKey.PublicKeyPem); err != nil {
 				web.JSONError(w, http.StatusUnauthorized, "Signature verification failed")
 				return
 			}
@@ -86,36 +93,4 @@ func extractActorURI(actor any) string {
 		}
 	}
 	return ""
-}
-
-func verifyDigest(header string, body []byte) error {
-	if header == "" {
-		return fmt.Errorf("missing digest header")
-	}
-
-	expected := ""
-	for _, part := range strings.Split(header, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		kv := strings.SplitN(part, "=", 2)
-		if len(kv) != 2 {
-			continue
-		}
-		if strings.EqualFold(strings.TrimSpace(kv[0]), "sha-256") {
-			expected = strings.Trim(strings.TrimSpace(kv[1]), "\"")
-			break
-		}
-	}
-	if expected == "" {
-		return fmt.Errorf("missing sha-256 digest")
-	}
-
-	sum := sha256.Sum256(body)
-	actual := base64.StdEncoding.EncodeToString(sum[:])
-	if expected != actual {
-		return fmt.Errorf("digest mismatch")
-	}
-	return nil
 }
