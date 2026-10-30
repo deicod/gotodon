@@ -37,8 +37,16 @@ func (h *InboxHandler) RegisterHandler(activityType string, handler ActivityHand
 	h.handlers[activityType] = handler
 }
 
-// HandleInbox processes an incoming activity
+// HandleInbox processes an incoming activity. body must be the exact bytes
+// read from req; the request signature must cover its digest and be made
+// with a key owned by the activity's actor.
 func (h *InboxHandler) HandleInbox(ctx context.Context, req *http.Request, body []byte) error {
+	// Check signature coverage, freshness and body digest before fetching keys
+	sig, err := h.verifier.ParseRequest(req, body)
+	if err != nil {
+		return fmt.Errorf("signature verification failed: %w", err)
+	}
+
 	// Parse activity
 	var activity Activity
 	if err := json.Unmarshal(body, &activity); err != nil {
@@ -58,10 +66,11 @@ func (h *InboxHandler) HandleInbox(ctx context.Context, req *http.Request, body 
 	}
 
 	// Verify HTTP signature
-	if actor.PublicKey != nil && actor.PublicKey.PublicKeyPem != "" {
-		if err := h.verifier.VerifyRequest(req, actor.PublicKey.PublicKeyPem); err != nil {
-			return fmt.Errorf("signature verification failed: %w", err)
-		}
+	if err := VerifyKeyOwner(actor, actorURI, sig.KeyID); err != nil {
+		return fmt.Errorf("signature verification failed: %w", err)
+	}
+	if err := sig.Verify(actor.PublicKey.PublicKeyPem); err != nil {
+		return fmt.Errorf("signature verification failed: %w", err)
 	}
 
 	// Dispatch to handler

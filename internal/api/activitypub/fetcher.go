@@ -39,13 +39,15 @@ func (f *actorFetcher) FetchActor(ctx context.Context, actorURI string) (*activi
 				}
 				return nil, fmt.Errorf("missing public key for actor")
 			}
+			// Only the PEM is persisted, so the key's id is unknown here;
+			// activitypub.VerifyKeyOwner then requires the keyId to be rooted
+			// at the actor URI instead of guessing "#main-key".
 			return &activitypub.Actor{
 				Object: activitypub.Object{
 					ID:   actorURI,
 					Type: activitypub.TypePerson,
 				},
 				PublicKey: &activitypub.PublicKey{
-					ID:           fmt.Sprintf("%s#main-key", actorURI),
 					Owner:        actorURI,
 					PublicKeyPem: account.PublicKey,
 				},
