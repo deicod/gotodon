@@ -1406,6 +1406,125 @@ func TestFederationHandler_GetFollowersSynchronization_RejectsInvalidSignatures(
 	}
 }
 
+type uriActorFetcher struct {
+	actors  map[string]*activitypub.Actor
+	fetched []string
+}
+
+func (f *uriActorFetcher) FetchActor(ctx context.Context, actorURI string) (*activitypub.Actor, error) {
+	f.fetched = append(f.fetched, actorURI)
+	actor, ok := f.actors[actorURI]
+	if !ok {
+		return nil, fmt.Errorf("actor %s not found", actorURI)
+	}
+	return actor, nil
+}
+
+func TestFederationHandler_GetFollowersSynchronization_KeyURIResolvesActor(t *testing.T) {
+	priv, pub, err := activitypub.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair() error = %v", err)
+	}
+	privateKeyPEM := activitypub.EncodePrivateKey(priv)
+	publicKeyPEM, err := activitypub.EncodePublicKey(pub)
+	if err != nil {
+		t.Fatalf("EncodePublicKey() error = %v", err)
+	}
+
+	actorURI := "https://remote.example/users/admin"
+	otherHostURI := "https://other.example/users/admin"
+	actorDocument := func(id, keyID string) *activitypub.Actor {
+		return &activitypub.Actor{
+			Object:    activitypub.Object{ID: id},
+			PublicKey: &activitypub.PublicKey{ID: keyID, Owner: id, PublicKeyPem: publicKeyPEM},
+		}
+	}
+
+	tests := []struct {
+		name       string
+		keyID      string
+		fetchURI   string
+		actor      *activitypub.Actor
+		wantStatus int
+	}{
+		{
+			name:       "path key id serves actor document",
+			keyID:      actorURI + "/main-key",
+			fetchURI:   actorURI + "/main-key",
+			actor:      actorDocument(actorURI, actorURI+"/main-key"),
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "slash fragment key id serves actor document",
+			keyID:      actorURI + "/#main-key",
+			fetchURI:   actorURI + "/",
+			actor:      actorDocument(actorURI, actorURI+"/#main-key"),
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "document claims actor on another host",
+			keyID:      actorURI + "/main-key",
+			fetchURI:   actorURI + "/main-key",
+			actor:      actorDocument(otherHostURI, actorURI+"/main-key"),
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "document declares another key",
+			keyID:      actorURI + "/main-key",
+			fetchURI:   actorURI + "/main-key",
+			actor:      actorDocument(actorURI, actorURI+"#main-key"),
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "fetcher returns no actor",
+			keyID:      actorURI + "/main-key",
+			fetchURI:   actorURI + "/main-key",
+			wantStatus: http.StatusUnauthorized,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newStubActivityPubStore()
+			store.addAccount(db.Account{ID: 1, Username: "alice", Uri: "https://example.com/users/alice"})
+			store.followerURIsByAccount[1] = []string{
+				"https://remote.example/users/bob",
+				"https://other.example/users/carol",
+			}
+
+			fetcher := &uriActorFetcher{actors: map[string]*activitypub.Actor{tt.fetchURI: tt.actor}}
+			handler := NewFederationHandler(store, "example.com")
+			handler.actorFetcher = fetcher
+			mux := http.NewServeMux()
+			handler.RegisterRoutes(mux)
+
+			req := signedGetRequest(t, "https://example.com/users/alice/followers_synchronization", tt.keyID, privateKeyPEM)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tt.wantStatus, rec.Body.String())
+			}
+			if len(fetcher.fetched) != 1 || fetcher.fetched[0] != tt.fetchURI {
+				t.Fatalf("fetched = %v, want [%s]", fetcher.fetched, tt.fetchURI)
+			}
+			if tt.wantStatus != http.StatusOK {
+				return
+			}
+
+			var resp struct {
+				OrderedItems []string `json:"orderedItems"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("unmarshal response: %v", err)
+			}
+			if len(resp.OrderedItems) != 1 || resp.OrderedItems[0] != "https://remote.example/users/bob" {
+				t.Fatalf("orderedItems = %v, want [https://remote.example/users/bob]", resp.OrderedItems)
+			}
+		})
+	}
+}
+
 func TestFederationHandler_PostInbox_CachedActorKey(t *testing.T) {
 	priv, pub, err := activitypub.GenerateKeyPair()
 	if err != nil {

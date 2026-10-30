@@ -92,18 +92,23 @@ func (h *FederationHandler) verifySignedRequest(w http.ResponseWriter, r *http.R
 		return "", false
 	}
 
-	actorURI := actorURIFromKeyID(sig.KeyID)
-	if actorURI == "" {
+	keyActorURI := actorURIFromKeyID(sig.KeyID)
+	if keyActorURI == "" {
 		web.JSONError(w, http.StatusUnauthorized, "Signature verification failed")
 		return "", false
 	}
 
-	actor, err := h.actorFetcher.FetchActor(r.Context(), actorURI)
-	if err != nil {
+	actor, err := h.actorFetcher.FetchActor(r.Context(), keyActorURI)
+	if err != nil || actor == nil {
 		web.JSONError(w, http.StatusUnauthorized, "Signature verification failed")
 		return "", false
 	}
 
+	// Key URIs such as "<actor>/main-key" or "<actor>/#main-key" serve the
+	// actor document (or a stub of it) rather than live at the actor URI, so
+	// the document's own id is the canonical actor. VerifyKeyOwner keeps that
+	// id on the key's host and requires it to own and declare the signing key.
+	actorURI := actor.ID
 	if err := activitypub.VerifyKeyOwner(actor, actorURI, sig.KeyID); err != nil {
 		web.JSONError(w, http.StatusUnauthorized, "Signature verification failed")
 		return "", false
