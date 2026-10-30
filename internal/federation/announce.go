@@ -243,6 +243,11 @@ func (s *AnnounceService) ensureReblog(ctx context.Context, activity *activitypu
 		Local:      pgtype.Bool{Bool: false, Valid: true},
 	})
 	if err != nil {
+		// The announce is already known: a concurrent delivery stored it
+		// first, or it was undone and its URI is kept to stop it from returning.
+		if isUniqueViolation(err) {
+			return false, nil
+		}
 		return false, err
 	}
 

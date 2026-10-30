@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	apihandler "github.com/deicod/gotodon/internal/api/activitypub"
@@ -27,6 +28,9 @@ type createStore struct {
 	accountsByID  map[int64]db.Account
 	statusesByURI map[string]db.Status
 	statusesByID  map[int64]db.Status
+	// deletedURIs holds URIs of deleted statuses: hidden from lookups but,
+	// as in the database, still reserved by the unique URI index.
+	deletedURIs   map[string]bool
 	statusStats   map[int64]db.StatusStat
 	replyCounts   map[int64]int64
 	mentions      []db.Mention
@@ -135,6 +139,11 @@ func (s *createStore) GetStatusByID(ctx context.Context, id int64) (db.Status, e
 }
 
 func (s *createStore) CreateStatus(ctx context.Context, arg db.CreateStatusParams) (db.Status, error) {
+	if arg.Uri.Valid {
+		if _, exists := s.statusesByURI[arg.Uri.String]; exists || s.deletedURIs[arg.Uri.String] {
+			return db.Status{}, &pgconn.PgError{Code: "23505"}
+		}
+	}
 	s.nextStatusID++
 	now := time.Now().UTC()
 	status := db.Status{
@@ -524,6 +533,52 @@ func TestCreateService_DeduplicatesByURI(t *testing.T) {
 	}
 	if len(store.media) != 0 || len(store.mentions) != 0 || len(store.notifications) != 0 {
 		t.Fatal("expected no side effects for duplicate status")
+	}
+}
+
+func TestCreateService_DeletedNoteIsNotRecreated(t *testing.T) {
+	store := newCreateStore()
+	local := db.Account{ID: 1, Uri: "https://local.test/users/bob"}
+	store.accountsByURI[local.Uri] = local
+	store.accountsByID[local.ID] = local
+
+	// The note was created, then deleted: a replayed or redelivered Create
+	// must neither restore it nor notify the mentioned account again.
+	noteID := "https://remote.example/statuses/123"
+	store.deletedURIs = map[string]bool{noteID: true}
+
+	actorURI := "https://remote.example/users/alice"
+	actor := &activitypub.Actor{
+		Object:            activitypub.Object{ID: actorURI, Type: activitypub.TypePerson},
+		PreferredUsername: "alice",
+		PublicKey:         &activitypub.PublicKey{PublicKeyPem: "remote-public"},
+	}
+	service := NewCreateService(store, "local.test", stubActorFetcher{actor: actor})
+
+	activity := &activitypub.Activity{
+		Type:  activitypub.TypeCreate,
+		Actor: actorURI,
+		ActivityObject: map[string]any{
+			"id":           noteID,
+			"type":         activitypub.TypeNote,
+			"content":      "<p>Hello @bob</p>",
+			"attributedTo": actorURI,
+			"to":           []any{activitypub.PublicAudience},
+			"tag": []any{
+				map[string]any{"type": "Mention", "href": local.Uri, "name": "@bob@local.test"},
+			},
+		},
+	}
+
+	if err := service.HandleCreate(context.Background(), activity); err != nil {
+		t.Fatalf("HandleCreate() error = %v", err)
+	}
+	if _, ok := store.statusesByURI[noteID]; ok {
+		t.Fatal("deleted note was recreated")
+	}
+	if len(store.mentions) != 0 || len(store.notifications) != 0 || len(store.media) != 0 {
+		t.Fatalf("mentions = %d, notifications = %d, media = %d, want no side effects",
+			len(store.mentions), len(store.notifications), len(store.media))
 	}
 }
 

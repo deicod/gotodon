@@ -479,6 +479,11 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	// ActivityPub Federation
 	federationHandler := activitypubapi.NewFederationHandler(queries, cfg.Instance.LocalDomain)
+	if rdb != nil {
+		federationHandler.SetReplayStore(middleware.NewRedisInboxReplayStore(rdb, ""))
+	} else {
+		logger.Warn("Redis unavailable, inbox replay protection is limited to this instance")
+	}
 	followService := federation.NewFollowService(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher(), nil)
 	followResponseService := federation.NewFollowResponseService(queries, cfg.Instance.LocalDomain)
 	undoService := federation.NewUndoService(queries, cfg.Instance.LocalDomain)

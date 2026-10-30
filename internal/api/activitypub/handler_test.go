@@ -855,6 +855,98 @@ func TestFederationHandler_PostInbox_HandlerErrorStatus(t *testing.T) {
 	}
 }
 
+func TestFederationHandler_PostInbox_RejectsReplays(t *testing.T) {
+	priv, pub, err := activitypub.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair() error = %v", err)
+	}
+	privateKeyPEM := activitypub.EncodePrivateKey(priv)
+	publicKeyPEM, err := activitypub.EncodePublicKey(pub)
+	if err != nil {
+		t.Fatalf("EncodePublicKey() error = %v", err)
+	}
+
+	actorURI := "https://remote.example/users/alice"
+	follow := map[string]any{
+		"id":     "https://remote.example/activities/follow-1",
+		"type":   activitypub.TypeFollow,
+		"actor":  actorURI,
+		"object": "https://example.com/users/bob",
+	}
+	undo := map[string]any{
+		"id":     "https://remote.example/activities/undo-1",
+		"type":   activitypub.TypeUndo,
+		"actor":  actorURI,
+		"object": follow,
+	}
+	followBody, err := json.Marshal(follow)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	undoBody, err := json.Marshal(undo)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	handler := &FederationHandler{
+		domain: "example.com",
+		actorFetcher: stubActorFetcher{actor: &activitypub.Actor{
+			Object: activitypub.Object{ID: actorURI},
+			PublicKey: &activitypub.PublicKey{
+				ID:           actorURI + "#main-key",
+				Owner:        actorURI,
+				PublicKeyPem: publicKeyPEM,
+			},
+		}},
+	}
+	following := false
+	follows, undos := 0, 0
+	handler.RegisterInboxHandler(activitypub.TypeFollow, func(ctx context.Context, activity *activitypub.Activity) error {
+		follows++
+		following = true
+		return nil
+	})
+	handler.RegisterInboxHandler(activitypub.TypeUndo, func(ctx context.Context, activity *activitypub.Activity) error {
+		undos++
+		following = false
+		return nil
+	})
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+	serve := func(req *http.Request) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("status = %d, want %d (body %s)", rec.Code, http.StatusAccepted, rec.Body.String())
+		}
+	}
+	replay := func(req *http.Request, body []byte) *http.Request {
+		copied := httptest.NewRequest(req.Method, req.URL.String(), bytes.NewReader(body))
+		copied.Host = req.Host
+		copied.Header = req.Header.Clone()
+		return copied
+	}
+
+	followReq := signedInboxRequest(t, followBody, actorURI+"#main-key", privateKeyPEM)
+	serve(followReq)
+	serve(signedInboxRequest(t, undoBody, actorURI+"#main-key", privateKeyPEM))
+	if following {
+		t.Fatal("follow not undone")
+	}
+
+	// Replaying the captured Follow while its signature is still valid must
+	// not re-establish the relationship the actor withdrew.
+	serve(replay(followReq, followBody))
+	if following {
+		t.Fatal("replayed Follow re-established the follow")
+	}
+	if follows != 1 || undos != 1 {
+		t.Fatalf("follows = %d, undos = %d, want 1 each", follows, undos)
+	}
+}
+
 func TestFederationHandler_GetInstanceActor(t *testing.T) {
 	store := newStubActivityPubStore()
 

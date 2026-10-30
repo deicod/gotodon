@@ -39,7 +39,10 @@ func (h *InboxHandler) RegisterHandler(activityType string, handler ActivityHand
 
 // HandleInbox processes an incoming activity. body must be the exact bytes
 // read from req; the request signature must cover its digest and be made
-// with a key owned by the activity's actor.
+// with a key owned by the activity's actor. HandleInbox does not detect
+// replays: a captured request verifies again until its signature expires
+// (RequestSignature.ValidUntil), so callers processing state-changing
+// activities must remember processed requests at least that long.
 func (h *InboxHandler) HandleInbox(ctx context.Context, req *http.Request, body []byte) error {
 	// Check signature coverage, freshness and body digest before fetching keys
 	sig, err := h.verifier.ParseRequest(req, body)

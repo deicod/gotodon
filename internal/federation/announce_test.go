@@ -219,6 +219,63 @@ func TestAnnounceService_DedupesExistingReblog(t *testing.T) {
 	}
 }
 
+func TestAnnounceService_UndoneAnnounceIsNotRestored(t *testing.T) {
+	ctx := context.Background()
+	store := newAnnounceStore()
+
+	local := db.Account{
+		ID:       1,
+		Username: "local",
+		Uri:      "https://local.test/users/local",
+	}
+	store.accountsByURI[local.Uri] = local
+	store.accountsByID[local.ID] = local
+
+	original, err := store.CreateStatus(ctx, db.CreateStatusParams{
+		Uri:        pgtype.Text{String: "https://local.test/statuses/1", Valid: true},
+		AccountID:  local.ID,
+		Visibility: httpVisibilityPublic,
+		Local:      pgtype.Bool{Bool: true, Valid: true},
+	})
+	if err != nil {
+		t.Fatalf("CreateStatus error: %v", err)
+	}
+	store.statusStats[original.ID] = db.StatusStat{ID: original.ID, StatusID: original.ID}
+
+	// The boost was received and then undone, which deletes the reblog but
+	// keeps its URI: a replayed or redelivered Announce must not restore it.
+	activityID := "https://remote.example/activities/boost1"
+	store.deletedURIs = map[string]bool{activityID: true}
+	beforeCount := len(store.statusesByID)
+
+	announcerURI := "https://remote.example/users/alice"
+	service := NewAnnounceService(store, "local.test", mapActorFetcher{
+		actors: map[string]*activitypub.Actor{
+			announcerURI: makeActor(announcerURI, "alice"),
+		},
+	}, nil)
+
+	activity := &activitypub.Activity{
+		Type:           activitypub.TypeAnnounce,
+		Actor:          announcerURI,
+		ActivityObject: original.Uri.String,
+		ID:             activityID,
+	}
+
+	if err := service.HandleAnnounce(ctx, activity); err != nil {
+		t.Fatalf("HandleAnnounce error: %v", err)
+	}
+	if len(store.statusesByID) != beforeCount {
+		t.Fatalf("status count = %d, want %d", len(store.statusesByID), beforeCount)
+	}
+	if store.statusStats[original.ID].ReblogsCount != 0 {
+		t.Fatalf("reblogs_count = %d, want 0", store.statusStats[original.ID].ReblogsCount)
+	}
+	if len(store.notifications) != 0 {
+		t.Fatalf("notifications = %d, want 0", len(store.notifications))
+	}
+}
+
 func TestAnnounceService_FetchesMissingNote(t *testing.T) {
 	ctx := context.Background()
 	store := newAnnounceStore()

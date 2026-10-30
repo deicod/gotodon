@@ -25,6 +25,7 @@ type FederationHandler struct {
 	domain        string
 	actorFetcher  activitypub.ActorFetcher
 	inboxHandlers map[string]InboxHandler
+	replayStore   middleware.InboxReplayStore
 }
 
 // InboxHandler processes a specific ActivityPub activity type.
@@ -47,7 +48,15 @@ func NewFederationHandler(store Store, domain string) *FederationHandler {
 		domain:        domain,
 		actorFetcher:  newActorFetcher(store, domain),
 		inboxHandlers: make(map[string]InboxHandler),
+		replayStore:   middleware.NewMemoryInboxReplayStore(0),
 	}
+}
+
+// SetReplayStore sets the store that keeps signed inbox deliveries from being
+// processed twice. Instances sharing an inbox must share the store. It must be
+// called before RegisterRoutes; the default store is in-memory.
+func (h *FederationHandler) SetReplayStore(store middleware.InboxReplayStore) {
+	h.replayStore = store
 }
 
 func (h *FederationHandler) useDB() bool {
@@ -273,7 +282,12 @@ func (h *FederationHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /contexts/{id}/items", h.GetContextItems)
 
 	// Inbox endpoints
-	inboxHandler := middleware.VerifyHTTPSignature(h.actorFetcher)(http.HandlerFunc(h.PostInbox))
+	if h.replayStore == nil {
+		h.replayStore = middleware.NewMemoryInboxReplayStore(0)
+	}
+	inboxHandler := middleware.VerifyHTTPSignature(h.actorFetcher)(
+		middleware.RejectInboxReplays(h.replayStore)(http.HandlerFunc(h.PostInbox)),
+	)
 	mux.Handle("POST /inbox", inboxHandler)
 	mux.Handle("POST /users/{username}/inbox", inboxHandler)
 	mux.Handle("POST /actor/inbox", inboxHandler)
