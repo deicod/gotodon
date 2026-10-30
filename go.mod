@@ -1,6 +1,6 @@
 module github.com/deicod/gotodon
 
-go 1.26.0
+go 1.27.3
 
 require (
 	github.com/gorilla/websocket v1.5.3
@@ -11,10 +11,10 @@ require (
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
-	github.com/yuin/goldmark v1.8.6
+	github.com/yuin/goldmark v1.8.7
 	golang.org/x/crypto v0.58.0
 	golang.org/x/image v0.47.0
-	golang.org/x/net v0.61.0
+	golang.org/x/net v0.62.0
 	golang.org/x/text v0.43.0
 )
 
