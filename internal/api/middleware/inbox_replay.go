@@ -28,10 +28,17 @@ import (
 //   - a delivery whose processing failed is forgotten, so a retry is processed;
 //   - a delivery arriving while the same request is being processed is answered
 //     with 503 and Retry-After, so the sender retries once the outcome is known.
+//
+// A claim is renewed while its delivery is processed. Processing is cancelled
+// when the claim is lost or cannot be renewed before it lapses, so a duplicate
+// never runs alongside it.
 const (
-	// inboxReplayLease bounds how long a claim blocks duplicates of an
-	// activity whose processing never finished, for instance after a crash.
-	inboxReplayLease = 5 * time.Minute
+	// inboxReplayLease bounds how long a claim outlives its last renewal, and
+	// so how long it blocks duplicates of a delivery whose processing never
+	// finished, for instance after a crash.
+	inboxReplayLease = 2 * time.Minute
+	// inboxReplayRenewInterval is how often a held claim is renewed.
+	inboxReplayRenewInterval = inboxReplayLease / 4
 	// inboxReplayClockMargin extends retention past the signature's validity
 	// to cover clock drift between server instances sharing the store.
 	inboxReplayClockMargin = 5 * time.Minute
@@ -56,6 +63,10 @@ const (
 // track another delivery.
 var ErrReplayStoreFull = errors.New("inbox replay store is full")
 
+// errReplayClaimLost is the cause with which processing is cancelled once its
+// claim is lost or about to lapse.
+var errReplayClaimLost = errors.New("inbox replay claim lost")
+
 // InboxReplayStore tracks which inbox deliveries are being or have been
 // processed. Implementations must be safe for concurrent use, and server
 // instances sharing an inbox must share the store.
@@ -64,6 +75,9 @@ type InboxReplayStore interface {
 	// unknown. For a processed key it extends retention to at least retain
 	// and reports ReplayProcessed.
 	Claim(ctx context.Context, key, token string, lease, retain time.Duration) (ReplayState, error)
+	// Renew extends the claim held under token to lease from now and reports
+	// whether that claim was still held.
+	Renew(ctx context.Context, key, token string, lease time.Duration) (bool, error)
 	// Complete records key as processed for at least retain.
 	Complete(ctx context.Context, key string, retain time.Duration) error
 	// Release drops the claim held under token so that a later delivery can
@@ -71,10 +85,22 @@ type InboxReplayStore interface {
 	Release(ctx context.Context, key, token string) error
 }
 
+// replayTimings sets how claims are held; tests shorten them.
+type replayTimings struct {
+	lease      time.Duration
+	renewEvery time.Duration
+}
+
+var defaultReplayTimings = replayTimings{lease: inboxReplayLease, renewEvery: inboxReplayRenewInterval}
+
 // RejectInboxReplays ensures each signed inbox request is processed at most
 // once while its signature can still verify. It must run after
 // VerifyHTTPSignature, whose SignedActivity identifies the request.
 func RejectInboxReplays(store InboxReplayStore) func(http.Handler) http.Handler {
+	return rejectInboxReplays(store, defaultReplayTimings)
+}
+
+func rejectInboxReplays(store InboxReplayStore, timings replayTimings) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			activity, ok := SignedActivityFromContext(r.Context())
@@ -85,7 +111,8 @@ func RejectInboxReplays(store InboxReplayStore) func(http.Handler) http.Handler 
 
 			key := inboxReplayKey(activity, r.URL.Path)
 			token := rand.Text()
-			state, err := store.Claim(r.Context(), key, token, inboxReplayLease, inboxReplayRetention(activity))
+			claimedAt := time.Now()
+			state, err := store.Claim(r.Context(), key, token, timings.lease, inboxReplayRetention(activity))
 			if err != nil {
 				writeRetryLater(w, "Replay protection unavailable")
 				return
@@ -108,13 +135,57 @@ func RejectInboxReplays(store InboxReplayStore) func(http.Handler) http.Handler 
 				}
 			}()
 
+			ctx, cancel := context.WithCancelCause(r.Context())
+			defer cancel(nil)
+			stopRenewal := holdReplayClaim(storeCtx, store, key, token, claimedAt.Add(timings.lease), timings, cancel)
+
 			rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
-			next.ServeHTTP(rw, r)
+			func() {
+				defer stopRenewal()
+				next.ServeHTTP(rw, r.WithContext(ctx))
+			}()
 
 			if rw.status >= 200 && rw.status < 300 {
 				completed = store.Complete(storeCtx, key, inboxReplayRetention(activity)) == nil
 			}
 		})
+	}
+}
+
+// holdReplayClaim renews the claim on key until the returned function is
+// called; heldUntil is when the claim lapses without renewal. When the claim
+// turns out to be lost, or a failed renewal leaves it to lapse before the next
+// attempt, cancel stops processing so a duplicate cannot run alongside it.
+func holdReplayClaim(ctx context.Context, store InboxReplayStore, key, token string, heldUntil time.Time, timings replayTimings, cancel context.CancelCauseFunc) (stop func()) {
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		ticker := time.NewTicker(timings.renewEvery)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+			}
+
+			attempt := time.Now()
+			renewCtx, cancelRenew := context.WithTimeout(ctx, timings.renewEvery)
+			held, err := store.Renew(renewCtx, key, token, timings.lease)
+			cancelRenew()
+			switch {
+			case err == nil && held:
+				heldUntil = attempt.Add(timings.lease)
+			case err == nil, time.Until(heldUntil) <= timings.renewEvery:
+				cancel(errReplayClaimLost)
+				return
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		<-stopped
 	}
 }
 
@@ -213,6 +284,23 @@ func (s *MemoryInboxReplayStore) Claim(ctx context.Context, key, token string, l
 	}
 	s.entries[key] = memoryReplayEntry{token: token, expires: now.Add(lease)}
 	return ReplayClaimed, nil
+}
+
+// Renew implements InboxReplayStore.
+func (s *MemoryInboxReplayStore) Renew(ctx context.Context, key, token string, lease time.Duration) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := s.now()
+	entry, ok := s.entries[key]
+	if !ok || entry.token == "" || entry.token != token || !now.Before(entry.expires) {
+		return false, nil
+	}
+	if until := now.Add(lease); until.After(entry.expires) {
+		entry.expires = until
+		s.entries[key] = entry
+	}
+	return true, nil
 }
 
 // Complete implements InboxReplayStore.

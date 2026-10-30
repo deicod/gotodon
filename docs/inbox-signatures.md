@@ -62,8 +62,13 @@ the same identity extends this to its own signature's lifetime, and retention is
 never shortened. A replay therefore cannot outlive its record: once the record
 expires, every captured copy of the request fails the freshness check.
 
-A claim on a request that is being processed lasts 5 minutes. If the processing
-server dies mid-request, deliveries are unblocked after that time.
+A claim on a request that is being processed is renewed every 30 seconds for
+another 2 minutes. If the server processing it dies, duplicates are unblocked 2
+minutes after the last renewal. The handler's context is cancelled, so
+processing stops before a duplicate can take over, in two cases:
+
+- a renewal finds that the claim is no longer held;
+- failed renewals would let the claim lapse before the next attempt.
 
 ### Storage
 

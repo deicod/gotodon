@@ -70,6 +70,11 @@ type replayFixture struct {
 
 func newReplayFixture(t *testing.T, store InboxReplayStore, next http.Handler) replayFixture {
 	t.Helper()
+	return newTimedReplayFixture(t, store, next, defaultReplayTimings)
+}
+
+func newTimedReplayFixture(t *testing.T, store InboxReplayStore, next http.Handler, timings replayTimings) replayFixture {
+	t.Helper()
 	key, publicPEM := generateSigningKey(t)
 	fetcher := &recordingActorFetcher{actors: map[string]*activitypub.Actor{
 		sigActorURI: {
@@ -79,7 +84,7 @@ func newReplayFixture(t *testing.T, store InboxReplayStore, next http.Handler) r
 	}}
 	return replayFixture{
 		key:     key,
-		handler: VerifyHTTPSignature(fetcher)(RejectInboxReplays(store)(next)),
+		handler: VerifyHTTPSignature(fetcher)(rejectInboxReplays(store, timings)(next)),
 	}
 }
 
@@ -272,6 +277,8 @@ func TestRejectInboxReplays_RecordsOutcomeAfterClientDisconnect(t *testing.T) {
 type faultyReplayStore struct {
 	InboxReplayStore
 	claimErr    error
+	renewErr    error
+	renewLost   bool
 	completeErr error
 
 	lease, claimRetain, completeRetain time.Duration
@@ -284,6 +291,16 @@ func (s *faultyReplayStore) Claim(ctx context.Context, key, token string, lease,
 		return 0, s.claimErr
 	}
 	return s.InboxReplayStore.Claim(ctx, key, token, lease, retain)
+}
+
+func (s *faultyReplayStore) Renew(ctx context.Context, key, token string, lease time.Duration) (bool, error) {
+	if s.renewErr != nil {
+		return false, s.renewErr
+	}
+	if s.renewLost {
+		return false, nil
+	}
+	return s.InboxReplayStore.Renew(ctx, key, token, lease)
 }
 
 func (s *faultyReplayStore) Complete(ctx context.Context, key string, retain time.Duration) error {
@@ -348,6 +365,96 @@ func TestRejectInboxReplays_StoreFailures(t *testing.T) {
 	})
 }
 
+func TestRejectInboxReplays_RenewsClaimWhileProcessing(t *testing.T) {
+	timings := replayTimings{lease: 80 * time.Millisecond, renewEvery: 20 * time.Millisecond}
+	started := make(chan struct{})
+	var calls int
+	var mu sync.Mutex
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		first := calls == 1
+		mu.Unlock()
+		if first {
+			close(started)
+			// Outlast the lease several times over, as a slow handler would.
+			select {
+			case <-time.After(400 * time.Millisecond):
+			case <-r.Context().Done():
+				t.Errorf("processing cancelled: %v", context.Cause(r.Context()))
+			}
+		}
+		w.WriteHeader(http.StatusAccepted)
+	})
+	f := newTimedReplayFixture(t, NewMemoryInboxReplayStore(0), next, timings)
+	body := followActivity(sigActorURI)
+	req := newSignedInboxPost(t, f.key, sigKeyID, sigMandatoryHeaders, body)
+	replay := replayOf(req, body)
+
+	done := make(chan *httptest.ResponseRecorder)
+	go func() { done <- f.serve(req) }()
+	<-started
+
+	// Well past the original lease, the renewed claim still holds off the
+	// duplicate.
+	time.Sleep(250 * time.Millisecond)
+	wantStatus(t, f.serve(replayOf(req, body)), http.StatusServiceUnavailable)
+
+	wantStatus(t, <-done, http.StatusAccepted)
+	wantStatus(t, f.serve(replay), http.StatusAccepted)
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("deliveries processed = %d, want 1", calls)
+	}
+}
+
+func TestRejectInboxReplays_CancelsProcessingWithoutClaim(t *testing.T) {
+	timings := replayTimings{lease: 400 * time.Millisecond, renewEvery: 100 * time.Millisecond}
+	tests := []struct {
+		name  string
+		store *faultyReplayStore
+	}{
+		{
+			name:  "claim lost",
+			store: &faultyReplayStore{InboxReplayStore: NewMemoryInboxReplayStore(0), renewLost: true},
+		},
+		{
+			name:  "claim cannot be renewed",
+			store: &faultyReplayStore{InboxReplayStore: NewMemoryInboxReplayStore(0), renewErr: errors.New("redis down")},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var cause error
+			var elapsed time.Duration
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				start := time.Now()
+				select {
+				case <-r.Context().Done():
+					cause = context.Cause(r.Context())
+					elapsed = time.Since(start)
+					w.WriteHeader(http.StatusServiceUnavailable)
+				case <-time.After(5 * time.Second):
+					w.WriteHeader(http.StatusAccepted)
+				}
+			})
+			f := newTimedReplayFixture(t, tt.store, next, timings)
+
+			rec := f.serve(newSignedInboxPost(t, f.key, sigKeyID, sigMandatoryHeaders, followActivity(sigActorURI)))
+			wantStatus(t, rec, http.StatusServiceUnavailable)
+			if !errors.Is(cause, errReplayClaimLost) {
+				t.Fatalf("cancellation cause = %v, want %v", cause, errReplayClaimLost)
+			}
+			// Processing stops before the claim can lapse and let a duplicate in.
+			if elapsed >= timings.lease {
+				t.Fatalf("processing cancelled after %v, want before the %v lease lapses", elapsed, timings.lease)
+			}
+		})
+	}
+}
+
 func TestRejectInboxReplays_RetainsUntilSignatureExpires(t *testing.T) {
 	store := &faultyReplayStore{InboxReplayStore: NewMemoryInboxReplayStore(0)}
 	f := newReplayFixture(t, store, &countingInbox{})
@@ -358,6 +465,9 @@ func TestRejectInboxReplays_RetainsUntilSignatureExpires(t *testing.T) {
 
 	if store.lease != inboxReplayLease {
 		t.Fatalf("lease = %v, want %v", store.lease, inboxReplayLease)
+	}
+	if inboxReplayRenewInterval >= inboxReplayLease/2 {
+		t.Fatalf("renew interval %v leaves no room for a failed renewal within the %v lease", inboxReplayRenewInterval, inboxReplayLease)
 	}
 	want := 5*time.Minute + time.Hour + inboxReplayClockMargin
 	for name, got := range map[string]time.Duration{"claim": store.claimRetain, "complete": store.completeRetain} {
@@ -412,10 +522,26 @@ func testInboxReplayStore(t *testing.T, store InboxReplayStore) {
 			t.Fatalf("Release(%s, %s) error = %v", key, token, err)
 		}
 	}
+	renew := func(key, token string, want bool) {
+		t.Helper()
+		got, err := store.Renew(ctx, key, token, lease)
+		if err != nil {
+			t.Fatalf("Renew(%s, %s) error = %v", key, token, err)
+		}
+		if got != want {
+			t.Fatalf("Renew(%s, %s) = %v, want %v", key, token, got, want)
+		}
+	}
 
+	renew("a", "t0", false)
 	claim("a", "t1", ReplayClaimed)
 	claim("a", "t2", ReplayInFlight)
 	claim("a", "t1", ReplayInFlight)
+
+	// Only the claim's own token renews it.
+	renew("a", "t1", true)
+	renew("a", "t2", false)
+	claim("a", "t2", ReplayInFlight)
 
 	// Only the claim's own token releases it.
 	release("a", "t2")
@@ -428,8 +554,10 @@ func testInboxReplayStore(t *testing.T, store InboxReplayStore) {
 	}
 	claim("a", "t5", ReplayProcessed)
 
-	// Releasing never forgets a processed delivery.
+	// Releasing never forgets a processed delivery, and renewing never turns
+	// it back into a claim.
 	release("a", "t4")
+	renew("a", "t4", false)
 	claim("a", "t6", ReplayProcessed)
 
 	claim("b", "t7", ReplayClaimed)
@@ -474,11 +602,32 @@ func TestMemoryInboxReplayStore_Expiry(t *testing.T) {
 		clock.Advance(2 * time.Minute)
 		claim("lease", "t3", 5*time.Minute, time.Hour, ReplayClaimed)
 
-		// The abandoned claim's token no longer releases the key.
+		// The abandoned claim's token no longer releases or renews the key.
 		if err := store.Release(ctx, "lease", "t1"); err != nil {
 			t.Fatalf("Release() error = %v", err)
 		}
+		if held, err := store.Renew(ctx, "lease", "t1", 5*time.Minute); err != nil || held {
+			t.Fatalf("Renew(abandoned) = %v, %v, want false", held, err)
+		}
 		claim("lease", "t4", 5*time.Minute, time.Hour, ReplayInFlight)
+	})
+
+	t.Run("renewal extends the lease", func(t *testing.T) {
+		claim("renew", "t1", 2*time.Minute, time.Hour, ReplayClaimed)
+		for range 5 {
+			clock.Advance(90 * time.Second)
+			if held, err := store.Renew(ctx, "renew", "t1", 2*time.Minute); err != nil || !held {
+				t.Fatalf("Renew() = %v, %v, want held", held, err)
+			}
+			claim("renew", "t2", 2*time.Minute, time.Hour, ReplayInFlight)
+		}
+
+		// A lapsed claim is no longer held and cannot be revived.
+		clock.Advance(3 * time.Minute)
+		if held, err := store.Renew(ctx, "renew", "t1", 2*time.Minute); err != nil || held {
+			t.Fatalf("Renew(lapsed) = %v, %v, want false", held, err)
+		}
+		claim("renew", "t3", 2*time.Minute, time.Hour, ReplayClaimed)
 	})
 
 	t.Run("replays extend retention", func(t *testing.T) {

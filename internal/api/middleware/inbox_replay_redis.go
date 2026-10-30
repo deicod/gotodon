@@ -29,6 +29,16 @@ end
 return 1
 `)
 
+	redisReplayRenew = redis.NewScript(`
+if redis.call('GET', KEYS[1]) == 'claim:' .. ARGV[1] then
+  if redis.call('PTTL', KEYS[1]) < tonumber(ARGV[2]) then
+    redis.call('PEXPIRE', KEYS[1], ARGV[2])
+  end
+  return 1
+end
+return 0
+`)
+
 	redisReplayComplete = redis.NewScript(`
 local retain = tonumber(ARGV[1])
 local ttl = redis.call('PTTL', KEYS[1])
@@ -74,6 +84,15 @@ func (s *RedisInboxReplayStore) Claim(ctx context.Context, key, token string, le
 		return ReplayState(result), nil
 	}
 	return 0, fmt.Errorf("claim inbox delivery: unexpected state %d", result)
+}
+
+// Renew implements InboxReplayStore.
+func (s *RedisInboxReplayStore) Renew(ctx context.Context, key, token string, lease time.Duration) (bool, error) {
+	held, err := redisReplayRenew.Run(ctx, s.client, []string{s.prefix + key}, token, redisMillis(lease)).Int()
+	if err != nil {
+		return false, fmt.Errorf("renew inbox delivery claim: %w", err)
+	}
+	return held == 1, nil
 }
 
 // Complete implements InboxReplayStore.

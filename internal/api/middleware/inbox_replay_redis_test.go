@@ -91,6 +91,23 @@ func TestRedisInboxReplayStore_Expiry(t *testing.T) {
 		claim("abandoned", "t3", time.Minute, time.Hour, ReplayInFlight)
 	})
 
+	t.Run("renewal extends the lease", func(t *testing.T) {
+		claim("renew", "t1", 100*time.Millisecond, time.Hour, ReplayClaimed)
+		held, err := store.Renew(ctx, "renew", "t1", 2*time.Minute)
+		if err != nil || !held {
+			t.Fatalf("Renew() = %v, %v, want held", held, err)
+		}
+		if d := ttl("renew"); d <= time.Minute || d > 2*time.Minute {
+			t.Fatalf("renewed TTL = %v, want about 2m", d)
+		}
+		time.Sleep(200 * time.Millisecond)
+		claim("renew", "t2", time.Minute, time.Hour, ReplayInFlight)
+
+		if held, err := store.Renew(ctx, "renew", "t2", 2*time.Minute); err != nil || held {
+			t.Fatalf("Renew(other token) = %v, %v, want false", held, err)
+		}
+	})
+
 	t.Run("retention only grows", func(t *testing.T) {
 		claim("retain", "t1", time.Minute, time.Hour, ReplayClaimed)
 		if err := store.Complete(ctx, "retain", time.Hour); err != nil {
