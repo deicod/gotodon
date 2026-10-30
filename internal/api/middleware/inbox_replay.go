@@ -70,18 +70,26 @@ var errReplayClaimLost = errors.New("inbox replay claim lost")
 // InboxReplayStore tracks which inbox deliveries are being or have been
 // processed. Implementations must be safe for concurrent use, and server
 // instances sharing an inbox must share the store.
+//
+// Every delivery of a key states until when a copy of it could be replayed.
+// A key is remembered until the latest deadline of all its deliveries,
+// whether they were processed, refused while the key was in flight, or seen
+// by a claim that was released or lapsed, so that a completed key cannot be
+// forgotten while any copy of it still verifies.
 type InboxReplayStore interface {
-	// Claim atomically claims key under token for at most lease when key is
-	// unknown. For a processed key it extends retention to at least retain
-	// and reports ReplayProcessed.
-	Claim(ctx context.Context, key, token string, lease, retain time.Duration) (ReplayState, error)
+	// Claim records retainUntil as a deadline of key and claims key under
+	// token for at most lease, unless key is in flight under another live
+	// claim or already processed.
+	Claim(ctx context.Context, key, token string, lease time.Duration, retainUntil time.Time) (ReplayState, error)
 	// Renew extends the claim held under token to lease from now and reports
 	// whether that claim was still held.
 	Renew(ctx context.Context, key, token string, lease time.Duration) (bool, error)
-	// Complete records key as processed for at least retain.
-	Complete(ctx context.Context, key string, retain time.Duration) error
+	// Complete records key as processed until at least retainUntil and every
+	// deadline recorded for it.
+	Complete(ctx context.Context, key string, retainUntil time.Time) error
 	// Release drops the claim held under token so that a later delivery can
-	// process key. Claims under other tokens and processed keys are kept.
+	// process key, keeping its deadlines. Claims under other tokens and
+	// processed keys are kept.
 	Release(ctx context.Context, key, token string) error
 }
 
@@ -112,7 +120,8 @@ func rejectInboxReplays(store InboxReplayStore, timings replayTimings) func(http
 			key := inboxReplayKey(activity, r.URL.Path)
 			token := rand.Text()
 			claimedAt := time.Now()
-			state, err := store.Claim(r.Context(), key, token, timings.lease, inboxReplayRetention(activity))
+			retainUntil := activity.ValidUntil.Add(inboxReplayClockMargin)
+			state, err := store.Claim(r.Context(), key, token, timings.lease, retainUntil)
 			if err != nil {
 				writeRetryLater(w, "Replay protection unavailable")
 				return
@@ -146,7 +155,7 @@ func rejectInboxReplays(store InboxReplayStore, timings replayTimings) func(http
 			}()
 
 			if rw.status >= 200 && rw.status < 300 {
-				completed = store.Complete(storeCtx, key, inboxReplayRetention(activity)) == nil
+				completed = store.Complete(storeCtx, key, retainUntil) == nil
 			}
 		})
 	}
@@ -201,12 +210,6 @@ func inboxReplayKey(activity SignedActivity, path string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// inboxReplayRetention is how long a delivery must be remembered from now:
-// until its signature stops verifying, plus the clock margin.
-func inboxReplayRetention(activity SignedActivity) time.Duration {
-	return time.Until(activity.ValidUntil) + inboxReplayClockMargin
-}
-
 func writeRetryLater(w http.ResponseWriter, message string) {
 	w.Header().Set("Retry-After", strconv.Itoa(int(inboxReplayRetryAfter/time.Second)))
 	web.JSONError(w, http.StatusServiceUnavailable, message)
@@ -238,9 +241,24 @@ type MemoryInboxReplayStore struct {
 }
 
 type memoryReplayEntry struct {
-	// token holds the claim token, or is empty once the delivery is processed.
-	token   string
-	expires time.Time
+	// token holds the claim token while the delivery is claimed.
+	token string
+	// leaseUntil ends the claim.
+	leaseUntil time.Time
+	// processed reports that the delivery has been processed.
+	processed bool
+	// retainUntil is the latest retention deadline recorded for the delivery.
+	retainUntil time.Time
+}
+
+// expires is when the entry can be forgotten: its claim has ended and no
+// recorded delivery can verify any more.
+func (e memoryReplayEntry) expires() time.Time {
+	return laterTime(e.leaseUntil, e.retainUntil)
+}
+
+func (e memoryReplayEntry) inFlight(now time.Time) bool {
+	return !e.processed && e.token != "" && now.Before(e.leaseUntil)
 }
 
 // NewMemoryInboxReplayStore creates an in-memory store tracking at most
@@ -257,32 +275,42 @@ func NewMemoryInboxReplayStore(capacity int) *MemoryInboxReplayStore {
 }
 
 // Claim implements InboxReplayStore.
-func (s *MemoryInboxReplayStore) Claim(ctx context.Context, key, token string, lease, retain time.Duration) (ReplayState, error) {
+func (s *MemoryInboxReplayStore) Claim(ctx context.Context, key, token string, lease time.Duration, retainUntil time.Time) (ReplayState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	now := s.now()
 	s.sweepLocked(now, memoryReplaySweepInterval)
 
-	if entry, ok := s.entries[key]; ok && now.Before(entry.expires) {
-		if entry.token != "" {
-			return ReplayInFlight, nil
+	entry, ok := s.entries[key]
+	if ok && !now.Before(entry.expires()) {
+		delete(s.entries, key)
+		ok = false
+	}
+	if ok {
+		entry.retainUntil = laterTime(entry.retainUntil, retainUntil)
+		state := ReplayClaimed
+		switch {
+		case entry.processed:
+			state = ReplayProcessed
+		case entry.inFlight(now):
+			state = ReplayInFlight
+		default:
+			// Released, or a claim that lapsed: take it over, keeping the
+			// deadlines recorded so far.
+			entry.token, entry.leaseUntil = token, now.Add(lease)
 		}
-		if until := now.Add(retain); until.After(entry.expires) {
-			entry.expires = until
-			s.entries[key] = entry
-		}
-		return ReplayProcessed, nil
+		s.entries[key] = entry
+		return state, nil
 	}
 
-	delete(s.entries, key)
 	if len(s.entries) >= s.capacity {
 		s.sweepLocked(now, memoryReplayFullSweepInterval)
 		if len(s.entries) >= s.capacity {
 			return 0, ErrReplayStoreFull
 		}
 	}
-	s.entries[key] = memoryReplayEntry{token: token, expires: now.Add(lease)}
+	s.entries[key] = memoryReplayEntry{token: token, leaseUntil: now.Add(lease), retainUntil: retainUntil}
 	return ReplayClaimed, nil
 }
 
@@ -293,27 +321,24 @@ func (s *MemoryInboxReplayStore) Renew(ctx context.Context, key, token string, l
 
 	now := s.now()
 	entry, ok := s.entries[key]
-	if !ok || entry.token == "" || entry.token != token || !now.Before(entry.expires) {
+	if !ok || entry.token != token || !entry.inFlight(now) {
 		return false, nil
 	}
-	if until := now.Add(lease); until.After(entry.expires) {
-		entry.expires = until
-		s.entries[key] = entry
-	}
+	entry.leaseUntil = laterTime(entry.leaseUntil, now.Add(lease))
+	s.entries[key] = entry
 	return true, nil
 }
 
 // Complete implements InboxReplayStore.
-func (s *MemoryInboxReplayStore) Complete(ctx context.Context, key string, retain time.Duration) error {
+func (s *MemoryInboxReplayStore) Complete(ctx context.Context, key string, retainUntil time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	now := s.now()
-	expires := now.Add(retain)
-	if entry, ok := s.entries[key]; ok && entry.expires.After(expires) {
-		expires = entry.expires
-	}
-	s.entries[key] = memoryReplayEntry{expires: expires}
+	entry := s.entries[key]
+	entry.token = ""
+	entry.processed = true
+	entry.retainUntil = laterTime(entry.retainUntil, retainUntil)
+	s.entries[key] = entry
 	return nil
 }
 
@@ -322,10 +347,25 @@ func (s *MemoryInboxReplayStore) Release(ctx context.Context, key, token string)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if entry, ok := s.entries[key]; ok && entry.token != "" && entry.token == token {
+	entry, ok := s.entries[key]
+	if !ok || entry.processed || entry.token == "" || entry.token != token {
+		return nil
+	}
+	// The deadlines stay recorded for a later delivery that completes.
+	entry.token, entry.leaseUntil = "", time.Time{}
+	if s.now().Before(entry.expires()) {
+		s.entries[key] = entry
+	} else {
 		delete(s.entries, key)
 	}
 	return nil
+}
+
+func laterTime(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }
 
 // sweepLocked drops expired entries unless the last sweep ran less than
@@ -335,7 +375,7 @@ func (s *MemoryInboxReplayStore) sweepLocked(now time.Time, interval time.Durati
 		return
 	}
 	for key, entry := range s.entries {
-		if !now.Before(entry.expires) {
+		if !now.Before(entry.expires()) {
 			delete(s.entries, key)
 		}
 	}

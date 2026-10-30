@@ -38,6 +38,21 @@ func signedPostTo(t *testing.T, key *rsa.PrivateKey, target string, body []byte)
 	return req
 }
 
+// signedPostDated signs body for target with HTTPSigner under the given Date.
+func signedPostDated(t *testing.T, key *rsa.PrivateKey, target string, body []byte, date time.Time) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, target, bytes.NewReader(body))
+	req.Header.Set("Date", date.UTC().Format(http.TimeFormat))
+	signer, err := activitypub.NewHTTPSigner(sigKeyID, activitypub.EncodePrivateKey(key))
+	if err != nil {
+		t.Fatalf("NewHTTPSigner() error = %v", err)
+	}
+	if err := signer.Sign(req, body); err != nil {
+		t.Fatalf("Sign() error = %v", err)
+	}
+	return req
+}
+
 // countingInbox stands in for the inbox handler: it counts the deliveries it
 // processes and answers each with the next scripted status, then 202.
 type countingInbox struct {
@@ -238,11 +253,11 @@ type contextCheckingStore struct {
 	InboxReplayStore
 }
 
-func (s contextCheckingStore) Complete(ctx context.Context, key string, retain time.Duration) error {
+func (s contextCheckingStore) Complete(ctx context.Context, key string, retainUntil time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.InboxReplayStore.Complete(ctx, key, retain)
+	return s.InboxReplayStore.Complete(ctx, key, retainUntil)
 }
 
 func (s contextCheckingStore) Release(ctx context.Context, key, token string) error {
@@ -281,16 +296,17 @@ type faultyReplayStore struct {
 	renewLost   bool
 	completeErr error
 
-	lease, claimRetain, completeRetain time.Duration
-	releases                           int
+	lease                       time.Duration
+	claimRetain, completeRetain time.Time
+	releases                    int
 }
 
-func (s *faultyReplayStore) Claim(ctx context.Context, key, token string, lease, retain time.Duration) (ReplayState, error) {
-	s.lease, s.claimRetain = lease, retain
+func (s *faultyReplayStore) Claim(ctx context.Context, key, token string, lease time.Duration, retainUntil time.Time) (ReplayState, error) {
+	s.lease, s.claimRetain = lease, retainUntil
 	if s.claimErr != nil {
 		return 0, s.claimErr
 	}
-	return s.InboxReplayStore.Claim(ctx, key, token, lease, retain)
+	return s.InboxReplayStore.Claim(ctx, key, token, lease, retainUntil)
 }
 
 func (s *faultyReplayStore) Renew(ctx context.Context, key, token string, lease time.Duration) (bool, error) {
@@ -303,12 +319,12 @@ func (s *faultyReplayStore) Renew(ctx context.Context, key, token string, lease 
 	return s.InboxReplayStore.Renew(ctx, key, token, lease)
 }
 
-func (s *faultyReplayStore) Complete(ctx context.Context, key string, retain time.Duration) error {
-	s.completeRetain = retain
+func (s *faultyReplayStore) Complete(ctx context.Context, key string, retainUntil time.Time) error {
+	s.completeRetain = retainUntil
 	if s.completeErr != nil {
 		return s.completeErr
 	}
-	return s.InboxReplayStore.Complete(ctx, key, retain)
+	return s.InboxReplayStore.Complete(ctx, key, retainUntil)
 }
 
 func (s *faultyReplayStore) Release(ctx context.Context, key, token string) error {
@@ -461,7 +477,12 @@ func TestRejectInboxReplays_RetainsUntilSignatureExpires(t *testing.T) {
 
 	// A Date-signed request verifies for five minutes plus an hour of clock
 	// skew; it is remembered that long plus the clock margin.
-	wantStatus(t, f.serve(newSignedInboxPost(t, f.key, sigKeyID, sigMandatoryHeaders, followActivity(sigActorURI))), http.StatusAccepted)
+	req := newSignedInboxPost(t, f.key, sigKeyID, sigMandatoryHeaders, followActivity(sigActorURI))
+	date, err := http.ParseTime(req.Header.Get("Date"))
+	if err != nil {
+		t.Fatalf("ParseTime() error = %v", err)
+	}
+	wantStatus(t, f.serve(req), http.StatusAccepted)
 
 	if store.lease != inboxReplayLease {
 		t.Fatalf("lease = %v, want %v", store.lease, inboxReplayLease)
@@ -469,12 +490,52 @@ func TestRejectInboxReplays_RetainsUntilSignatureExpires(t *testing.T) {
 	if inboxReplayRenewInterval >= inboxReplayLease/2 {
 		t.Fatalf("renew interval %v leaves no room for a failed renewal within the %v lease", inboxReplayRenewInterval, inboxReplayLease)
 	}
-	want := 5*time.Minute + time.Hour + inboxReplayClockMargin
-	for name, got := range map[string]time.Duration{"claim": store.claimRetain, "complete": store.completeRetain} {
-		// The Date header has second precision.
-		if got > want || got < want-2*time.Second {
-			t.Fatalf("%s retention = %v, want about %v", name, got, want)
+	want := date.Add(5*time.Minute + time.Hour + inboxReplayClockMargin)
+	for name, got := range map[string]time.Time{"claim": store.claimRetain, "complete": store.completeRetain} {
+		if !got.Equal(want) {
+			t.Fatalf("%s retention = %v, want %v", name, got, want)
 		}
+	}
+}
+
+func TestRejectInboxReplays_KeepsLaterDeadlineOfInFlightDuplicate(t *testing.T) {
+	store, clock := newClockedMemoryStore(0)
+	clock.now = time.Now()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	inbox := &countingInbox{}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if inbox.count() == 0 {
+			close(started)
+			<-release
+		}
+		inbox.ServeHTTP(w, r)
+	})
+	f := newReplayFixture(t, store, next)
+	body := followActivity(sigActorURI)
+
+	// The first delivery was signed an hour ago, so its signature expires in
+	// five minutes. A retry signed now arrives while it is being processed,
+	// and a captured copy of that retry verifies for another 65 minutes.
+	first := signedPostDated(t, f.key, sigInboxURL, body, time.Now().Add(-time.Hour))
+	done := make(chan *httptest.ResponseRecorder)
+	go func() { done <- f.serve(first) }()
+	<-started
+
+	retry := signedPostDated(t, f.key, sigInboxURL, body, time.Now())
+	captured := replayOf(retry, body)
+	wantStatus(t, f.serve(retry), http.StatusServiceUnavailable)
+
+	close(release)
+	wantStatus(t, <-done, http.StatusAccepted)
+
+	// Past the first delivery's retention, the captured retry is still
+	// recognized.
+	clock.Advance(30 * time.Minute)
+	wantStatus(t, f.serve(captured), http.StatusAccepted)
+	if inbox.count() != 1 {
+		t.Fatalf("deliveries processed = %d, want 1", inbox.count())
 	}
 }
 
@@ -508,7 +569,7 @@ func testInboxReplayStore(t *testing.T, store InboxReplayStore) {
 
 	claim := func(key, token string, want ReplayState) {
 		t.Helper()
-		got, err := store.Claim(ctx, key, token, lease, retain)
+		got, err := store.Claim(ctx, key, token, lease, time.Now().Add(retain))
 		if err != nil {
 			t.Fatalf("Claim(%s, %s) error = %v", key, token, err)
 		}
@@ -549,7 +610,7 @@ func testInboxReplayStore(t *testing.T, store InboxReplayStore) {
 	release("a", "t1")
 	claim("a", "t4", ReplayClaimed)
 
-	if err := store.Complete(ctx, "a", retain); err != nil {
+	if err := store.Complete(ctx, "a", time.Now().Add(retain)); err != nil {
 		t.Fatalf("Complete(a) error = %v", err)
 	}
 	claim("a", "t5", ReplayProcessed)
@@ -586,7 +647,7 @@ func TestMemoryInboxReplayStore_Expiry(t *testing.T) {
 
 	claim := func(key, token string, lease, retain time.Duration, want ReplayState) {
 		t.Helper()
-		got, err := store.Claim(ctx, key, token, lease, retain)
+		got, err := store.Claim(ctx, key, token, lease, clock.now.Add(retain))
 		if err != nil {
 			t.Fatalf("Claim(%s) error = %v", key, err)
 		}
@@ -632,7 +693,7 @@ func TestMemoryInboxReplayStore_Expiry(t *testing.T) {
 
 	t.Run("replays extend retention", func(t *testing.T) {
 		claim("retain", "t1", time.Minute, time.Hour, ReplayClaimed)
-		if err := store.Complete(ctx, "retain", time.Hour); err != nil {
+		if err := store.Complete(ctx, "retain", clock.now.Add(time.Hour)); err != nil {
 			t.Fatalf("Complete() error = %v", err)
 		}
 		clock.Advance(50 * time.Minute)
@@ -645,12 +706,71 @@ func TestMemoryInboxReplayStore_Expiry(t *testing.T) {
 		claim("retain", "t5", time.Minute, time.Hour, ReplayClaimed)
 	})
 
+	complete := func(key string, retain time.Duration) {
+		t.Helper()
+		if err := store.Complete(ctx, key, clock.now.Add(retain)); err != nil {
+			t.Fatalf("Complete(%s) error = %v", key, err)
+		}
+	}
+
+	t.Run("in-flight duplicates extend retention", func(t *testing.T) {
+		claim("inflight", "t1", time.Minute, 10*time.Minute, ReplayClaimed)
+		claim("inflight", "t2", time.Minute, 70*time.Minute, ReplayInFlight)
+		// The duplicate's deadline does not extend the claim itself.
+		clock.Advance(2 * time.Minute)
+		claim("inflight", "t3", time.Minute, time.Minute, ReplayClaimed)
+		claim("inflight", "t4", time.Minute, 90*time.Minute, ReplayInFlight)
+		complete("inflight", 10*time.Minute)
+		clock.Advance(89 * time.Minute)
+		claim("inflight", "t5", time.Minute, time.Minute, ReplayProcessed)
+		clock.Advance(2 * time.Minute)
+		claim("inflight", "t6", time.Minute, time.Minute, ReplayClaimed)
+	})
+
+	t.Run("lapsed claims keep their deadlines", func(t *testing.T) {
+		claim("lapsed", "t1", time.Minute, 70*time.Minute, ReplayClaimed)
+		clock.Advance(2 * time.Minute)
+		claim("lapsed", "t2", time.Minute, 10*time.Minute, ReplayClaimed)
+		complete("lapsed", 10*time.Minute)
+		clock.Advance(67 * time.Minute)
+		claim("lapsed", "t3", time.Minute, time.Minute, ReplayProcessed)
+		clock.Advance(2 * time.Minute)
+		claim("lapsed", "t4", time.Minute, time.Minute, ReplayClaimed)
+	})
+
+	t.Run("released claims keep their deadlines", func(t *testing.T) {
+		claim("released", "t1", time.Minute, 10*time.Minute, ReplayClaimed)
+		claim("released", "t2", time.Minute, 70*time.Minute, ReplayInFlight)
+		if err := store.Release(ctx, "released", "t1"); err != nil {
+			t.Fatalf("Release() error = %v", err)
+		}
+		// Released deliveries can be processed again at once.
+		claim("released", "t3", time.Minute, 10*time.Minute, ReplayClaimed)
+		complete("released", 10*time.Minute)
+		clock.Advance(69 * time.Minute)
+		claim("released", "t4", time.Minute, time.Minute, ReplayProcessed)
+		clock.Advance(2 * time.Minute)
+		claim("released", "t5", time.Minute, time.Minute, ReplayClaimed)
+	})
+
+	t.Run("released claims are forgotten once their deadlines pass", func(t *testing.T) {
+		claim("forgotten", "t1", time.Minute, 10*time.Minute, ReplayClaimed)
+		if err := store.Release(ctx, "forgotten", "t1"); err != nil {
+			t.Fatalf("Release() error = %v", err)
+		}
+		clock.Advance(11 * time.Minute)
+		store.sweepLocked(clock.now, 0)
+		if _, ok := store.entries["forgotten"]; ok {
+			t.Fatal("released entry kept past its deadlines")
+		}
+	})
+
 	t.Run("complete never shortens retention", func(t *testing.T) {
 		claim("complete", "t1", time.Minute, time.Hour, ReplayClaimed)
-		if err := store.Complete(ctx, "complete", 2*time.Hour); err != nil {
+		if err := store.Complete(ctx, "complete", clock.now.Add(2*time.Hour)); err != nil {
 			t.Fatalf("Complete() error = %v", err)
 		}
-		if err := store.Complete(ctx, "complete", time.Minute); err != nil {
+		if err := store.Complete(ctx, "complete", clock.now.Add(time.Minute)); err != nil {
 			t.Fatalf("Complete() error = %v", err)
 		}
 		clock.Advance(time.Hour)
@@ -664,43 +784,49 @@ func TestMemoryInboxReplayStore_Capacity(t *testing.T) {
 	t.Run("refuses new claims while full", func(t *testing.T) {
 		store, clock := newClockedMemoryStore(2)
 		for _, key := range []string{"a", "b"} {
-			if state, err := store.Claim(ctx, key, "t-"+key, 5*time.Minute, time.Hour); err != nil || state != ReplayClaimed {
+			if state, err := store.Claim(ctx, key, "t-"+key, 5*time.Minute, clock.now.Add(time.Hour)); err != nil || state != ReplayClaimed {
 				t.Fatalf("Claim(%s) = %v, %v", key, state, err)
 			}
 		}
-		if err := store.Complete(ctx, "a", time.Hour); err != nil {
+		if err := store.Complete(ctx, "a", clock.now.Add(time.Hour)); err != nil {
 			t.Fatalf("Complete() error = %v", err)
 		}
 
-		if _, err := store.Claim(ctx, "c", "t-c", 5*time.Minute, time.Hour); !errors.Is(err, ErrReplayStoreFull) {
+		if _, err := store.Claim(ctx, "c", "t-c", 5*time.Minute, clock.now.Add(time.Hour)); !errors.Is(err, ErrReplayStoreFull) {
 			t.Fatalf("Claim(c) error = %v, want ErrReplayStoreFull", err)
 		}
 		// Tracked deliveries are still recognized.
-		if state, err := store.Claim(ctx, "a", "t-a2", 5*time.Minute, time.Hour); err != nil || state != ReplayProcessed {
+		if state, err := store.Claim(ctx, "a", "t-a2", 5*time.Minute, clock.now.Add(time.Hour)); err != nil || state != ReplayProcessed {
 			t.Fatalf("Claim(a) = %v, %v, want processed", state, err)
 		}
-		if state, err := store.Claim(ctx, "b", "t-b2", 5*time.Minute, time.Hour); err != nil || state != ReplayInFlight {
+		if state, err := store.Claim(ctx, "b", "t-b2", 5*time.Minute, clock.now.Add(time.Hour)); err != nil || state != ReplayInFlight {
 			t.Fatalf("Claim(b) = %v, %v, want in flight", state, err)
 		}
 
-		// Once b's lease lapses, its slot is reclaimed.
+		// A lapsed claim keeps its slot while its deadline may still matter.
 		clock.Advance(6 * time.Minute)
-		if state, err := store.Claim(ctx, "c", "t-c", 5*time.Minute, time.Hour); err != nil || state != ReplayClaimed {
+		if _, err := store.Claim(ctx, "c", "t-c", 5*time.Minute, clock.now.Add(time.Hour)); !errors.Is(err, ErrReplayStoreFull) {
+			t.Fatalf("Claim(c) error = %v, want ErrReplayStoreFull", err)
+		}
+
+		// Once the deadlines pass, the slots are reclaimed.
+		clock.Advance(time.Hour)
+		if state, err := store.Claim(ctx, "c", "t-c", 5*time.Minute, clock.now.Add(time.Hour)); err != nil || state != ReplayClaimed {
 			t.Fatalf("Claim(c) = %v, %v, want claimed", state, err)
 		}
 	})
 
 	t.Run("sweeps a full store at most once a second", func(t *testing.T) {
 		store, clock := newClockedMemoryStore(1)
-		if _, err := store.Claim(ctx, "a", "t-a", 100*time.Millisecond, time.Hour); err != nil {
+		if _, err := store.Claim(ctx, "a", "t-a", 100*time.Millisecond, clock.now.Add(100*time.Millisecond)); err != nil {
 			t.Fatalf("Claim(a) error = %v", err)
 		}
 		clock.Advance(200 * time.Millisecond)
-		if _, err := store.Claim(ctx, "b", "t-b", time.Minute, time.Hour); !errors.Is(err, ErrReplayStoreFull) {
+		if _, err := store.Claim(ctx, "b", "t-b", time.Minute, clock.now.Add(time.Hour)); !errors.Is(err, ErrReplayStoreFull) {
 			t.Fatalf("Claim(b) error = %v, want ErrReplayStoreFull", err)
 		}
 		clock.Advance(time.Second)
-		if state, err := store.Claim(ctx, "b", "t-b", time.Minute, time.Hour); err != nil || state != ReplayClaimed {
+		if state, err := store.Claim(ctx, "b", "t-b", time.Minute, clock.now.Add(time.Hour)); err != nil || state != ReplayClaimed {
 			t.Fatalf("Claim(b) = %v, %v, want claimed", state, err)
 		}
 	})
