@@ -479,6 +479,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	// ActivityPub Federation
 	federationHandler := activitypubapi.NewFederationHandler(queries, cfg.Instance.LocalDomain)
+	federationHandler.SetInboxMaxBodyBytes(cfg.Federation.InboxMaxBodyBytes)
 	if rdb != nil {
 		federationHandler.SetReplayStore(middleware.NewRedisInboxReplayStore(rdb, ""))
 	} else {

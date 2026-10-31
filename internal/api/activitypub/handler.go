@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/activitypub"
@@ -21,11 +21,12 @@ import (
 
 // FederationHandler handles ActivityPub federation endpoints
 type FederationHandler struct {
-	store         Store
-	domain        string
-	actorFetcher  activitypub.ActorFetcher
-	inboxHandlers map[string]InboxHandler
-	replayStore   middleware.InboxReplayStore
+	store             Store
+	domain            string
+	actorFetcher      activitypub.ActorFetcher
+	inboxHandlers     map[string]InboxHandler
+	replayStore       middleware.InboxReplayStore
+	inboxMaxBodyBytes int64
 }
 
 // InboxHandler processes a specific ActivityPub activity type.
@@ -44,11 +45,12 @@ func (e *InboxError) Error() string {
 // NewFederationHandler creates a new federation handler
 func NewFederationHandler(store Store, domain string) *FederationHandler {
 	return &FederationHandler{
-		store:         store,
-		domain:        domain,
-		actorFetcher:  newActorFetcher(store, domain),
-		inboxHandlers: make(map[string]InboxHandler),
-		replayStore:   middleware.NewMemoryInboxReplayStore(0),
+		store:             store,
+		domain:            domain,
+		actorFetcher:      newActorFetcher(store, domain),
+		inboxHandlers:     make(map[string]InboxHandler),
+		replayStore:       middleware.NewMemoryInboxReplayStore(0),
+		inboxMaxBodyBytes: config.DefaultInboxMaxBodyBytes,
 	}
 }
 
@@ -57,6 +59,14 @@ func NewFederationHandler(store Store, domain string) *FederationHandler {
 // called before RegisterRoutes; the default store is in-memory.
 func (h *FederationHandler) SetReplayStore(store middleware.InboxReplayStore) {
 	h.replayStore = store
+}
+
+// SetInboxMaxBodyBytes sets the largest request body the inbox routes accept;
+// larger deliveries are refused with 413 before they are parsed or their actor
+// is fetched. It must be called before RegisterRoutes; a non-positive limit
+// selects config.DefaultInboxMaxBodyBytes.
+func (h *FederationHandler) SetInboxMaxBodyBytes(limit int64) {
+	h.inboxMaxBodyBytes = limit
 }
 
 func (h *FederationHandler) useDB() bool {
@@ -226,21 +236,17 @@ func (h *FederationHandler) GetInstanceOutbox(w http.ResponseWriter, r *http.Req
 	h.writeOutboxForAccount(w, r, account, actorURI, pageRequested, limit, maxID, minID, sinceID)
 }
 
-// PostInbox handles POST /users/:username/inbox and POST /inbox
+// PostInbox handles POST /users/:username/inbox and POST /inbox. It must run
+// after middleware.VerifyHTTPSignature, whose SignedActivity carries the
+// verified body.
 func (h *FederationHandler) PostInbox(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
-		return
-	}
-	_ = r.Body.Close()
-
-	if len(body) == 0 {
-		web.JSONError(w, http.StatusBadRequest, "Missing activity payload")
+	signed, ok := middleware.SignedActivityFromContext(r.Context())
+	if !ok {
+		web.JSONError(w, http.StatusInternalServerError, "Signature verification unavailable")
 		return
 	}
 
-	activity, err := parseInboxActivity(body)
+	activity, err := parseInboxActivity(signed.Body)
 	if err != nil {
 		h.writeInboxError(w, err)
 		return
@@ -285,8 +291,13 @@ func (h *FederationHandler) RegisterRoutes(mux *http.ServeMux) {
 	if h.replayStore == nil {
 		h.replayStore = middleware.NewMemoryInboxReplayStore(0)
 	}
-	inboxHandler := middleware.VerifyHTTPSignature(h.actorFetcher)(
-		middleware.RejectInboxReplays(h.replayStore)(http.HandlerFunc(h.PostInbox)),
+	if h.inboxMaxBodyBytes <= 0 {
+		h.inboxMaxBodyBytes = config.DefaultInboxMaxBodyBytes
+	}
+	inboxHandler := middleware.LimitRequestBody(h.inboxMaxBodyBytes)(
+		middleware.VerifyHTTPSignature(h.actorFetcher)(
+			middleware.RejectInboxReplays(h.replayStore)(http.HandlerFunc(h.PostInbox)),
+		),
 	)
 	mux.Handle("POST /inbox", inboxHandler)
 	mux.Handle("POST /users/{username}/inbox", inboxHandler)
