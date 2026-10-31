@@ -48,7 +48,7 @@ func newAdminMux(roles RoleLookup) *recordingMux {
 	cfg := &config.Config{}
 	mux := &recordingMux{ServeMux: http.NewServeMux()}
 
-	accounts := NewAccountsHandler(queries, "example.com")
+	accounts := NewAccountsHandler(queries, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}})
 	accounts.roles = roles
 	accounts.RegisterRoutes(mux)
 

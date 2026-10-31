@@ -10,7 +10,7 @@ import (
 )
 
 func TestAccountsHandler_RegisterRoutes_Unsensitive(t *testing.T) {
-	h := NewAccountsHandler(nil, "")
+	h := NewAccountsHandler(nil, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
@@ -78,7 +78,7 @@ func TestAccountHumanIdentifier(t *testing.T) {
 }
 
 func TestAccountsHandler_AccountIdentifier_NoQueries(t *testing.T) {
-	h := NewAccountsHandler(nil, "")
+	h := NewAccountsHandler(nil, nil)
 
 	got := h.accountIdentifier(context.Background(), 42)
 	if got != "42" {

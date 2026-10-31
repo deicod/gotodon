@@ -584,7 +584,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	// Admin API
 	// Admin Handlers
-	adminAccountsHandler := admin.NewAccountsHandler(queries, cfg.Instance.LocalDomain)
+	adminAccountsHandler := admin.NewAccountsHandler(queries, cfg)
 	adminAccountsHandler.RegisterRoutes(mux)
 
 	adminDomainAllowsHandler := admin.NewDomainAllowsHandler(queries)
