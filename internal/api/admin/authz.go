@@ -47,8 +47,9 @@ var (
 // authenticated user's role has any of the given permissions or the
 // administrator bit. Mastodon's admin controllers require both: the scope
 // through authorize_if_got_token! and the permission through role.can?(...).
-// Otherwise it writes the response and returns an error. The checks run in
-// this order, so the scope is checked before any database lookup:
+// It then returns r with that role in its context, where ActingRole finds
+// it. Otherwise it writes the response and returns an error. The checks run
+// in this order, so the scope is checked before any database lookup:
 //
 //   - no authenticated account: 401 The access token is invalid
 //   - the token's scopes don't include scope: 403 This action is outside the
@@ -68,47 +69,62 @@ var (
 // scope check then so that its admin dashboard can call these routes with a
 // session cookie. gotodon's API accepts no session cookies, and keeps 401.
 //
-// Disabled users never get this far: the token validator rejects their tokens.
-func RequireAccess(w http.ResponseWriter, r *http.Request, roles RoleLookup, scope string, anyOf ...int64) error {
+// Disabled users never get this far: the token validator rejects their
+// tokens. So UserRole.nobody, which Mastodon's ApplicationPolicy#role gives
+// them, never applies here.
+func RequireAccess(w http.ResponseWriter, r *http.Request, roles RoleLookup, scope string, anyOf ...int64) (*http.Request, error) {
 	ctx := r.Context()
 
 	userID, hasUser := middleware.GetUserID(ctx)
 	accountID, hasAccount := middleware.GetAccountID(ctx)
 	if !hasUser && !hasAccount {
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
-		return ErrNotAuthenticated
+		return nil, ErrNotAuthenticated
 	}
 
 	scopes := middleware.GetScopes(ctx)
 	if strings.TrimSpace(scopes) == "" || !oauth.HasScope(scopes, scope) {
 		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
-		return ErrOutsideScopes
+		return nil, ErrOutsideScopes
 	}
 
 	if roles == nil {
 		web.JSONError(w, http.StatusInternalServerError, "Admin data unavailable")
-		return ErrRoleLookup
+		return nil, ErrRoleLookup
 	}
 
 	if !hasUser {
 		user, err := roles.GetUserByAccountID(ctx, accountID)
 		if err != nil {
-			return roleLookupFailed(w, r, err)
+			return nil, roleLookupFailed(w, r, err)
 		}
 		userID = user.ID
 	}
 
 	role, err := roles.GetUserRole(ctx, userID)
 	if err != nil {
-		return roleLookupFailed(w, r, err)
+		return nil, roleLookupFailed(w, r, err)
 	}
 
 	if !auth.HasPermission(role.Permissions, anyOf...) {
 		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
-		return ErrNotPermitted
+		return nil, ErrNotPermitted
 	}
 
-	return nil
+	return r.WithContext(context.WithValue(ctx, actingRoleKey{}, role)), nil
+}
+
+// actingRoleKey is the context key under which RequireAccess stores the
+// acting user's role.
+type actingRoleKey struct{}
+
+// ActingRole returns the role of the user making an admin request, as
+// RequireAccess resolved it, for the record-level checks of Mastodon's
+// policies. Every handler that WithAccess runs finds one; ok is false only
+// for a request that didn't pass RequireAccess.
+func ActingRole(ctx context.Context) (db.UserRole, bool) {
+	role, ok := ctx.Value(actingRoleKey{}).(db.UserRole)
+	return role, ok
 }
 
 // roleLookupFailed answers a failed user or role lookup: a missing row means
@@ -125,7 +141,8 @@ func roleLookupFailed(w http.ResponseWriter, r *http.Request, err error) error {
 }
 
 // WithAccess returns a wrapper that runs a handler only when RequireAccess
-// allows the request for scope and any of the given permissions. It is
+// allows the request for scope and any of the given permissions, with the
+// request RequireAccess returned, so ActingRole works in the handler. It is
 // applied at route registration so that every route's scope and permission
 // are declared together in its handler's RegisterRoutes, and the checks run
 // before the handler reads the request body.
@@ -145,7 +162,8 @@ func WithAccess(roles RoleLookup, scope string, anyOf ...int64) func(http.Handle
 	required := append([]int64(nil), anyOf...)
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			if err := RequireAccess(w, r, roles, scope, required...); err != nil {
+			r, err := RequireAccess(w, r, roles, scope, required...)
+			if err != nil {
 				return
 			}
 			next(w, r)
