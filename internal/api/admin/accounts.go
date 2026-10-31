@@ -200,8 +200,14 @@ func (h *AccountsHandler) logUserAction(ctx context.Context, adminID, targetAcco
 	if err != nil {
 		return
 	}
+	h.logUserActionFor(ctx, adminID, targetAccountID, user.ID, action)
+}
+
+// logUserActionFor logs an action on the user userID of the account
+// targetAccountID, for when the user row is already gone.
+func (h *AccountsHandler) logUserActionFor(ctx context.Context, adminID, targetAccountID, userID int64, action string) {
 	routeParam := strconv.FormatInt(targetAccountID, 10)
-	h.logAdminAction(ctx, adminID, action, adminActionTargetUser, user.ID, h.accountIdentifier(ctx, targetAccountID), routeParam, "")
+	h.logAdminAction(ctx, adminID, action, adminActionTargetUser, userID, h.accountIdentifier(ctx, targetAccountID), routeParam, "")
 }
 
 // GetAll handles GET /api/v1/admin/accounts
@@ -505,8 +511,10 @@ func (h *AccountsHandler) Reject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Rejecting deleted the user row, so the entry names the user that the
+	// target lookup found.
 	if adminID, ok := middleware.GetAccountID(r.Context()); ok {
-		h.logUserAction(r.Context(), adminID, target.ID, "reject")
+		h.logUserActionFor(r.Context(), adminID, target.ID, target.UserID.Int64, "reject")
 	}
 
 	web.JSON(w, http.StatusOK, map[string]any{})
