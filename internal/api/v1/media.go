@@ -69,6 +69,9 @@ func (h *MediaHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Large files need longer than the server's ordinary request budget.
+	web.ExtendUploadDeadlines(w)
+
 	// Limit upload size (e.g. 40MB matches max video size)
 	r.Body = http.MaxBytesReader(w, r.Body, media.MaxVideoSize+1024)
 	if err := r.ParseMultipartForm(media.MaxVideoSize + 1024); err != nil {
