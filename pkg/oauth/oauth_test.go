@@ -120,12 +120,59 @@ func TestHasScope(t *testing.T) {
 		// Granular scope doesn't grant parent
 		{"read:statuses", "read", false},
 		{"write:statuses", "write", false},
+		{"admin:read:accounts", "admin:read", false},
+		{"admin:write:domain_blocks", "admin:write", false},
+
+		// Admin scopes are separate from the user scopes and from each other
+		{"read write follow push", "admin:read", false},
+		{"read write follow push", "admin:write:accounts", false},
+		{"admin:read", "admin:write", false},
+		{"admin:read", "admin:write:accounts", false},
+		{"admin:write", "admin:read:accounts", false},
+		{"admin:read:accounts", "admin:read:reports", false},
+		{"admin:write:domain_blocks", "admin:write:ip_blocks", false},
+		{"admin:read admin:write", "read", false},
 	}
 
 	for _, tt := range tests {
 		got := HasScope(tt.tokenScopes, tt.requiredScope)
 		if got != tt.want {
 			t.Errorf("HasScope(%q, %q) = %v, want %v", tt.tokenScopes, tt.requiredScope, got, tt.want)
+		}
+	}
+}
+
+// TestAdminScopeConstants checks that every admin scope constant names a
+// valid scope that its parent covers.
+func TestAdminScopeConstants(t *testing.T) {
+	tests := []struct {
+		scope  string
+		parent string
+	}{
+		{ScopeAdminRead, ""},
+		{ScopeAdminWrite, ""},
+		{ScopeAdminReadAccounts, ScopeAdminRead},
+		{ScopeAdminReadReports, ScopeAdminRead},
+		{ScopeAdminReadDomainAllows, ScopeAdminRead},
+		{ScopeAdminReadDomainBlocks, ScopeAdminRead},
+		{ScopeAdminReadIPBlocks, ScopeAdminRead},
+		{ScopeAdminReadEmailDomainBlocks, ScopeAdminRead},
+		{ScopeAdminReadCanonicalEmailBlocks, ScopeAdminRead},
+		{ScopeAdminWriteAccounts, ScopeAdminWrite},
+		{ScopeAdminWriteReports, ScopeAdminWrite},
+		{ScopeAdminWriteDomainAllows, ScopeAdminWrite},
+		{ScopeAdminWriteDomainBlocks, ScopeAdminWrite},
+		{ScopeAdminWriteIPBlocks, ScopeAdminWrite},
+		{ScopeAdminWriteEmailDomainBlocks, ScopeAdminWrite},
+		{ScopeAdminWriteCanonicalEmailBlocks, ScopeAdminWrite},
+	}
+
+	for _, tt := range tests {
+		if !ValidScopes[tt.scope] {
+			t.Errorf("%q is not in ValidScopes", tt.scope)
+		}
+		if tt.parent != "" && !HasScope(tt.parent, tt.scope) {
+			t.Errorf("HasScope(%q, %q) = false, want true", tt.parent, tt.scope)
 		}
 	}
 }
