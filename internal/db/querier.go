@@ -38,6 +38,11 @@ type Querier interface {
 	AdminDisableAccount(ctx context.Context, accountID int64) error
 	AdminEnableAccount(ctx context.Context, accountID int64) error
 	AdminGetAccount(ctx context.Context, id int64) (AdminGetAccountRow, error)
+	// The account state that Mastodon's AccountPolicy, UserPolicy and
+	// Api::V1::Admin::AccountsController check before an admin account action.
+	// The users and user_roles columns are NULL for an account without a user,
+	// and role_position is NULL for a user without a role.
+	AdminGetAccountActionTarget(ctx context.Context, id int64) (AdminGetAccountActionTargetRow, error)
 	AdminGetCanonicalEmailBlock(ctx context.Context, id int64) (CanonicalEmailBlock, error)
 	AdminGetCanonicalEmailBlockByHash(ctx context.Context, canonicalEmailHash string) (CanonicalEmailBlock, error)
 	AdminGetDomainBlock(ctx context.Context, id int64) (DomainBlock, error)

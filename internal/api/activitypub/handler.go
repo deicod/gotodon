@@ -447,7 +447,7 @@ func (h *FederationHandler) renderInstanceActor(w http.ResponseWriter, account d
 }
 
 func (h *FederationHandler) instanceActorURI() string {
-	return instanceActorURIForDomain(h.domain)
+	return activitypub.InstanceActorURI(h.domain)
 }
 
 func (h *FederationHandler) instanceActorURL() string {

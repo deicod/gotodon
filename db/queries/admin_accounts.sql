@@ -47,6 +47,28 @@ JOIN users u ON a.id = u.account_id
 LEFT JOIN user_roles r ON r.id = u.role_id
 WHERE a.id = $1;
 
+-- name: AdminGetAccountActionTarget :one
+-- The account state that Mastodon's AccountPolicy, UserPolicy and
+-- Api::V1::Admin::AccountsController check before an admin account action.
+-- The users and user_roles columns are NULL for an account without a user,
+-- and role_position is NULL for a user without a role.
+SELECT
+    a.id,
+    a.domain,
+    a.uri,
+    a.suspended_at,
+    a.suspension_origin,
+    u.id AS user_id,
+    u.approved AS user_approved,
+    r.position AS role_position,
+    EXISTS (
+        SELECT 1 FROM account_deletion_requests d WHERE d.account_id = a.id
+    ) AS deletion_requested
+FROM accounts a
+LEFT JOIN users u ON u.account_id = a.id
+LEFT JOIN user_roles r ON r.id = u.role_id
+WHERE a.id = $1;
+
 -- name: AdminListAccountsV2 :many
 SELECT
     a.id,

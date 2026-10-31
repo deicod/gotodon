@@ -132,6 +132,58 @@ func (q *Queries) AdminGetAccount(ctx context.Context, id int64) (AdminGetAccoun
 	return i, err
 }
 
+const adminGetAccountActionTarget = `-- name: AdminGetAccountActionTarget :one
+SELECT
+    a.id,
+    a.domain,
+    a.uri,
+    a.suspended_at,
+    a.suspension_origin,
+    u.id AS user_id,
+    u.approved AS user_approved,
+    r.position AS role_position,
+    EXISTS (
+        SELECT 1 FROM account_deletion_requests d WHERE d.account_id = a.id
+    ) AS deletion_requested
+FROM accounts a
+LEFT JOIN users u ON u.account_id = a.id
+LEFT JOIN user_roles r ON r.id = u.role_id
+WHERE a.id = $1
+`
+
+type AdminGetAccountActionTargetRow struct {
+	ID                int64              `db:"id" json:"id"`
+	Domain            pgtype.Text        `db:"domain" json:"domain"`
+	Uri               string             `db:"uri" json:"uri"`
+	SuspendedAt       pgtype.Timestamptz `db:"suspended_at" json:"suspended_at"`
+	SuspensionOrigin  pgtype.Int4        `db:"suspension_origin" json:"suspension_origin"`
+	UserID            pgtype.Int8        `db:"user_id" json:"user_id"`
+	UserApproved      pgtype.Bool        `db:"user_approved" json:"user_approved"`
+	RolePosition      pgtype.Int4        `db:"role_position" json:"role_position"`
+	DeletionRequested bool               `db:"deletion_requested" json:"deletion_requested"`
+}
+
+// The account state that Mastodon's AccountPolicy, UserPolicy and
+// Api::V1::Admin::AccountsController check before an admin account action.
+// The users and user_roles columns are NULL for an account without a user,
+// and role_position is NULL for a user without a role.
+func (q *Queries) AdminGetAccountActionTarget(ctx context.Context, id int64) (AdminGetAccountActionTargetRow, error) {
+	row := q.db.QueryRow(ctx, adminGetAccountActionTarget, id)
+	var i AdminGetAccountActionTargetRow
+	err := row.Scan(
+		&i.ID,
+		&i.Domain,
+		&i.Uri,
+		&i.SuspendedAt,
+		&i.SuspensionOrigin,
+		&i.UserID,
+		&i.UserApproved,
+		&i.RolePosition,
+		&i.DeletionRequested,
+	)
+	return i, err
+}
+
 const adminListAccounts = `-- name: AdminListAccounts :many
 SELECT 
     a.id, a.username, a.domain, a.created_at, 

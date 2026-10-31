@@ -14,21 +14,56 @@ import (
 	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/activitypub"
 	"github.com/deicod/gotodon/pkg/oauth"
 )
 
-// AccountsHandler handles admin account endpoints
-type AccountsHandler struct {
-	queries *db.Queries
-	roles   RoleLookup
+// accountsStore is the part of *db.Queries the admin accounts handler uses.
+// Tests use stubs.
+type accountsStore interface {
+	AdminListAccounts(ctx context.Context, arg db.AdminListAccountsParams) ([]db.AdminListAccountsRow, error)
+	AdminGetAccount(ctx context.Context, id int64) (db.AdminGetAccountRow, error)
+	AdminGetAccountActionTarget(ctx context.Context, id int64) (db.AdminGetAccountActionTargetRow, error)
+	AdminApproveAccount(ctx context.Context, accountID int64) error
+	AdminRejectAccount(ctx context.Context, accountID int64) error
+	AdminDeleteAccount(ctx context.Context, id int64) error
+	AdminDisableAccount(ctx context.Context, accountID int64) error
+	AdminEnableAccount(ctx context.Context, accountID int64) error
+	AdminSilenceAccount(ctx context.Context, id int64) error
+	AdminUnsilenceAccount(ctx context.Context, id int64) error
+	AdminSuspendAccount(ctx context.Context, id int64) error
+	AdminUnsuspendAccount(ctx context.Context, id int64) error
+	AdminSensitizeAccount(ctx context.Context, id int64) error
+	AdminUnsensitizeAccount(ctx context.Context, id int64) error
+	GetAccountByIDAllowSuspended(ctx context.Context, id int64) (db.Account, error)
+	GetUserByAccountID(ctx context.Context, accountID int64) (db.User, error)
+	CreateAdminActionLog(ctx context.Context, arg db.CreateAdminActionLogParams) error
 }
 
-// NewAccountsHandler creates a new admin accounts handler
-func NewAccountsHandler(queries *db.Queries) *AccountsHandler {
-	return &AccountsHandler{
-		queries: queries,
-		roles:   NewRoleLookup(queries),
+// AccountsHandler handles admin account endpoints
+type AccountsHandler struct {
+	store accountsStore
+	roles RoleLookup
+	// instanceActorURI identifies the instance actor, which can't be
+	// suspended. It is "" without a local domain, and then matches no
+	// account.
+	instanceActorURI string
+}
+
+// NewAccountsHandler creates a new admin accounts handler for the server at
+// localDomain, whose instance actor it recognizes.
+func NewAccountsHandler(queries *db.Queries, localDomain string) *AccountsHandler {
+	h := &AccountsHandler{
+		roles:            NewRoleLookup(queries),
+		instanceActorURI: activitypub.InstanceActorURI(localDomain),
 	}
+	// A nil *db.Queries leaves store nil rather than a non-nil interface
+	// holding a nil pointer. The routes are unreachable then: without a
+	// role lookup, WithAccess answers 500.
+	if queries != nil {
+		h.store = queries
+	}
+	return h
 }
 
 // AdminAccount represents an account in the admin view
@@ -112,10 +147,10 @@ func roleFromRow(roleID pgtype.Int8, roleName pgtype.Text, roleColor pgtype.Text
 }
 
 func (h *AccountsHandler) accountIdentifier(ctx context.Context, accountID int64) string {
-	if h.queries == nil {
+	if h.store == nil {
 		return strconv.FormatInt(accountID, 10)
 	}
-	account, err := h.queries.GetAccountByIDAllowSuspended(ctx, accountID)
+	account, err := h.store.GetAccountByIDAllowSuspended(ctx, accountID)
 	if err != nil {
 		return strconv.FormatInt(accountID, 10)
 	}
@@ -127,10 +162,10 @@ func (h *AccountsHandler) accountIdentifier(ctx context.Context, accountID int64
 }
 
 func (h *AccountsHandler) logAdminAction(ctx context.Context, adminID int64, action string, targetType string, targetID int64, humanIdentifier string, routeParam string, permalink string) {
-	if h.queries == nil || adminID <= 0 || action == "" || targetType == "" || targetID <= 0 {
+	if h.store == nil || adminID <= 0 || action == "" || targetType == "" || targetID <= 0 {
 		return
 	}
-	_ = h.queries.CreateAdminActionLog(ctx, db.CreateAdminActionLogParams{
+	_ = h.store.CreateAdminActionLog(ctx, db.CreateAdminActionLogParams{
 		AccountID:  adminID,
 		Action:     action,
 		TargetType: pgtype.Text{String: targetType, Valid: true},
@@ -155,10 +190,10 @@ func (h *AccountsHandler) logAccountAction(ctx context.Context, adminID, targetA
 }
 
 func (h *AccountsHandler) logUserAction(ctx context.Context, adminID, targetAccountID int64, action string) {
-	if h.queries == nil {
+	if h.store == nil {
 		return
 	}
-	user, err := h.queries.GetUserByAccountID(ctx, targetAccountID)
+	user, err := h.store.GetUserByAccountID(ctx, targetAccountID)
 	if err != nil {
 		return
 	}
@@ -196,7 +231,7 @@ func (h *AccountsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
 		Ip:              web.QueryParam(r, "ip"),
 	}
 
-	rows, err := h.queries.AdminListAccounts(r.Context(), params)
+	rows, err := h.store.AdminListAccounts(r.Context(), params)
 	if err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -245,7 +280,7 @@ func (h *AccountsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	row, err := h.queries.AdminGetAccount(r.Context(), accountID)
+	row, err := h.store.AdminGetAccount(r.Context(), accountID)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
@@ -311,16 +346,16 @@ func (h *AccountsHandler) TakeAction(w http.ResponseWriter, r *http.Request) {
 
 	switch req.Type {
 	case "disable":
-		err = h.queries.AdminDisableAccount(ctx, accountID)
+		err = h.store.AdminDisableAccount(ctx, accountID)
 		logFn = func() { h.logUserAction(ctx, adminID, accountID, "disable") }
 	case "sensitive":
-		err = h.queries.AdminSensitizeAccount(ctx, accountID)
+		err = h.store.AdminSensitizeAccount(ctx, accountID)
 		logFn = func() { h.logAccountAction(ctx, adminID, accountID, "sensitive") }
 	case "silence":
-		err = h.queries.AdminSilenceAccount(ctx, accountID)
+		err = h.store.AdminSilenceAccount(ctx, accountID)
 		logFn = func() { h.logAccountAction(ctx, adminID, accountID, "silence") }
 	case "suspend":
-		err = h.queries.AdminSuspendAccount(ctx, accountID)
+		err = h.store.AdminSuspendAccount(ctx, accountID)
 		logFn = func() { h.logAccountAction(ctx, adminID, accountID, "suspend") }
 	case "none":
 		// Do nothing, just log action?
@@ -349,7 +384,7 @@ func (h *AccountsHandler) Approve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.queries.AdminApproveAccount(r.Context(), accountID); err != nil {
+	if err := h.store.AdminApproveAccount(r.Context(), accountID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
@@ -370,7 +405,7 @@ func (h *AccountsHandler) Reject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.queries.AdminRejectAccount(r.Context(), accountID); err != nil {
+	if err := h.store.AdminRejectAccount(r.Context(), accountID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
@@ -390,7 +425,7 @@ func (h *AccountsHandler) Enable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.queries.AdminEnableAccount(r.Context(), accountID); err != nil {
+	if err := h.store.AdminEnableAccount(r.Context(), accountID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
@@ -410,7 +445,7 @@ func (h *AccountsHandler) Unsilence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.queries.AdminUnsilenceAccount(r.Context(), accountID); err != nil {
+	if err := h.store.AdminUnsilenceAccount(r.Context(), accountID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
@@ -430,7 +465,7 @@ func (h *AccountsHandler) Unsuspend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.queries.AdminUnsuspendAccount(r.Context(), accountID); err != nil {
+	if err := h.store.AdminUnsuspendAccount(r.Context(), accountID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
@@ -450,7 +485,7 @@ func (h *AccountsHandler) Unsensitize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.queries.AdminUnsensitizeAccount(r.Context(), accountID); err != nil {
+	if err := h.store.AdminUnsensitizeAccount(r.Context(), accountID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
@@ -470,12 +505,12 @@ func (h *AccountsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.queries.AdminGetAccount(r.Context(), accountID); err != nil {
+	if _, err := h.store.AdminGetAccount(r.Context(), accountID); err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
 
-	if err := h.queries.AdminDeleteAccount(r.Context(), accountID); err != nil {
+	if err := h.store.AdminDeleteAccount(r.Context(), accountID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
