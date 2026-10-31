@@ -57,10 +57,10 @@ finishes.
 ### Retention
 
 Every delivery of a request has a deadline: the time its signature stops
-verifying (`ValidUntil`), plus a 5-minute margin for clock drift between
-instances. The record of a request keeps the latest deadline of every delivery
-seen with that identity, not just the processed one. This includes deliveries
-that were:
+verifying (`ValidUntil`), plus a 5-minute margin for clock drift between the
+instances checking signatures and the store forgetting records. The record of a
+request keeps the latest deadline of every delivery seen with that identity, not
+just the processed one. This includes deliveries that were:
 
 - answered `503` while the request was in flight;
 - seen by a claim that later lapsed or was released after a failure.
@@ -71,9 +71,10 @@ once the record expires, every captured copy of the request fails the
 freshness check.
 
 A claim on a request that is being processed is renewed every 30 seconds for
-another 2 minutes. If the server processing it dies, duplicates are unblocked 2
-minutes after the last renewal. The handler's context is cancelled, so
-processing stops before a duplicate can take over, in two cases:
+another 2 minutes, measured on the store's clock. If the server processing it
+dies, duplicates are unblocked 2 minutes after the last renewal. The handler's
+context is cancelled, so processing stops before a duplicate can take over, in
+two cases:
 
 - a renewal finds that the claim is no longer held;
 - failed renewals would let the claim lapse before the next attempt.
@@ -82,15 +83,19 @@ processing stops before a duplicate can take over, in two cases:
 
 | Deployment | Store | Notes |
 |---|---|---|
-| Redis reachable at startup | `RedisInboxReplayStore` | Shared by all instances. Keys are `gotodon:inbox_replay:<sha256>` hashes with `token` and `lease` while claimed, `done` once processed, and `retain` (the latest deadline, in Unix milliseconds). A key expires when both its lease and its retention deadline have passed. |
+| Redis reachable at startup | `RedisInboxReplayStore` | Shared by all instances. Keys are `gotodon:inbox_replay:<sha256>` hashes with `token` and `lease` while claimed, `done` once processed, and `retain` (the latest deadline), in Unix milliseconds. Leases and key expiry are measured on Redis's clock (`TIME`). A key expires when both its lease and its retention deadline have passed. Requires Redis 5 or later, whose scripts may write after reading the clock. |
 | No Redis | `MemoryInboxReplayStore` | Per process; the server logs a warning at startup. It tracks up to 524,288 requests, each until its deadlines pass. When full, it refuses new requests with `503` rather than forgetting live entries. |
 
 Running more than one instance behind the same inboxes requires Redis. Otherwise a
-replay sent to a different instance is not recognized. If the store fails, the
-server fails closed: the delivery is answered `503` with `Retry-After` and is not
-processed. Its deadline cannot be recorded either. If that delivery's signature
-outlives every recorded deadline, a captured copy replayed after the record
-expires is processed again.
+replay sent to a different instance is not recognized. Because claims are timed on
+Redis's clock, instances whose clocks disagree still agree on whether a request is
+in flight. Signatures are checked on each instance's own clock, though, so an
+instance must not run more than 5 minutes behind Redis's clock: it would keep
+accepting a signature after Redis has forgotten the request. If the store fails,
+the server fails closed: the delivery is answered `503` with `Retry-After` and is
+not processed. Its deadline cannot be recorded either. If that delivery's
+signature outlives every recorded deadline, a captured copy replayed after the
+record expires is processed again.
 
 ## Handler idempotency
 

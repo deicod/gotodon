@@ -53,6 +53,20 @@ func TestRedisInboxReplayStore_Expiry(t *testing.T) {
 	store, client, prefix := newTestRedisReplayStore(t)
 	ctx := context.Background()
 
+	// Leases and expirations follow Redis's clock, which may differ from
+	// this process's; deadlines are taken from it too.
+	redisNow := func() time.Time {
+		t.Helper()
+		now, err := client.Time(ctx).Result()
+		if err != nil {
+			t.Fatalf("TIME error = %v", err)
+		}
+		return now
+	}
+	deadline := func(d time.Duration) time.Time {
+		t.Helper()
+		return redisNow().Add(d)
+	}
 	ttl := func(key string) time.Duration {
 		t.Helper()
 		d, err := client.PTTL(ctx, prefix+key).Result()
@@ -61,19 +75,23 @@ func TestRedisInboxReplayStore_Expiry(t *testing.T) {
 		}
 		return d
 	}
-	// leaseLeft is how long the claim on key has left; the key itself lives
-	// until its retention deadline as well.
-	leaseLeft := func(key string) time.Duration {
+	// leaseUntil is when the claim on key lapses; the key itself lives until
+	// its retention deadline as well.
+	leaseUntil := func(key string) time.Time {
 		t.Helper()
 		ms, err := client.HGet(ctx, prefix+key, "lease").Int64()
 		if err != nil {
 			t.Fatalf("HGET %s lease error = %v", key, err)
 		}
-		return time.Until(time.UnixMilli(ms))
+		return time.UnixMilli(ms)
+	}
+	leaseLeft := func(key string) time.Duration {
+		t.Helper()
+		return leaseUntil(key).Sub(redisNow())
 	}
 	claim := func(key, token string, lease, retain time.Duration, want ReplayState) {
 		t.Helper()
-		got, err := store.Claim(ctx, key, token, lease, time.Now().Add(retain))
+		got, err := store.Claim(ctx, key, token, lease, deadline(retain))
 		if err != nil {
 			t.Fatalf("Claim(%s) error = %v", key, err)
 		}
@@ -81,6 +99,35 @@ func TestRedisInboxReplayStore_Expiry(t *testing.T) {
 			t.Fatalf("Claim(%s, %s) = %v, want %v", key, token, got, want)
 		}
 	}
+	complete := func(key string, retain time.Duration) {
+		t.Helper()
+		if err := store.Complete(ctx, key, deadline(retain)); err != nil {
+			t.Fatalf("Complete(%s) error = %v", key, err)
+		}
+	}
+
+	t.Run("leases are measured on the Redis clock", func(t *testing.T) {
+		// Instances sharing Redis compare leases on its clock, whatever
+		// their own clocks say.
+		const lease = 2 * time.Minute
+		inLease := func(before, after time.Time) {
+			t.Helper()
+			got := leaseUntil("clock")
+			if got.Before(before.Truncate(time.Millisecond).Add(lease)) || got.After(after.Add(lease)) {
+				t.Fatalf("lease until %v, want Redis time %v to %v plus %v", got, before, after, lease)
+			}
+		}
+
+		before := redisNow()
+		claim("clock", "t1", lease, time.Hour, ReplayClaimed)
+		inLease(before, redisNow())
+
+		before = redisNow()
+		if held, err := store.Renew(ctx, "clock", "t1", lease); err != nil || !held {
+			t.Fatalf("Renew() = %v, %v, want held", held, err)
+		}
+		inLease(before, redisNow())
+	})
 
 	t.Run("claims carry the lease", func(t *testing.T) {
 		claim("lease", "t1", 2*time.Minute, time.Hour, ReplayClaimed)
@@ -128,9 +175,7 @@ func TestRedisInboxReplayStore_Expiry(t *testing.T) {
 		if d := leaseLeft("inflight"); d > time.Minute {
 			t.Fatalf("lease left = %v, want at most the 1m lease", d)
 		}
-		if err := store.Complete(ctx, "inflight", time.Now().Add(10*time.Minute)); err != nil {
-			t.Fatalf("Complete() error = %v", err)
-		}
+		complete("inflight", 10*time.Minute)
 		if d := ttl("inflight"); d <= 69*time.Minute || d > 70*time.Minute {
 			t.Fatalf("completed TTL = %v, want about 70m", d)
 		}
@@ -147,9 +192,7 @@ func TestRedisInboxReplayStore_Expiry(t *testing.T) {
 			t.Fatalf("released TTL = %v, want about 70m", d)
 		}
 		claim("released", "t3", time.Minute, 10*time.Minute, ReplayClaimed)
-		if err := store.Complete(ctx, "released", time.Now().Add(10*time.Minute)); err != nil {
-			t.Fatalf("Complete() error = %v", err)
-		}
+		complete("released", 10*time.Minute)
 		if d := ttl("released"); d <= 69*time.Minute || d > 70*time.Minute {
 			t.Fatalf("completed TTL = %v, want about 70m", d)
 		}
@@ -160,9 +203,7 @@ func TestRedisInboxReplayStore_Expiry(t *testing.T) {
 		claim("lapsed", "t1", 50*time.Millisecond, 70*time.Minute, ReplayClaimed)
 		time.Sleep(100 * time.Millisecond)
 		claim("lapsed", "t2", time.Minute, 10*time.Minute, ReplayClaimed)
-		if err := store.Complete(ctx, "lapsed", time.Now().Add(10*time.Minute)); err != nil {
-			t.Fatalf("Complete() error = %v", err)
-		}
+		complete("lapsed", 10*time.Minute)
 		if d := ttl("lapsed"); d <= 69*time.Minute || d > 70*time.Minute {
 			t.Fatalf("completed TTL = %v, want about 70m", d)
 		}
@@ -180,9 +221,7 @@ func TestRedisInboxReplayStore_Expiry(t *testing.T) {
 
 	t.Run("retention only grows", func(t *testing.T) {
 		claim("retain", "t1", time.Minute, time.Hour, ReplayClaimed)
-		if err := store.Complete(ctx, "retain", time.Now().Add(time.Hour)); err != nil {
-			t.Fatalf("Complete() error = %v", err)
-		}
+		complete("retain", time.Hour)
 		if d := ttl("retain"); d <= 59*time.Minute || d > time.Hour {
 			t.Fatalf("completed TTL = %v, want about 1h", d)
 		}
@@ -193,9 +232,7 @@ func TestRedisInboxReplayStore_Expiry(t *testing.T) {
 		}
 
 		claim("retain", "t3", time.Minute, time.Minute, ReplayProcessed)
-		if err := store.Complete(ctx, "retain", time.Now().Add(time.Minute)); err != nil {
-			t.Fatalf("Complete() error = %v", err)
-		}
+		complete("retain", time.Minute)
 		if d := ttl("retain"); d <= 119*time.Minute {
 			t.Fatalf("TTL after shorter retention = %v, want about 2h", d)
 		}

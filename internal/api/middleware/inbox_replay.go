@@ -40,7 +40,8 @@ const (
 	// inboxReplayRenewInterval is how often a held claim is renewed.
 	inboxReplayRenewInterval = inboxReplayLease / 4
 	// inboxReplayClockMargin extends retention past the signature's validity
-	// to cover clock drift between server instances sharing the store.
+	// to cover clock drift between the instances verifying signatures and the
+	// store forgetting deliveries.
 	inboxReplayClockMargin = 5 * time.Minute
 	// inboxReplayRetryAfter is the Retry-After for deliveries that cannot be
 	// processed yet.
@@ -76,6 +77,10 @@ var errReplayClaimLost = errors.New("inbox replay claim lost")
 // whether they were processed, refused while the key was in flight, or seen
 // by a claim that was released or lapsed, so that a completed key cannot be
 // forgotten while any copy of it still verifies.
+//
+// Leases are durations measured by the store. A store shared by several
+// instances measures them on one clock, so that instances whose clocks
+// disagree still agree on when a claim lapses.
 type InboxReplayStore interface {
 	// Claim records retainUntil as a deadline of key and claims key under
 	// token for at most lease, unless key is in flight under another live
