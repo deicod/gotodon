@@ -204,6 +204,11 @@ func (s *CreateService) handleCreate(ctx context.Context, activity *activitypub.
 		Reply:              inReplyToURI != "",
 	})
 	if err != nil {
+		// The note is already known: a concurrent delivery stored it first,
+		// or it was deleted and its URI is kept to stop it from returning.
+		if isUniqueViolation(err) {
+			return nil
+		}
 		return err
 	}
 

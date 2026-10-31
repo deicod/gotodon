@@ -227,6 +227,22 @@ func TestVerifyHTTPSignature(t *testing.T) {
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
+			name: "date too far in the future",
+			request: func(t *testing.T) *http.Request {
+				req := httptest.NewRequest(http.MethodPost, sigInboxURL, bytes.NewReader(aliceBody))
+				signer, err := activitypub.NewHTTPSigner(sigKeyID, activitypub.EncodePrivateKey(aliceKey))
+				if err != nil {
+					t.Fatalf("NewHTTPSigner() error = %v", err)
+				}
+				req.Header.Set("Date", time.Now().Add(2*time.Hour).UTC().Format(http.TimeFormat))
+				if err := signer.Sign(req, aliceBody); err != nil {
+					t.Fatalf("Sign() error = %v", err)
+				}
+				return req
+			},
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
 			name: "altered body",
 			request: func(t *testing.T) *http.Request {
 				req := newSignedInboxPost(t, aliceKey, sigKeyID, sigMandatoryHeaders, aliceBody)
@@ -370,6 +386,52 @@ func TestVerifyHTTPSignature(t *testing.T) {
 				t.Fatalf("next handler body = %q, want %q", nextBody, aliceBody)
 			}
 		})
+	}
+}
+
+func TestVerifyHTTPSignature_SignedActivity(t *testing.T) {
+	key, publicPEM := generateSigningKey(t)
+	fetcher := &recordingActorFetcher{actors: map[string]*activitypub.Actor{
+		sigActorURI: {
+			Object:    activitypub.Object{ID: sigActorURI},
+			PublicKey: &activitypub.PublicKey{ID: sigKeyID, Owner: sigActorURI, PublicKeyPem: publicPEM},
+		},
+	}}
+
+	var got SignedActivity
+	var ok bool
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, ok = SignedActivityFromContext(r.Context())
+		w.WriteHeader(http.StatusAccepted)
+	})
+
+	body := followActivity(sigActorURI)
+	req := newSignedInboxPost(t, key, sigKeyID, sigMandatoryHeaders, body)
+	date, err := http.ParseTime(req.Header.Get("Date"))
+	if err != nil {
+		t.Fatalf("ParseTime() error = %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	VerifyHTTPSignature(fetcher)(next).ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusAccepted)
+	}
+	if !ok {
+		t.Fatal("verified request carries no SignedActivity")
+	}
+	if got.ActorURI != sigActorURI {
+		t.Errorf("ActorURI = %q, want %q", got.ActorURI, sigActorURI)
+	}
+	if got.BodyDigest != sha256.Sum256(body) {
+		t.Errorf("BodyDigest does not match the body")
+	}
+	if want := date.Add(5*time.Minute + time.Hour); !got.ValidUntil.Equal(want) {
+		t.Errorf("ValidUntil = %v, want %v", got.ValidUntil, want)
+	}
+
+	if _, ok := SignedActivityFromContext(context.Background()); ok {
+		t.Error("SignedActivityFromContext() found an activity in an empty context")
 	}
 }
 

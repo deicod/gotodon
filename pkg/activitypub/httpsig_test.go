@@ -304,6 +304,34 @@ func TestHTTPVerifier_VerifyRequest(t *testing.T) {
 			wantErr: "signature expired",
 		},
 		{
+			name: "created too far in the future",
+			sig: draftSignature{
+				algorithm: "hs2019",
+				headers:   []string{"(request-target)", "host", "(created)", "digest"},
+				created:   unixString(now.Add(2 * time.Hour)),
+			},
+			wantErr: "created in the future",
+		},
+		{
+			name: "expired created without expires",
+			sig: draftSignature{
+				algorithm: "hs2019",
+				headers:   []string{"(request-target)", "host", "(created)", "digest"},
+				created:   unixString(now.Add(-2 * time.Hour)),
+			},
+			wantErr: "signature expired",
+		},
+		{
+			name: "signed expires beyond the twelve hour cap",
+			sig: draftSignature{
+				algorithm: "hs2019",
+				headers:   []string{"(request-target)", "host", "(created)", "(expires)", "digest"},
+				created:   unixString(now.Add(-14 * time.Hour)),
+				expires:   unixString(now.Add(time.Hour)),
+			},
+			wantErr: "signature expired",
+		},
+		{
 			name: "created pseudo-header with rsa-sha256",
 			sig: draftSignature{
 				algorithm: "rsa-sha256",
@@ -464,6 +492,86 @@ func TestHTTPVerifier_ParseRequest(t *testing.T) {
 			t.Fatalf("Verify() error = %v", err)
 		}
 	})
+}
+
+func TestRequestSignature_ValidUntil(t *testing.T) {
+	keys := newTestKeys(t)
+	now := time.Now().Truncate(time.Second)
+
+	tests := []struct {
+		name   string
+		sig    draftSignature
+		before func(req *http.Request)
+		want   time.Time
+	}{
+		{
+			name: "date gets the default validity",
+			sig:  draftSignature{algorithm: "rsa-sha256", headers: []string{"(request-target)", "host", "date", "digest"}},
+			before: func(req *http.Request) {
+				req.Header.Set("Date", now.Add(-time.Minute).UTC().Format(http.TimeFormat))
+			},
+			want: now.Add(-time.Minute + signatureDefaultTTL + signatureClockSkew),
+		},
+		{
+			name: "created gets the default validity",
+			sig: draftSignature{
+				algorithm: "hs2019",
+				headers:   []string{"(request-target)", "host", "(created)", "digest"},
+				created:   unixString(now),
+			},
+			want: now.Add(signatureDefaultTTL + signatureClockSkew),
+		},
+		{
+			name: "signed expires",
+			sig: draftSignature{
+				algorithm: "hs2019",
+				headers:   []string{"(request-target)", "host", "(created)", "(expires)", "digest"},
+				created:   unixString(now),
+				expires:   unixString(now.Add(2 * time.Hour)),
+			},
+			want: now.Add(2*time.Hour + signatureClockSkew),
+		},
+		{
+			name: "signed expires capped at twelve hours",
+			sig: draftSignature{
+				algorithm: "hs2019",
+				headers:   []string{"(request-target)", "host", "(created)", "(expires)", "digest"},
+				created:   unixString(now),
+				expires:   unixString(now.Add(48 * time.Hour)),
+			},
+			want: now.Add(signatureMaxTTL + signatureClockSkew),
+		},
+		{
+			name: "created in the future within clock skew",
+			sig: draftSignature{
+				algorithm: "hs2019",
+				headers:   []string{"(request-target)", "host", "(created)", "(expires)", "digest"},
+				created:   unixString(now.Add(30 * time.Minute)),
+				expires:   unixString(now.Add(48 * time.Hour)),
+			},
+			want: now.Add(30*time.Minute + signatureMaxTTL + signatureClockSkew),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := newInboxPost(testInboxURL, testBody)
+			if tt.before != nil {
+				tt.before(req)
+			}
+			sig := tt.sig
+			sig.keyID = testKeyID
+			signDraft(t, req, keys.private, sig, req.URL.RequestURI())
+
+			parsed, err := NewHTTPVerifier().ParseRequest(req, testBody)
+			if err != nil {
+				t.Fatalf("ParseRequest() error = %v", err)
+			}
+			if got := parsed.ValidUntil(); !got.Equal(tt.want) {
+				t.Fatalf("ValidUntil() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }
 
 func TestHTTPVerifier_SignerRequests(t *testing.T) {

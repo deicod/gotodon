@@ -164,9 +164,10 @@ type RequestSignature struct {
 	// Headers lists the signed headers in signing order, lower-cased.
 	Headers []string
 
-	params    map[string]string
-	signature []byte
-	req       *http.Request
+	params     map[string]string
+	signature  []byte
+	req        *http.Request
+	validUntil time.Time
 }
 
 // VerifyRequest verifies the signature on an incoming request against
@@ -268,6 +269,13 @@ func (v *HTTPVerifier) ParseRequest(req *http.Request, body []byte) (*RequestSig
 	return sig, nil
 }
 
+// ValidUntil returns the last instant at which the signature still passes the
+// freshness check, clock skew included. A captured request can be replayed
+// until then, so replay protection must remember it at least that long.
+func (s *RequestSignature) ValidUntil() time.Time {
+	return s.validUntil
+}
+
 // Verify checks the signature against publicKeyPEM, a PKIX-encoded RSA public key.
 func (s *RequestSignature) Verify(publicKeyPEM string) error {
 	key, err := parseRSAPublicKey(publicKeyPEM)
@@ -337,9 +345,11 @@ func (s *RequestSignature) checkFreshness(now time.Time) error {
 	if created.After(now.Add(signatureClockSkew)) {
 		return fmt.Errorf("signature created in the future")
 	}
-	if now.After(expires.Add(signatureClockSkew)) {
+	validUntil := expires.Add(signatureClockSkew)
+	if now.After(validUntil) {
 		return fmt.Errorf("signature expired")
 	}
+	s.validUntil = validUntil
 	return nil
 }
 

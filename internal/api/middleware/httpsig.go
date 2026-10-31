@@ -2,18 +2,44 @@ package middleware
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/activitypub"
 )
 
+// ContextKeySignedActivity is the context key for the SignedActivity of a
+// verified inbox request.
+const ContextKeySignedActivity ContextKey = "signed_activity"
+
+// SignedActivity describes an inbox request whose HTTP signature
+// VerifyHTTPSignature has verified.
+type SignedActivity struct {
+	// ActorURI is the activity's actor, which owns the signing key.
+	ActorURI string
+	// BodyDigest is the SHA-256 of the request body.
+	BodyDigest [sha256.Size]byte
+	// ValidUntil is the last instant at which the signature still verifies.
+	ValidUntil time.Time
+}
+
+// SignedActivityFromContext returns the SignedActivity stored by
+// VerifyHTTPSignature.
+func SignedActivityFromContext(ctx context.Context) (SignedActivity, bool) {
+	activity, ok := ctx.Value(ContextKeySignedActivity).(SignedActivity)
+	return activity, ok
+}
+
 // VerifyHTTPSignature validates ActivityPub HTTP Signatures on incoming
 // requests. The signature must cover (request-target), host, date (or
 // (created)) and the Digest header, the signed digest must match the body,
-// and the signing key must belong to the activity's actor.
+// and the signing key must belong to the activity's actor. Verified requests
+// carry a SignedActivity in their context.
 func VerifyHTTPSignature(fetcher activitypub.ActorFetcher) func(http.Handler) http.Handler {
 	verifier := activitypub.NewHTTPVerifier()
 
@@ -78,7 +104,12 @@ func VerifyHTTPSignature(fetcher activitypub.ActorFetcher) func(http.Handler) ht
 				return
 			}
 
-			next.ServeHTTP(w, r)
+			ctx := context.WithValue(r.Context(), ContextKeySignedActivity, SignedActivity{
+				ActorURI:   actorURI,
+				BodyDigest: sha256.Sum256(body),
+				ValidUntil: sig.ValidUntil(),
+			})
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
