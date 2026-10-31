@@ -16,6 +16,7 @@ import (
 
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/pkg/safehttp"
 )
 
 // Store is the subset of db.Querier the push subsystem needs.
@@ -68,7 +69,8 @@ func NewService(store Store, sender Sender, cfg *config.Config, logger *slog.Log
 // DeliverSubscription sends one notification to one subscription. It mirrors
 // Mastodon's Web::PushNotificationWorker: stale notifications and deleted
 // rows are skipped, alert/policy preferences are re-checked, and a 4xx
-// response (other than 408/429) deletes the dead subscription.
+// response (other than 408/429) deletes the dead subscription. So does an
+// endpoint that the address policy refuses.
 func (s *Service) DeliverSubscription(ctx context.Context, subscriptionID, notificationID int64) error {
 	sub, err := s.store.GetPushSubscriptionByID(ctx, subscriptionID)
 	if err != nil {
@@ -124,6 +126,15 @@ func (s *Service) DeliverSubscription(ctx context.Context, subscriptionID, notif
 		// and keep the subscription.
 		if errors.Is(err, ErrPayloadTooLarge) {
 			s.logger.Warn("Push payload too large, skipping delivery", "subscription_id", sub.ID, "notification_id", notification.ID)
+			return nil
+		}
+		// An endpoint the address policy refuses can never be delivered to,
+		// so the subscription is dead like one the push service rejects.
+		if safehttp.IsRefused(err) {
+			if err := s.store.DeletePushSubscriptionByID(ctx, sub.ID); err != nil {
+				return fmt.Errorf("deleting refused subscription %d: %w", sub.ID, err)
+			}
+			s.logger.Warn("Removed push subscription with a refused endpoint", "subscription_id", sub.ID, "error", err)
 			return nil
 		}
 		return err

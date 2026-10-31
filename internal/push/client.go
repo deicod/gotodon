@@ -3,12 +3,17 @@ package push
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/deicod/gotodon/pkg/safehttp"
 )
 
 const (
@@ -22,6 +27,33 @@ const (
 	// audiences) are client-supplied, so the cache must not grow unbounded.
 	maxCachedAudiences = 128
 )
+
+// ErrInvalidEndpoint is returned by ValidateEndpoint for endpoints that push
+// messages cannot be sent to.
+var ErrInvalidEndpoint = errors.New("invalid push endpoint")
+
+// ValidateEndpoint reports whether endpoint can receive push messages: an
+// https URL (RFC 8030 requires TLS) without credentials whose host is neither
+// a non-public IP address nor a localhost name. Other host names are checked
+// against the addresses they resolve to whenever a message is sent.
+func ValidateEndpoint(endpoint string) error {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidEndpoint, err)
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("%w: scheme %q, want https", ErrInvalidEndpoint, u.Scheme)
+	}
+	if err := safehttp.CheckURL(u); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidEndpoint, err)
+	}
+	// RFC 6761 reserves localhost and its subdomains for loopback.
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return fmt.Errorf("%w: %s is a loopback name", ErrInvalidEndpoint, u.Hostname())
+	}
+	return nil
+}
 
 // Subscription is the client-supplied half of a Web Push subscription.
 type Subscription struct {
@@ -51,10 +83,12 @@ type cachedAuth struct {
 }
 
 // NewClient creates a push client. subject is the VAPID contact claim
-// (a mailto: or https: URI identifying the instance operator).
+// (a mailto: or https: URI identifying the instance operator). A nil
+// httpClient selects a safehttp client: endpoints come from users'
+// subscriptions, so messages are only sent to public addresses.
 func NewClient(vapid *VAPIDKey, subject string, httpClient *http.Client) *Client {
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: defaultHTTPTimeout}
+		httpClient = safehttp.NewClient(safehttp.Options{Timeout: defaultHTTPTimeout})
 	}
 	return &Client{http: httpClient, vapid: vapid, subject: subject, tokens: map[string]cachedAuth{}}
 }

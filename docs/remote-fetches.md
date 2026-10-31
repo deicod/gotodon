@@ -1,13 +1,15 @@
 # Remote fetches: destination addresses, redirects and response limits
 
-Federation makes gotodon request URLs that other servers choose: an inbox
-delivery names its actor, actor documents name their inboxes, and activities
-reference objects and collections. A URL like that could point at the server's
-own network, for example the cloud metadata endpoint at `169.254.169.254`, a
-database on `10.0.0.5` or an admin interface on `localhost`. Every request to
-such a URL therefore goes through a `pkg/safehttp` client. That client connects
-only to public addresses, holds every redirect to the same rules and caps what
-it reads.
+gotodon requests many URLs that someone else chooses. In federation, other
+servers choose them: an inbox delivery names its actor, actor documents name
+their inboxes, and activities reference objects and collections. Users choose
+them too, through the links in their statuses and the endpoints of their push
+subscriptions. A URL like that could point at the server's own network, for
+example the cloud metadata endpoint at `169.254.169.254`, a database on
+`10.0.0.5` or an admin interface on `localhost`. Every request to such a URL
+therefore goes through a `pkg/safehttp` client. That client connects only to
+public addresses, holds every redirect to the same rules and caps what it
+reads.
 
 ## Requests covered
 
@@ -18,6 +20,9 @@ it reads.
 | WebFinger lookups | the domain of an `acct` | `pkg/activitypub` (`WebFingerClient`) |
 | Objects and collections (boosts, remote statuses, threads and replies) | URIs in remote activities and documents | `internal/federation` (`httpObjectFetcher`) |
 | Signed activity deliveries | `inbox` and `sharedInbox` of remote actor documents | `pkg/activitypub` (`SignedClient`) |
+| Link preview pages and their images | links in local statuses, and the image a page names | `internal/services` (`LinkCrawler`) |
+| oEmbed discovery and endpoints, for embedding remote statuses | the remote status URL, and the endpoint its page names | `internal/services` (`OEmbedFetcher`) |
+| Web Push messages | the endpoint of a user's push subscription | `internal/push` (`Client`) |
 
 ## Destination addresses
 
@@ -69,14 +74,26 @@ internal address or another scheme fails the request. WebFinger domains must
 be a bare `host[:port]`. An `acct` whose domain carries a path, query, fragment
 or a second `@` is rejected before anything is requested.
 
+A link preview page's canonical URL is never fetched. It becomes the preview
+card's URL only if it passes `safehttp.CheckURL`; otherwise the card keeps the
+URL that was fetched.
+
+Push subscription endpoints must be `https` URLs, as RFC 8030 requires. Both
+`POST /api/v1/push/subscription` and `POST /api/web/push_subscriptions` answer
+`422` for an endpoint with credentials, a non-public IP address or a
+`localhost` name (`push.ValidateEndpoint`). Other host names are checked
+against the addresses they resolve to each time a message is sent.
+
 ## Responses
 
 | Limit | Value |
 |---|---|
-| Time for a whole exchange, body included | 10 seconds; 30 seconds for deliveries |
+| Time for a whole exchange, body included | 10 seconds for federation fetches; 12 seconds for link previews and oEmbed; 30 seconds for deliveries and Web Push |
 | Response headers | 256 KiB |
 | Actor, object and WebFinger documents | 1 MiB after decompression (`activitypub.MaxDocumentBytes`) |
-| Status | `200` |
+| Link preview and oEmbed pages, oEmbed responses | 2 MiB after decompression |
+| Link preview images | 5 MiB after decompression |
+| Status of actor, object and WebFinger responses | `200` |
 | Actor and object media type | `application/activity+json` or `application/ld+json` |
 | WebFinger media type | `application/json` or any `application/*+json`, such as `application/jrd+json` |
 
@@ -95,17 +112,22 @@ refused (`safehttp.IsRefused`) is not retried, because the policy would refuse
 it again. The worker queue marks the job `asynq.SkipRetry`, and the in-process
 queue drops it.
 
+Some link preview failures will not change on a retry, so the crawl is not
+retried. These are a page the policy refuses, more than 5 redirects, a host
+name that does not exist and a page over the size limit. Preview images are
+optional, so a refused image only leaves the card without one. If oEmbed fails,
+`GET /api/web/embeds/:id` answers `404`. A push subscription whose endpoint is
+refused is deleted, like one the push service reports as gone.
+
 There is no allowlist for internal addresses. Instances on a private network or
 on one machine cannot federate with each other directly, even for local testing.
+Link previews, oEmbed and Web Push cannot reach local servers either.
 
 ## Outside this policy
 
-These requests are not federation fetches and keep their own handling:
-
-- Link previews and oEmbed (`internal/services`) check URLs with their own
-  public-address rules.
-- Web Push endpoints come from local users' subscriptions.
-- Translation backends are configured by the administrator.
+Translation backends (`internal/translation`) are configured by the
+administrator rather than chosen by remote servers or users, so they use an
+ordinary client.
 
 ## Library use
 

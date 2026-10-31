@@ -3,6 +3,7 @@ package push
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -320,6 +321,45 @@ func TestDeliverSubscriptionRetriesOnTransientErrors(t *testing.T) {
 		if len(store.deletedSubscriptions) != 0 {
 			t.Errorf("status %d: subscription must not be deleted", status)
 		}
+	}
+}
+
+// A subscription whose endpoint the address policy refuses can never be
+// delivered to, so it is removed instead of retried.
+func TestDeliverSubscriptionDeletesRefusedSubscription(t *testing.T) {
+	internal, hits := newInternalPushServer(t)
+	vapidKey, err := NewVAPIDKey(testVAPIDPrivate, "")
+	if err != nil {
+		t.Fatalf("NewVAPIDKey: %v", err)
+	}
+	store := fixture()
+	sub := store.subscriptions[7]
+	sub.Endpoint = internal.URL + "/send/abc"
+	sub.KeyP256dh.String, sub.KeyAuth.String = testSubscriptionKeys(t)
+	store.subscriptions[7] = sub
+
+	service := NewService(store, NewClient(vapidKey, "mailto:admin@example.com", nil), testConfig(), nil)
+	if err := service.DeliverSubscription(context.Background(), 7, 500); err != nil {
+		t.Fatalf("DeliverSubscription: %v", err)
+	}
+	if len(store.deletedSubscriptions) != 1 || store.deletedSubscriptions[0] != 7 {
+		t.Errorf("expected subscription 7 deleted, got %v", store.deletedSubscriptions)
+	}
+	if n := hits.Load(); n != 0 {
+		t.Errorf("internal server received %d messages, want 0", n)
+	}
+}
+
+func TestDeliverSubscriptionKeepsSubscriptionOnNetworkErrors(t *testing.T) {
+	store := fixture()
+	sender := &fakeSender{err: errors.New("dial tcp 93.184.215.14:443: connect: connection refused")}
+	service := NewService(store, sender, testConfig(), nil)
+
+	if err := service.DeliverSubscription(context.Background(), 7, 500); err == nil {
+		t.Error("expected error for retry")
+	}
+	if len(store.deletedSubscriptions) != 0 {
+		t.Errorf("subscription must not be deleted, got %v", store.deletedSubscriptions)
 	}
 }
 

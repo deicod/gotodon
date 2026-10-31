@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/media"
+	"github.com/deicod/gotodon/pkg/safehttp"
 )
 
 const (
@@ -45,36 +45,26 @@ type LinkCrawlerStore interface {
 
 // LinkCrawler fetches link metadata and stores preview cards.
 type LinkCrawler struct {
-	store                LinkCrawlerStore
-	storage              media.Storage
-	client               *http.Client
-	htmlLimit            int64
-	imageLimit           int64
-	userAgent            string
-	allowPrivateNetworks bool
+	store      LinkCrawlerStore
+	storage    media.Storage
+	client     *http.Client
+	htmlLimit  int64
+	imageLimit int64
+	userAgent  string
 }
 
-// NewLinkCrawler creates a new link crawler with defaults.
+// NewLinkCrawler creates a new link crawler with defaults. Links are chosen by
+// whoever writes a status, so pages, redirects and images are fetched through
+// a safehttp client that only connects to public addresses.
 func NewLinkCrawler(store LinkCrawlerStore, storage media.Storage) *LinkCrawler {
-	client := &http.Client{
-		Timeout: defaultLinkCrawlerTimeout,
-	}
 	return &LinkCrawler{
 		store:      store,
 		storage:    storage,
-		client:     client,
+		client:     safehttp.NewClient(safehttp.Options{Timeout: defaultLinkCrawlerTimeout, MaxRedirects: maxRedirects}),
 		htmlLimit:  defaultLinkCrawlerHTMLLimit,
 		imageLimit: defaultLinkCrawlerImageLimit,
 		userAgent:  defaultLinkCrawlerUserAgent,
 	}
-}
-
-// AllowPrivateNetworks permits crawling private/loopback hosts (useful for tests).
-func (c *LinkCrawler) AllowPrivateNetworks(allow bool) {
-	if c == nil {
-		return
-	}
-	c.allowPrivateNetworks = allow
 }
 
 // Crawl fetches metadata for a URL and attaches a preview card to a status.
@@ -102,11 +92,11 @@ func (c *LinkCrawler) Crawl(ctx context.Context, statusID int64, rawURL string) 
 	}
 
 	parsed, err := url.Parse(rawURL)
-	if err != nil || !isHTTPURL(parsed) {
+	if err != nil {
 		return ErrLinkCrawlerSkipRetry
 	}
-	if err := c.ensureSafeURL(ctx, parsed); err != nil {
-		return fmt.Errorf("unsafe url: %w", ErrLinkCrawlerSkipRetry)
+	if err := safehttp.CheckURL(parsed); err != nil {
+		return fmt.Errorf("unsafe url: %w: %w", err, ErrLinkCrawlerSkipRetry)
 	}
 
 	if card, err := c.store.GetPreviewCardByURL(ctx, parsed.String()); err == nil {
@@ -123,10 +113,8 @@ func (c *LinkCrawler) Crawl(ctx context.Context, statusID int64, rawURL string) 
 		return fmt.Errorf("fetch metadata: %w", err)
 	}
 	if meta.CanonicalURL != "" {
-		if canonical, err := url.Parse(meta.CanonicalURL); err == nil && isHTTPURL(canonical) {
-			if err := c.ensureSafeURL(ctx, canonical); err == nil {
-				finalURL = canonical
-			}
+		if canonical, err := url.Parse(meta.CanonicalURL); err == nil && safehttp.CheckURL(canonical) == nil {
+			finalURL = canonical
 		}
 	}
 	if finalURL == nil {
@@ -179,9 +167,11 @@ func (c *LinkCrawler) fetchMetadata(ctx context.Context, u *url.URL) (metadata, 
 	req.Header.Set("User-Agent", c.userAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 
-	client := c.clientForRequest(req)
-	resp, err := client.Do(req)
+	resp, err := c.client.Do(req)
 	if err != nil {
+		if permanentFetchError(err) {
+			return metadata{}, nil, fmt.Errorf("%w: %w", err, ErrLinkCrawlerSkipRetry)
+		}
 		return metadata{}, nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -203,7 +193,7 @@ func (c *LinkCrawler) fetchMetadata(ctx context.Context, u *url.URL) (metadata, 
 		return metadata{}, finalURL, nil
 	}
 
-	body, err := readLimited(resp.Body, c.htmlLimit)
+	body, err := readBody(resp, c.htmlLimit)
 	if err != nil {
 		return metadata{}, finalURL, err
 	}
@@ -227,22 +217,20 @@ func (c *LinkCrawler) buildPreviewCard(ctx context.Context, cardURL string, base
 
 	if imageURL != "" {
 		if resolved, err := resolveURL(baseURL, imageURL); err == nil {
-			if err := c.ensureSafeURL(ctx, resolved); err == nil {
-				data, ctype, err := c.fetchImage(ctx, resolved)
-				if err == nil && ctype != "" {
-					imageContentType = ctype
-					imageSize = len(data)
-					imagePath = previewCardImagePath(resolved.String(), ctype)
-					if err := c.storage.Save(ctx, imagePath, data); err != nil {
-						return db.PreviewCard{}, fmt.Errorf("save preview image: %w", err)
-					}
-					if hash, err := media.BlurHashFromBytes(data, 4, 3); err == nil && hash != "" {
-						blurhash = pgtype.Text{String: hash, Valid: true}
-					}
-					if w, h := imageDimensions(data); w > 0 && h > 0 {
-						imageWidth = w
-						imageHeight = h
-					}
+			data, ctype, err := c.fetchImage(ctx, resolved)
+			if err == nil && ctype != "" {
+				imageContentType = ctype
+				imageSize = len(data)
+				imagePath = previewCardImagePath(resolved.String(), ctype)
+				if err := c.storage.Save(ctx, imagePath, data); err != nil {
+					return db.PreviewCard{}, fmt.Errorf("save preview image: %w", err)
+				}
+				if hash, err := media.BlurHashFromBytes(data, 4, 3); err == nil && hash != "" {
+					blurhash = pgtype.Text{String: hash, Valid: true}
+				}
+				if w, h := imageDimensions(data); w > 0 && h > 0 {
+					imageWidth = w
+					imageHeight = h
 				}
 			}
 		}
@@ -296,7 +284,7 @@ func (c *LinkCrawler) fetchImage(ctx context.Context, u *url.URL) ([]byte, strin
 	req.Header.Set("User-Agent", c.userAgent)
 	req.Header.Set("Accept", "image/*")
 
-	resp, err := c.clientForRequest(req).Do(req)
+	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, "", err
 	}
@@ -314,7 +302,7 @@ func (c *LinkCrawler) fetchImage(ctx context.Context, u *url.URL) ([]byte, strin
 		return nil, "", ErrLinkCrawlerSkipRetry
 	}
 
-	data, err := readLimited(resp.Body, c.imageLimit)
+	data, err := readBody(resp, c.imageLimit)
 	if err != nil {
 		return nil, "", err
 	}
@@ -351,44 +339,15 @@ func (c *LinkCrawler) ensureProvider(ctx context.Context, domain string) error {
 	return err
 }
 
-func (c *LinkCrawler) clientForRequest(req *http.Request) *http.Client {
-	client := *c.client
-	client.CheckRedirect = func(redirectReq *http.Request, via []*http.Request) error {
-		if len(via) >= maxRedirects {
-			return http.ErrUseLastResponse
-		}
-		if err := c.ensureSafeURL(redirectReq.Context(), redirectReq.URL); err != nil {
-			return err
-		}
-		return nil
+// permanentFetchError reports whether a failed request would fail the same way
+// on retry: the destination is refused by the address policy, the redirects
+// do not end or the host name does not exist.
+func permanentFetchError(err error) bool {
+	if safehttp.IsRefused(err) || errors.Is(err, safehttp.ErrTooManyRedirects) {
+		return true
 	}
-	return &client
-}
-
-func (c *LinkCrawler) ensureSafeURL(ctx context.Context, u *url.URL) error {
-	if c.allowPrivateNetworks {
-		return nil
-	}
-	host := u.Hostname()
-	if host == "" {
-		return ErrLinkCrawlerSkipRetry
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if !isPublicIP(ip) {
-			return ErrLinkCrawlerSkipRetry
-		}
-		return nil
-	}
-	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return ErrLinkCrawlerSkipRetry
-	}
-	for _, addr := range addrs {
-		if !isPublicIP(addr.IP) {
-			return ErrLinkCrawlerSkipRetry
-		}
-	}
-	return nil
+	var dnsErr *net.DNSError
+	return errors.As(err, &dnsErr) && dnsErr.IsNotFound
 }
 
 func isHTTPURL(u *url.URL) bool {
@@ -397,16 +356,6 @@ func isHTTPURL(u *url.URL) bool {
 	}
 	scheme := strings.ToLower(u.Scheme)
 	return scheme == "http" || scheme == "https"
-}
-
-func isPublicIP(ip net.IP) bool {
-	if ip == nil {
-		return false
-	}
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
-		return false
-	}
-	return true
 }
 
 func parseHTMLMetadata(body []byte) metadata {
@@ -553,16 +502,14 @@ func imageDimensions(data []byte) (int, int) {
 	return width, height
 }
 
-func readLimited(r io.Reader, limit int64) ([]byte, error) {
-	limited := io.LimitReader(r, limit+1)
-	data, err := io.ReadAll(limited)
-	if err != nil {
-		return nil, err
+// readBody reads resp's body, failing for one longer than limit bytes. A body
+// that is too large will not shrink on retry.
+func readBody(resp *http.Response, limit int64) ([]byte, error) {
+	data, err := safehttp.ReadBody(resp, limit)
+	if errors.Is(err, safehttp.ErrBodyTooLarge) {
+		return nil, fmt.Errorf("%w: %w", err, ErrLinkCrawlerSkipRetry)
 	}
-	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("payload too large: %w", ErrLinkCrawlerSkipRetry)
-	}
-	return data, nil
+	return data, err
 }
 
 func firstNonEmpty(values ...string) string {

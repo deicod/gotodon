@@ -21,6 +21,7 @@ import (
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/federation"
+	"github.com/deicod/gotodon/internal/push"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/oauth"
 )
@@ -829,6 +830,10 @@ func (h *PushHandler) Create(w http.ResponseWriter, r *http.Request) {
 	endpoint := strings.TrimSpace(req.Subscription.Endpoint)
 	if endpoint == "" {
 		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Endpoint is required")
+		return
+	}
+	if push.ValidateEndpoint(endpoint) != nil {
+		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Endpoint is invalid")
 		return
 	}
 	p256dh := strings.TrimSpace(req.Subscription.Keys.P256DH)

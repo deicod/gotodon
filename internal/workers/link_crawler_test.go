@@ -107,7 +107,7 @@ func TestLinkCrawlerEnqueuerValidatesClient(t *testing.T) {
 }
 
 func TestLinkCrawlerHandlerCallsCrawler(t *testing.T) {
-	link := "http://127.0.0.1/example"
+	link := "https://news.example/example"
 	store := &stubLinkCrawlerStore{
 		status: db.Status{ID: 5, Local: pgtype.Bool{Bool: true, Valid: true}},
 		cards: map[string]db.PreviewCard{
@@ -115,7 +115,6 @@ func TestLinkCrawlerHandlerCallsCrawler(t *testing.T) {
 		},
 	}
 	crawler := services.NewLinkCrawler(store, &noopLinkStorage{})
-	crawler.AllowPrivateNetworks(true)
 	handler := &LinkCrawlerHandler{crawler: crawler}
 	task, err := NewLinkCrawlerTask(5, link)
 	if err != nil {
@@ -138,7 +137,6 @@ func TestLinkCrawlerHandlerCallsCrawler(t *testing.T) {
 func TestLinkCrawlerHandlerSkipsInvalidPayload(t *testing.T) {
 	store := &stubLinkCrawlerStore{status: db.Status{ID: 1, Local: pgtype.Bool{Bool: true, Valid: true}}}
 	crawler := services.NewLinkCrawler(store, &noopLinkStorage{})
-	crawler.AllowPrivateNetworks(true)
 	handler := &LinkCrawlerHandler{crawler: crawler}
 	task := asynq.NewTask(TaskTypeLinkCrawler, []byte("bad"))
 	err := handler.ProcessTask(context.Background(), task)
@@ -152,7 +150,6 @@ func TestLinkCrawlerHandlerSkipsRetryOnCrawlerSkip(t *testing.T) {
 		status: db.Status{ID: 2, Local: pgtype.Bool{Bool: false, Valid: true}},
 	}
 	crawler := services.NewLinkCrawler(store, &noopLinkStorage{})
-	crawler.AllowPrivateNetworks(true)
 	handler := &LinkCrawlerHandler{crawler: crawler}
 	task, err := NewLinkCrawlerTask(2, "http://127.0.0.1/example")
 	if err != nil {
@@ -161,5 +158,23 @@ func TestLinkCrawlerHandlerSkipsRetryOnCrawlerSkip(t *testing.T) {
 	err = handler.ProcessTask(context.Background(), task)
 	if !errors.Is(err, asynq.SkipRetry) {
 		t.Fatalf("ProcessTask error = %v, want SkipRetry", err)
+	}
+}
+
+func TestLinkCrawlerHandlerSkipsRetryForInternalLink(t *testing.T) {
+	store := &stubLinkCrawlerStore{
+		status: db.Status{ID: 3, Local: pgtype.Bool{Bool: true, Valid: true}},
+	}
+	handler := &LinkCrawlerHandler{crawler: services.NewLinkCrawler(store, &noopLinkStorage{})}
+	task, err := NewLinkCrawlerTask(3, "http://169.254.169.254/latest/meta-data/")
+	if err != nil {
+		t.Fatalf("NewLinkCrawlerTask error = %v", err)
+	}
+	err = handler.ProcessTask(context.Background(), task)
+	if !errors.Is(err, asynq.SkipRetry) {
+		t.Fatalf("ProcessTask error = %v, want SkipRetry", err)
+	}
+	if len(store.attached) != 0 {
+		t.Fatalf("attached = %d, want 0", len(store.attached))
 	}
 }
