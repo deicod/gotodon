@@ -1712,3 +1712,207 @@ func TestTokenValidatorFailureKinds(t *testing.T) {
 		}
 	})
 }
+
+// TestAdminScopeGrants checks that admin scopes can be authorized and
+// granted, and only within the scopes the app registered. Each case runs
+// through every flow that checks the app's scopes: the consent page
+// (Authorize), the authorization code (AuthorizePost and Token) and client
+// credentials. A granted user token is then validated, so its scopes reach
+// the request context that the admin API checks.
+func TestAdminScopeGrants(t *testing.T) {
+	tests := []struct {
+		name      string
+		appScopes string
+		requested string
+		wantGrant bool
+	}{
+		{"both admin scopes", "read write admin:read admin:write", "read admin:read admin:write", true},
+		{"admin scope alone", "read admin:read", "admin:read", true},
+		{"per-resource admin scopes", "admin:read:accounts admin:write:domain_blocks", "admin:read:accounts admin:write:domain_blocks", true},
+		// HasScope lets an app request a scope narrower than one it
+		// registered; Doorkeeper requires the exact scope.
+		{"per-resource scope under a registered parent", "read admin:write", "admin:write:domain_blocks", true},
+		// Doorkeeper allows every server scope to an app with no stored
+		// scopes. gotodon only stores apps with scopes (POST /api/v1/apps
+		// defaults to read), so this concerns rows from elsewhere, such as
+		// an imported Mastodon database.
+		{"app without stored scopes", "", "admin:read admin:write", true},
+
+		{"app registered with user scopes only", "read write follow push", "admin:read", false},
+		{"admin:write not registered", "read admin:read", "admin:write", false},
+		{"admin:write:accounts not registered", "read admin:read", "admin:write:accounts", false},
+		{"per-resource scope doesn't cover the parent", "admin:read:accounts", "admin:read", false},
+		{"other resource's scope", "admin:write:domain_blocks", "admin:write:ip_blocks", false},
+		{"unknown admin scope", "admin:read admin:write", "admin:read:custom_emojis", false},
+	}
+
+	hash, err := auth.HashPassword("hunter2")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	const redirect = "https://app.example/callback"
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newStubOAuthStore()
+			store.addApp(db.OauthApplication{
+				ID:           1,
+				Uid:          "client",
+				Secret:       "secret",
+				RedirectUri:  redirect,
+				Scopes:       tt.appScopes,
+				Confidential: true,
+			})
+			store.addUser(db.User{
+				ID:                7,
+				Email:             "admin@example.com",
+				EncryptedPassword: hash,
+				AccountID:         9,
+				Approved:          true,
+				ConfirmedAt:       pgtype.Timestamptz{Time: time.Now(), Valid: true},
+			})
+			handler := NewHandler(store, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+			// Consent page.
+			query := url.Values{
+				"client_id":     []string{"client"},
+				"redirect_uri":  []string{redirect},
+				"scope":         []string{tt.requested},
+				"response_type": []string{"code"},
+			}
+			rec := httptest.NewRecorder()
+			handler.Authorize(rec, httptest.NewRequest(http.MethodGet, "/oauth/authorize?"+query.Encode(), nil))
+			if tt.wantGrant {
+				if rec.Code != http.StatusOK {
+					t.Fatalf("Authorize: status = %d, want %d (Location %q)", rec.Code, http.StatusOK, rec.Header().Get("Location"))
+				}
+				if !strings.Contains(rec.Body.String(), tt.requested) {
+					t.Errorf("Authorize: consent page doesn't show the scopes %q", tt.requested)
+				}
+			} else {
+				assertInvalidScopeRedirect(t, "Authorize", rec)
+			}
+
+			// Authorization code.
+			form := url.Values{
+				"client_id":     []string{"client"},
+				"redirect_uri":  []string{redirect},
+				"scope":         []string{tt.requested},
+				"response_type": []string{"code"},
+				"approve":       []string{"true"},
+				"email":         []string{"admin@example.com"},
+				"password":      []string{"hunter2"},
+			}
+			req := httptest.NewRequest(http.MethodPost, "/oauth/authorize", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			rec = httptest.NewRecorder()
+			handler.AuthorizePost(rec, req)
+			if !tt.wantGrant {
+				assertInvalidScopeRedirect(t, "AuthorizePost", rec)
+				if len(store.grantsByToken) != 0 {
+					t.Fatalf("AuthorizePost stored %d grants for a refused scope", len(store.grantsByToken))
+				}
+			} else {
+				if rec.Code != http.StatusFound {
+					t.Fatalf("AuthorizePost: status = %d, want %d", rec.Code, http.StatusFound)
+				}
+				location, err := url.Parse(rec.Header().Get("Location"))
+				if err != nil {
+					t.Fatalf("parse Location: %v", err)
+				}
+				code := location.Query().Get("code")
+				if grant := store.grantsByToken[code]; grant.Scopes.String != tt.requested {
+					t.Fatalf("grant scopes = %q, want %q", grant.Scopes.String, tt.requested)
+				}
+
+				resp := exchangeToken(t, handler, url.Values{
+					"grant_type":    []string{"authorization_code"},
+					"client_id":     []string{"client"},
+					"client_secret": []string{"secret"},
+					"redirect_uri":  []string{redirect},
+					"code":          []string{code},
+				})
+				if resp.Scope != tt.requested {
+					t.Fatalf("token scope = %q, want %q", resp.Scope, tt.requested)
+				}
+
+				info, err := NewTokenValidator(store).ValidateToken(context.Background(), resp.AccessToken)
+				if err != nil {
+					t.Fatalf("ValidateToken: %v", err)
+				}
+				if info.Scopes != tt.requested {
+					t.Fatalf("validated scopes = %q, want %q", info.Scopes, tt.requested)
+				}
+				if info.AccountID == nil || *info.AccountID != 9 {
+					t.Fatalf("validated account = %v, want 9", info.AccountID)
+				}
+			}
+
+			// Client credentials. The token has no user, so the admin API
+			// answers it with 401 whatever its scopes.
+			form = url.Values{
+				"grant_type":    []string{"client_credentials"},
+				"client_id":     []string{"client"},
+				"client_secret": []string{"secret"},
+				"scope":         []string{tt.requested},
+			}
+			req = httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			rec = httptest.NewRecorder()
+			handler.Token(rec, req)
+			if !tt.wantGrant {
+				if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_scope") {
+					t.Fatalf("client credentials: %d %s, want 400 invalid_scope", rec.Code, rec.Body.String())
+				}
+				return
+			}
+			if rec.Code != http.StatusOK {
+				t.Fatalf("client credentials: status = %d (%s), want %d", rec.Code, rec.Body.String(), http.StatusOK)
+			}
+			var resp TokenResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if resp.Scope != tt.requested {
+				t.Fatalf("client credentials scope = %q, want %q", resp.Scope, tt.requested)
+			}
+		})
+	}
+}
+
+// assertInvalidScopeRedirect checks that an authorize response redirects
+// back to the app with error=invalid_scope.
+func assertInvalidScopeRedirect(t *testing.T, step string, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if rec.Code != http.StatusFound {
+		t.Fatalf("%s: status = %d, want %d", step, rec.Code, http.StatusFound)
+	}
+	location, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("%s: parse Location: %v", step, err)
+	}
+	if got := location.Query().Get("error"); got != "invalid_scope" {
+		t.Fatalf("%s: error = %q, want invalid_scope", step, got)
+	}
+	if location.Query().Get("code") != "" {
+		t.Fatalf("%s: redirect carries a code for a refused scope", step)
+	}
+}
+
+// exchangeToken posts form to the token endpoint and decodes a successful
+// response.
+func exchangeToken(t *testing.T, handler *Handler, form url.Values) TokenResponse {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.Token(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("token: status = %d (%s), want %d", rec.Code, rec.Body.String(), http.StatusOK)
+	}
+	var resp TokenResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode token response: %v", err)
+	}
+	return resp
+}
