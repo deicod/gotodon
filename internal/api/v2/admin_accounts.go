@@ -2,6 +2,7 @@
 package v2
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"net/url"
@@ -26,31 +27,36 @@ const (
 	adminAccountsMaxLimit     = 200
 )
 
+// adminAccountsStore is the part of *db.Queries the v2 admin accounts
+// handler uses. Tests use stubs.
+type adminAccountsStore interface {
+	AdminListAccountsV2(ctx context.Context, arg db.AdminListAccountsV2Params) ([]db.AdminListAccountsV2Row, error)
+	GetAccountsByIDs(ctx context.Context, ids []int64) ([]db.Account, error)
+	AdminListUserIPs(ctx context.Context, userIds []int64) ([]db.AdminListUserIPsRow, error)
+}
+
 // AdminAccountsHandler handles v2 admin account endpoints.
 type AdminAccountsHandler struct {
-	queries *db.Queries
-	roles   adminapi.RoleLookup
-	cfg     *config.Config
+	store adminAccountsStore
+	roles adminapi.RoleLookup
+	cfg   *config.Config
 }
 
 // NewAdminAccountsHandler creates a new admin accounts handler.
 func NewAdminAccountsHandler(queries *db.Queries, cfg *config.Config) *AdminAccountsHandler {
-	return &AdminAccountsHandler{queries: queries, roles: adminapi.NewRoleLookup(queries), cfg: cfg}
+	h := &AdminAccountsHandler{roles: adminapi.NewRoleLookup(queries), cfg: cfg}
+	// A nil *db.Queries leaves store nil rather than a non-nil interface
+	// holding a nil pointer, so List reports the data as unavailable.
+	if queries != nil {
+		h.store = queries
+	}
+	return h
 }
 
 // AdminIP represents an IP entry in admin account responses.
 type AdminIP struct {
 	IP     string    `json:"ip"`
 	UsedAt time.Time `json:"used_at"`
-}
-
-// AdminRole represents a role in admin account responses.
-type AdminRole struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Permissions string `json:"permissions"`
-	Color       string `json:"color"`
-	Highlighted bool   `json:"highlighted"`
 }
 
 // AdminAccountV2 represents an admin account response entry.
@@ -72,8 +78,11 @@ type AdminAccountV2 struct {
 	CreatedByApplicationID *string    `json:"created_by_application_id,omitempty"`
 	InvitedByAccountID     *string    `json:"invited_by_account_id,omitempty"`
 	Account                v1.Account `json:"account"`
-	Role                   *AdminRole `json:"role"`
-	Ips                    []AdminIP  `json:"ips"`
+	// Role is the user's role, or the everyone role for a user without
+	// one, as REST::Admin::AccountSerializer#role gives it. It is null for
+	// an account without a user.
+	Role *v1.AccountRole `json:"role"`
+	Ips  []AdminIP       `json:"ips"`
 }
 
 type adminAccountStats struct {
@@ -149,7 +158,7 @@ func (h *AdminAccountsHandler) List(w http.ResponseWriter, r *http.Request) {
 		web.JSON(w, http.StatusOK, []AdminAccountV2{})
 		return
 	}
-	if h.queries == nil {
+	if h.store == nil {
 		web.JSONError(w, http.StatusInternalServerError, "Admin data unavailable")
 		return
 	}
@@ -171,7 +180,7 @@ func (h *AdminAccountsHandler) List(w http.ResponseWriter, r *http.Request) {
 		MinID:       minID,
 	}
 
-	rows, err := h.queries.AdminListAccountsV2(r.Context(), params)
+	rows, err := h.store.AdminListAccountsV2(r.Context(), params)
 	if err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -197,7 +206,7 @@ func (h *AdminAccountsHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	accounts, err := h.queries.GetAccountsByIDs(r.Context(), accountIDs)
+	accounts, err := h.store.GetAccountsByIDs(r.Context(), accountIDs)
 	if err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -209,7 +218,7 @@ func (h *AdminAccountsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	ipsByUserID := map[int64][]AdminIP{}
 	if len(userIDs) > 0 {
-		ipRows, err := h.queries.AdminListUserIPs(r.Context(), userIDs)
+		ipRows, err := h.store.AdminListUserIPs(r.Context(), userIDs)
 		if err != nil {
 			web.JSONError(w, http.StatusInternalServerError, "Database error")
 			return
@@ -266,7 +275,6 @@ func (h *AdminAccountsHandler) List(w http.ResponseWriter, r *http.Request) {
 			Silenced:   row.SilencedAt.Valid,
 			Sensitized: row.SensitizedAt.Valid,
 			Account:    apiAccount,
-			Role:       nil,
 		}
 
 		if row.Domain.Valid {
@@ -309,15 +317,8 @@ func (h *AdminAccountsHandler) List(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		if row.RoleID.Valid {
-			permissionsValue := strconv.FormatInt(auth.ComputedPermissions(row.RolePermissions.Int64), 10)
-			role := AdminRole{
-				ID:          strconv.FormatInt(row.RoleID.Int64, 10),
-				Name:        row.RoleName.String,
-				Permissions: permissionsValue,
-				Color:       row.RoleColor.String,
-				Highlighted: row.RoleHighlighted.Bool,
-			}
+		if userExists {
+			role := v1.SerializeUserRole(row.RoleID, row.RoleName, row.RoleColor, row.RolePermissions, row.RoleHighlighted)
 			result.Role = &role
 		}
 
