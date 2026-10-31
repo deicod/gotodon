@@ -18,7 +18,16 @@ const (
 	// minDialShare is the least time one address gets when several share the
 	// remaining deadline, as with net.Dialer.
 	minDialShare = 2 * time.Second
+
+	// dialTimeout bounds one dial, name resolution and every connection
+	// attempt together, when the request's deadline does not end it sooner.
+	dialTimeout = 30 * time.Second
 )
+
+// requestDeadlineKey is the context key under which guardedTransport passes a
+// request's deadline to its dial. http.Transport dials with a context that
+// keeps the request's values but not its deadline.
+type requestDeadlineKey struct{}
 
 // LookupFunc resolves host to its addresses; network is "ip", "ip4" or "ip6".
 type LookupFunc func(ctx context.Context, network, host string) ([]netip.Addr, error)
@@ -40,7 +49,6 @@ func newDialer(lookup LookupFunc, dial DialFunc) *dialer {
 	}
 	if dial == nil {
 		dial = (&net.Dialer{
-			Timeout:        30 * time.Second,
 			KeepAlive:      30 * time.Second,
 			ControlContext: checkDialedAddr,
 		}).DialContext
@@ -70,6 +78,16 @@ func (d *dialer) DialContext(ctx context.Context, network, address string) (net.
 	if err != nil || port == 0 {
 		return nil, fmt.Errorf("%w: invalid port %q", ErrUnsafeURL, portText)
 	}
+
+	// One deadline covers the lookup and every connection attempt, so the
+	// addresses share it (see dialOne) and the dial ends with its request
+	// instead of carrying on in the background.
+	deadline := time.Now().Add(dialTimeout)
+	if requestDeadline, ok := ctx.Value(requestDeadlineKey{}).(time.Time); ok && requestDeadline.Before(deadline) {
+		deadline = requestDeadline
+	}
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
 
 	addrs, err := d.resolve(ctx, ipNetwork, host)
 	if err != nil {

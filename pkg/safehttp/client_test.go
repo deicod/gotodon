@@ -420,6 +420,119 @@ func TestClientRacesAddressFamilies(t *testing.T) {
 	})
 }
 
+// http.Transport dials with a context that has lost the request's deadline,
+// so the client carries it over for the dial to end with the request.
+func TestClientDialsWithinTheRequestDeadline(t *testing.T) {
+	t.Run("a dead address leaves time for the next", func(t *testing.T) {
+		srv := newCountingServer(t, okHandler("actor"))
+		resolve := answers(map[string][]string{"multi.test": {"93.184.215.14", "93.184.215.15"}})
+		stub := newStubNet(resolve, func(ctx context.Context, address string) (net.Conn, error) {
+			if address == "93.184.215.14:80" {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			return connectTo(srv.addr())(ctx, address)
+		})
+		// The two addresses split the timeout, so the first one hangs for
+		// minDialShare before the second is tried.
+		body, err := get(stub.client(Options{Timeout: 2 * minDialShare}), "http://multi.test/")
+		if err != nil || body != "actor" {
+			t.Fatalf("Get() = %q, %v, want actor from the second address", body, err)
+		}
+		if got := stub.dials(); len(got) != 2 || got[1] != "93.184.215.15:80" {
+			t.Fatalf("dialed %v, want the dead address and then the live one", got)
+		}
+	})
+
+	t.Run("the dial ends with its request", func(t *testing.T) {
+		var lookupDeadline, dialDeadline time.Time
+		ended := make(chan struct{})
+		client := NewClient(Options{
+			Timeout: 200 * time.Millisecond,
+			Lookup: func(ctx context.Context, _, _ string) ([]netip.Addr, error) {
+				lookupDeadline, _ = ctx.Deadline()
+				return []netip.Addr{netip.MustParseAddr("93.184.215.14")}, nil
+			},
+			Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				dialDeadline, _ = ctx.Deadline()
+				<-ctx.Done()
+				close(ended)
+				return nil, ctx.Err()
+			},
+		})
+
+		_, err := get(client, "http://slow.test/")
+		returned := time.Now()
+		var netErr net.Error
+		if !errors.As(err, &netErr) || !netErr.Timeout() {
+			t.Fatalf("Get() error = %v, want a timeout", err)
+		}
+		select {
+		case <-ended:
+		case <-time.After(2 * time.Second):
+			t.Fatal("the dial kept running after its request timed out")
+		}
+		if lookupDeadline.IsZero() || lookupDeadline.After(returned) {
+			t.Fatalf("lookup deadline = %v, want the request's, before %v", lookupDeadline, returned)
+		}
+		if !dialDeadline.Equal(lookupDeadline) {
+			t.Fatalf("dial deadline = %v, want the lookup's %v", dialDeadline, lookupDeadline)
+		}
+	})
+}
+
+// A dial ends at its request's deadline, or after dialTimeout when that is
+// sooner.
+func TestDialerDeadline(t *testing.T) {
+	soon := time.Now().Add(time.Second)
+	tests := []struct {
+		name            string
+		requestDeadline time.Time
+		wantTimeout     bool
+	}{
+		{"no request deadline", time.Time{}, true},
+		{"request deadline sooner", soon, false},
+		{"request deadline later", time.Now().Add(2 * dialTimeout), true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			if !tt.requestDeadline.IsZero() {
+				ctx = context.WithValue(ctx, requestDeadlineKey{}, tt.requestDeadline)
+			}
+			var lookupDeadline, dialDeadline time.Time
+			d := newDialer(
+				func(ctx context.Context, _, _ string) ([]netip.Addr, error) {
+					lookupDeadline, _ = ctx.Deadline()
+					return []netip.Addr{netip.MustParseAddr("93.184.215.14")}, nil
+				},
+				func(ctx context.Context, _, _ string) (net.Conn, error) {
+					dialDeadline, _ = ctx.Deadline()
+					return nil, errors.New("connect: connection refused")
+				},
+			)
+
+			start := time.Now()
+			if _, err := d.DialContext(ctx, "tcp", "remote.test:443"); err == nil {
+				t.Fatal("DialContext() succeeded, want the connect error")
+			}
+			end := time.Now()
+
+			if !dialDeadline.Equal(lookupDeadline) {
+				t.Fatalf("dial deadline = %v, want the lookup's %v", dialDeadline, lookupDeadline)
+			}
+			if tt.wantTimeout {
+				if dialDeadline.Before(start.Add(dialTimeout)) || dialDeadline.After(end.Add(dialTimeout)) {
+					t.Fatalf("deadline = %v, want %v after the dial started", dialDeadline, dialTimeout)
+				}
+			} else if !dialDeadline.Equal(tt.requestDeadline) {
+				t.Fatalf("deadline = %v, want the request's %v", dialDeadline, tt.requestDeadline)
+			}
+		})
+	}
+}
+
 func TestCheckDialedAddr(t *testing.T) {
 	for address, wantErr := range map[string]bool{
 		"8.8.8.8:443":               false,

@@ -48,6 +48,13 @@ For hosts with both IPv4 and IPv6 addresses, the families are raced as
 other family is tried alongside it, so a broken IPv6 path does not stall the
 request.
 
+Name resolution and every connection attempt share the time left before the
+request's deadline, and never more than 30 seconds. When a name has several
+addresses, each gets an even share of that time, but at least 2 seconds. An
+address that does not answer therefore leaves time for the next one. A dial
+also stops when its request's time is up instead of running on in the
+background.
+
 ## URLs and redirects
 
 | Rule | Value |

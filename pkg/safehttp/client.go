@@ -10,6 +10,7 @@
 package safehttp
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -116,7 +117,7 @@ func NewClient(opts Options) *http.Client {
 
 // guardedTransport checks each request's URL, the first and every redirect
 // hop alike, before handing it to a transport whose dialer enforces the
-// address policy.
+// address policy. It passes the request's deadline on to that dialer.
 type guardedTransport struct {
 	base *http.Transport
 }
@@ -143,6 +144,9 @@ func (t *guardedTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 			_ = req.Body.Close()
 		}
 		return nil, err
+	}
+	if deadline, ok := req.Context().Deadline(); ok {
+		req = req.WithContext(context.WithValue(req.Context(), requestDeadlineKey{}, deadline))
 	}
 	return t.base.RoundTrip(req)
 }
