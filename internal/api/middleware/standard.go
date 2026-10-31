@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"bufio"
 	"log/slog"
+	"net"
 	"net/http"
 	"runtime/debug"
 	"time"
@@ -69,4 +71,31 @@ type responseWriter struct {
 func (rw *responseWriter) WriteHeader(code int) {
 	rw.status = code
 	rw.ResponseWriter.WriteHeader(code)
+}
+
+// Unwrap exposes the wrapped writer to http.ResponseController, so handlers
+// can adjust connection deadlines through the logger.
+func (rw *responseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
+}
+
+// FlushError flushes buffered data to the client and reports writers that
+// cannot flush; http.ResponseController prefers it over Flush.
+func (rw *responseWriter) FlushError() error {
+	return http.NewResponseController(rw.ResponseWriter).Flush()
+}
+
+// Flush implements http.Flusher for handlers that stream responses.
+func (rw *responseWriter) Flush() {
+	_ = rw.FlushError()
+}
+
+// Hijack implements http.Hijacker so WebSocket upgrades work through the
+// logger. A hijacked request is logged as 101 Switching Protocols.
+func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, brw, err := http.NewResponseController(rw.ResponseWriter).Hijack()
+	if err == nil {
+		rw.status = http.StatusSwitchingProtocols
+	}
+	return conn, brw, err
 }
