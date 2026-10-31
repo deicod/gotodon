@@ -19,6 +19,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/deicod/gotodon/pkg/safehttp"
 )
 
 // HTTPSigner signs HTTP requests using HTTP Signatures
@@ -614,18 +616,23 @@ type SignedClient struct {
 	httpClient *http.Client
 }
 
-// NewSignedClient creates a new signed HTTP client
+// NewSignedClient creates a signed HTTP client whose requests go only to
+// public addresses (see safehttp).
 func NewSignedClient(keyID, privateKeyPEM string) (*SignedClient, error) {
+	return NewSignedClientWithHTTPClient(keyID, privateKeyPEM, safehttp.NewClient(safehttp.Options{Timeout: 30 * time.Second}))
+}
+
+// NewSignedClientWithHTTPClient creates a signed client that sends its
+// requests with httpClient.
+func NewSignedClientWithHTTPClient(keyID, privateKeyPEM string, httpClient *http.Client) (*SignedClient, error) {
 	signer, err := NewHTTPSigner(keyID, privateKeyPEM)
 	if err != nil {
 		return nil, err
 	}
 
 	return &SignedClient{
-		signer: signer,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		signer:     signer,
+		httpClient: httpClient,
 	}, nil
 }
 

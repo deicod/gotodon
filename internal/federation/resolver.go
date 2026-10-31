@@ -14,6 +14,7 @@ import (
 
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/pkg/activitypub"
+	"github.com/deicod/gotodon/pkg/safehttp"
 )
 
 const defaultActorRefresh = 24 * time.Hour
@@ -53,14 +54,14 @@ type RemoteActorResolver struct {
 	staleAfter  time.Duration
 }
 
-// NewRemoteActorResolver creates a resolver for remote actors.
+// NewRemoteActorResolver creates a resolver for remote actors. WebFinger and
+// actor documents are fetched only from public addresses (see safehttp).
 func NewRemoteActorResolver(store RemoteActorStore, localDomain string) *RemoteActorResolver {
-	httpClient := &http.Client{Timeout: 10 * time.Second}
 	return &RemoteActorResolver{
 		store:       store,
 		localDomain: localDomain,
 		webfinger:   activitypub.NewWebFingerClient(),
-		fetcher:     &httpActorFetcher{httpClient: httpClient},
+		fetcher:     &httpActorFetcher{httpClient: safehttp.NewClient(safehttp.Options{})},
 		now:         time.Now,
 		staleAfter:  defaultActorRefresh,
 	}
@@ -468,29 +469,14 @@ type httpActorFetcher struct {
 }
 
 func (f *httpActorFetcher) FetchActorPayload(ctx context.Context, actorURI string) (actorPayload, error) {
-	if f.httpClient == nil {
-		f.httpClient = &http.Client{Timeout: 10 * time.Second}
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, actorURI, nil)
-	if err != nil {
-		return actorPayload{}, err
-	}
-	req.Header.Set("Accept", activitypub.ActivityPubContentType+", "+activitypub.ActivityPubLDContentType)
-
-	resp, err := f.httpClient.Do(req)
-	if err != nil {
-		return actorPayload{}, fmt.Errorf("actor fetch failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return actorPayload{}, fmt.Errorf("actor fetch returned status %d", resp.StatusCode)
+	client := f.httpClient
+	if client == nil {
+		client = safehttp.NewClient(safehttp.Options{})
 	}
 
 	var raw map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return actorPayload{}, fmt.Errorf("failed to decode actor: %w", err)
+	if err := activitypub.FetchDocument(ctx, client, actorURI, &raw); err != nil {
+		return actorPayload{}, fmt.Errorf("actor fetch: %w", err)
 	}
 	if len(raw) == 0 {
 		return actorPayload{}, errors.New("actor payload empty")
