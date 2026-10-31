@@ -6,13 +6,14 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"errors"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"golang.org/x/net/html"
+
+	"github.com/deicod/gotodon/pkg/safehttp"
 )
 
 const (
@@ -24,23 +25,17 @@ const (
 
 // OEmbedFetcher discovers and fetches oEmbed payloads for remote URLs.
 type OEmbedFetcher struct {
-	client               *http.Client
-	allowPrivateNetworks bool
+	client *http.Client
 }
 
-// NewOEmbedFetcher creates a new oEmbed fetcher with defaults.
+// NewOEmbedFetcher creates a new oEmbed fetcher with defaults. Remote statuses
+// and the pages they link to choose the URLs it requests, so pages, endpoints
+// and redirects are fetched through a safehttp client that only connects to
+// public addresses.
 func NewOEmbedFetcher() *OEmbedFetcher {
 	return &OEmbedFetcher{
-		client: &http.Client{Timeout: defaultOEmbedTimeout},
+		client: safehttp.NewClient(safehttp.Options{Timeout: defaultOEmbedTimeout, MaxRedirects: maxOEmbedRedirects}),
 	}
-}
-
-// AllowPrivateNetworks allows private/loopback hosts (useful for tests).
-func (f *OEmbedFetcher) AllowPrivateNetworks(allow bool) {
-	if f == nil {
-		return
-	}
-	f.allowPrivateNetworks = allow
 }
 
 // Fetch discovers the oEmbed endpoint for a URL and returns its payload.
@@ -52,9 +47,6 @@ func (f *OEmbedFetcher) Fetch(ctx context.Context, rawURL string) (map[string]an
 	parsed, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil || !isHTTPURL(parsed) {
 		return nil, nil
-	}
-	if err := f.ensureSafeURL(ctx, parsed); err != nil {
-		return nil, err
 	}
 
 	endpoint, format, err := f.discoverEndpoint(ctx, parsed)
@@ -68,9 +60,6 @@ func (f *OEmbedFetcher) Fetch(ctx context.Context, rawURL string) (map[string]an
 	endpointParsed, err := url.Parse(endpointURL)
 	if err != nil || !isHTTPURL(endpointParsed) {
 		return nil, nil
-	}
-	if err := f.ensureSafeURL(ctx, endpointParsed); err != nil {
-		return nil, err
 	}
 
 	return f.fetchEndpoint(ctx, endpointURL, format)
@@ -105,7 +94,7 @@ func (f *OEmbedFetcher) fetchHTML(ctx context.Context, rawURL string) (string, e
 	req.Header.Set("User-Agent", defaultOEmbedUserAgent)
 	req.Header.Set("Accept", "text/html")
 
-	resp, err := f.clientForRequest(req).Do(req)
+	resp, err := f.client.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -119,7 +108,7 @@ func (f *OEmbedFetcher) fetchHTML(ctx context.Context, rawURL string) (string, e
 		return "", nil
 	}
 
-	body, err := readLimited(resp.Body, defaultOEmbedHTMLLimit)
+	body, err := readBody(resp, defaultOEmbedHTMLLimit)
 	if err != nil {
 		return "", err
 	}
@@ -134,7 +123,7 @@ func (f *OEmbedFetcher) fetchEndpoint(ctx context.Context, endpointURL, format s
 	req.Header.Set("User-Agent", defaultOEmbedUserAgent)
 	req.Header.Set("Accept", "application/json, text/xml, application/xml")
 
-	resp, err := f.clientForRequest(req).Do(req)
+	resp, err := f.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +132,7 @@ func (f *OEmbedFetcher) fetchEndpoint(ctx context.Context, endpointURL, format s
 	if resp.StatusCode != http.StatusOK {
 		return nil, nil
 	}
-	body, err := readLimited(resp.Body, defaultOEmbedHTMLLimit)
+	body, err := readBody(resp, defaultOEmbedHTMLLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -276,44 +265,4 @@ func parseOEmbedXML(body []byte) map[string]any {
 		return nil
 	}
 	return data
-}
-
-func (f *OEmbedFetcher) clientForRequest(req *http.Request) *http.Client {
-	client := *f.client
-	client.CheckRedirect = func(redirectReq *http.Request, via []*http.Request) error {
-		if len(via) >= maxOEmbedRedirects {
-			return http.ErrUseLastResponse
-		}
-		if err := f.ensureSafeURL(redirectReq.Context(), redirectReq.URL); err != nil {
-			return err
-		}
-		return nil
-	}
-	return &client
-}
-
-func (f *OEmbedFetcher) ensureSafeURL(ctx context.Context, u *url.URL) error {
-	if f.allowPrivateNetworks {
-		return nil
-	}
-	host := u.Hostname()
-	if host == "" {
-		return errors.New("missing host")
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if !isPublicIP(ip) {
-			return errors.New("non-public ip")
-		}
-		return nil
-	}
-	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return err
-	}
-	for _, addr := range addrs {
-		if !isPublicIP(addr.IP) {
-			return errors.New("non-public ip")
-		}
-	}
-	return nil
 }

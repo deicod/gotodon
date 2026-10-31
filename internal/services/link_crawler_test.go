@@ -3,21 +3,26 @@ package services
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
 	"image/png"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/pkg/safehttp"
+	"github.com/deicod/gotodon/pkg/safehttp/safehttptest"
 )
 
 type stubLinkCrawlerStore struct {
@@ -152,6 +157,28 @@ func (m *memLinkStorage) Exists(ctx context.Context, path string) (bool, error) 
 	return ok, nil
 }
 
+// newRoutedLinkCrawler returns a crawler whose requests reach servers under
+// public host names, with the address policy in force for everything else.
+func newRoutedLinkCrawler(t *testing.T, store LinkCrawlerStore, storage *memLinkStorage, servers map[string]*httptest.Server) *LinkCrawler {
+	t.Helper()
+	crawler := NewLinkCrawler(store, storage)
+	crawler.client = safehttptest.Client(t, servers)
+	return crawler
+}
+
+// newLoopbackServer starts a server on a loopback address that counts the
+// requests reaching it; a crawl must never be one of them.
+func newLoopbackServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, *atomic.Int64) {
+	t.Helper()
+	var hits atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		handler(w, r)
+	}))
+	t.Cleanup(server.Close)
+	return server, &hits
+}
+
 func createTestPNG(width, height int) []byte {
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	for y := 0; y < height; y++ {
@@ -198,16 +225,15 @@ func TestLinkCrawlerCrawlCreatesPreviewCard(t *testing.T) {
 
 	server := httptest.NewServer(mux)
 	defer server.Close()
-	canonicalURL = server.URL + "/canonical"
+	canonicalURL = "http://site.example/canonical"
 
 	store := &stubLinkCrawlerStore{
 		status: db.Status{ID: 1, Local: pgtype.Bool{Bool: true, Valid: true}},
 	}
 	storage := &memLinkStorage{}
-	crawler := NewLinkCrawler(store, storage)
-	crawler.AllowPrivateNetworks(true)
+	crawler := newRoutedLinkCrawler(t, store, storage, map[string]*httptest.Server{"site.example": server})
 
-	if err := crawler.Crawl(context.Background(), 1, server.URL+"/page"); err != nil {
+	if err := crawler.Crawl(context.Background(), 1, "http://site.example/page"); err != nil {
 		t.Fatalf("Crawl error = %v", err)
 	}
 
@@ -227,7 +253,7 @@ func TestLinkCrawlerCrawlCreatesPreviewCard(t *testing.T) {
 	if params.ProviderName != "Example Site" {
 		t.Fatalf("ProviderName = %s, want Example Site", params.ProviderName)
 	}
-	baseURL, _ := url.Parse(server.URL)
+	baseURL, _ := url.Parse(canonicalURL)
 	if params.ProviderUrl != baseURL.Scheme+"://"+baseURL.Host {
 		t.Fatalf("ProviderUrl = %s, want %s", params.ProviderUrl, baseURL.Scheme+"://"+baseURL.Host)
 	}
@@ -278,7 +304,7 @@ func TestLinkCrawlerCrawlCreatesPreviewCard(t *testing.T) {
 }
 
 func TestLinkCrawlerCrawlAttachesExistingCard(t *testing.T) {
-	link := "http://127.0.0.1/example"
+	link := "https://news.example/example"
 	store := &stubLinkCrawlerStore{
 		status: db.Status{ID: 7, Local: pgtype.Bool{Bool: true, Valid: true}},
 		cards: map[string]db.PreviewCard{
@@ -286,7 +312,6 @@ func TestLinkCrawlerCrawlAttachesExistingCard(t *testing.T) {
 		},
 	}
 	crawler := NewLinkCrawler(store, &memLinkStorage{})
-	crawler.AllowPrivateNetworks(true)
 
 	if err := crawler.Crawl(context.Background(), 7, link); err != nil {
 		t.Fatalf("Crawl error = %v", err)
@@ -303,5 +328,195 @@ func TestLinkCrawlerCrawlAttachesExistingCard(t *testing.T) {
 	}
 	if !store.attached[0].Url.Valid || store.attached[0].Url.String != link {
 		t.Fatalf("attached Url = %#v, want %s", store.attached[0].Url, link)
+	}
+}
+
+func localStatusStore() *stubLinkCrawlerStore {
+	return &stubLinkCrawlerStore{status: db.Status{ID: 1, Local: pgtype.Bool{Bool: true, Valid: true}}}
+}
+
+func htmlPage(imageURL, canonicalURL string) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(linkCrawlerHTML(imageURL, canonicalURL)))
+	}
+}
+
+func TestLinkCrawlerCrawlRefusesInternalAddresses(t *testing.T) {
+	internal, hits := newLoopbackServer(t, htmlPage("/image.png", ""))
+	_, port, _ := net.SplitHostPort(internal.Listener.Addr().String())
+
+	// The production client, resolving through the system resolver.
+	for _, link := range []string{
+		internal.URL + "/page",
+		"http://localhost:" + port + "/page",
+		"http://[::1]:" + port + "/page",
+		"http://[::ffff:127.0.0.1]:" + port + "/page",
+		"http://169.254.169.254/latest/meta-data/",
+		"http://10.0.0.1/page",
+	} {
+		t.Run(link, func(t *testing.T) {
+			store := localStatusStore()
+			err := NewLinkCrawler(store, &memLinkStorage{}).Crawl(context.Background(), 1, link)
+			if !errors.Is(err, ErrLinkCrawlerSkipRetry) || !safehttp.IsRefused(err) {
+				t.Fatalf("Crawl error = %v, want a refusal that is not retried", err)
+			}
+			if len(store.createdCards) != 0 || len(store.attached) != 0 {
+				t.Fatalf("cards = %d, attached = %d, want none", len(store.createdCards), len(store.attached))
+			}
+		})
+	}
+
+	t.Run("redirect to an internal address", func(t *testing.T) {
+		public := httptest.NewServer(http.RedirectHandler(internal.URL+"/page", http.StatusFound))
+		defer public.Close()
+		store := localStatusStore()
+		crawler := newRoutedLinkCrawler(t, store, &memLinkStorage{}, map[string]*httptest.Server{"site.example": public})
+
+		err := crawler.Crawl(context.Background(), 1, "http://site.example/page")
+		if !errors.Is(err, ErrLinkCrawlerSkipRetry) || !errors.Is(err, safehttp.ErrForbiddenAddress) {
+			t.Fatalf("Crawl error = %v, want a refusal that is not retried", err)
+		}
+		if len(store.createdCards) != 0 {
+			t.Fatalf("cards = %d, want none", len(store.createdCards))
+		}
+	})
+
+	t.Run("image on an internal address", func(t *testing.T) {
+		public := httptest.NewServer(htmlPage(internal.URL+"/image.png", ""))
+		defer public.Close()
+		store, storage := localStatusStore(), &memLinkStorage{}
+		crawler := newRoutedLinkCrawler(t, store, storage, map[string]*httptest.Server{"site.example": public})
+
+		if err := crawler.Crawl(context.Background(), 1, "http://site.example/page"); err != nil {
+			t.Fatalf("Crawl error = %v", err)
+		}
+		if len(store.createdCards) != 1 || store.createdCards[0].ImageFileName.Valid {
+			t.Fatalf("cards = %+v, want one card without an image", store.createdCards)
+		}
+		if len(storage.files) != 0 {
+			t.Fatalf("stored files = %d, want none", len(storage.files))
+		}
+	})
+
+	t.Run("canonical URL on an internal address", func(t *testing.T) {
+		public := httptest.NewServer(htmlPage("", internal.URL+"/canonical"))
+		defer public.Close()
+		store := localStatusStore()
+		crawler := newRoutedLinkCrawler(t, store, &memLinkStorage{}, map[string]*httptest.Server{"site.example": public})
+
+		if err := crawler.Crawl(context.Background(), 1, "http://site.example/page"); err != nil {
+			t.Fatalf("Crawl error = %v", err)
+		}
+		if len(store.createdCards) != 1 || store.createdCards[0].Url != "http://site.example/page" {
+			t.Fatalf("cards = %+v, want one for the fetched page", store.createdCards)
+		}
+	})
+
+	if n := hits.Load(); n != 0 {
+		t.Fatalf("internal server received %d requests, want 0", n)
+	}
+}
+
+func TestLinkCrawlerCrawlFollowsRedirectsBetweenPublicHosts(t *testing.T) {
+	imageData := createTestPNG(4, 4)
+	content := http.NewServeMux()
+	content.HandleFunc("/article", htmlPage("https://cdn.example.com/image.png", ""))
+	cdn := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(imageData)
+	}))
+	defer cdn.Close()
+	short := httptest.NewTLSServer(http.RedirectHandler("https://www.example.com/article", http.StatusMovedPermanently))
+	defer short.Close()
+	site := httptest.NewTLSServer(content)
+	defer site.Close()
+
+	store, storage := localStatusStore(), &memLinkStorage{}
+	crawler := newRoutedLinkCrawler(t, store, storage, map[string]*httptest.Server{
+		"example.com":     short,
+		"www.example.com": site,
+		"cdn.example.com": cdn,
+	})
+
+	if err := crawler.Crawl(context.Background(), 1, "https://example.com/x"); err != nil {
+		t.Fatalf("Crawl error = %v", err)
+	}
+	if len(store.createdCards) != 1 {
+		t.Fatalf("cards = %d, want 1", len(store.createdCards))
+	}
+	card := store.createdCards[0]
+	if card.Url != "https://www.example.com/article" || card.Title != "OG Title" {
+		t.Fatalf("card url = %q, title = %q, want the redirect target's", card.Url, card.Title)
+	}
+	if !card.ImageFileName.Valid || len(storage.files) != 1 {
+		t.Fatalf("image = %+v, stored files = %d, want the CDN image", card.ImageFileName, len(storage.files))
+	}
+}
+
+func TestLinkCrawlerCrawlFailures(t *testing.T) {
+	tests := []struct {
+		name     string
+		handler  http.HandlerFunc
+		link     string
+		wantSkip bool
+	}{
+		{
+			name:     "unknown host",
+			handler:  htmlPage("", ""),
+			link:     "http://missing.example/page",
+			wantSkip: true,
+		},
+		{
+			name: "endless redirects",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, "/again", http.StatusFound)
+			},
+			link:     "http://site.example/page",
+			wantSkip: true,
+		},
+		{
+			name:     "not found",
+			handler:  http.NotFound,
+			link:     "http://site.example/page",
+			wantSkip: true,
+		},
+		{
+			name: "page too large",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/html")
+				_, _ = w.Write(bytes.Repeat([]byte("a"), defaultLinkCrawlerHTMLLimit+1))
+			},
+			link:     "http://site.example/page",
+			wantSkip: true,
+		},
+		{
+			name: "server error",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusServiceUnavailable)
+			},
+			link:     "http://site.example/page",
+			wantSkip: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(tt.handler)
+			defer server.Close()
+			store := localStatusStore()
+			crawler := newRoutedLinkCrawler(t, store, &memLinkStorage{}, map[string]*httptest.Server{"site.example": server})
+
+			err := crawler.Crawl(context.Background(), 1, tt.link)
+			if err == nil {
+				t.Fatal("Crawl succeeded, want an error")
+			}
+			if got := errors.Is(err, ErrLinkCrawlerSkipRetry); got != tt.wantSkip {
+				t.Fatalf("Crawl error = %v, skip retry = %v, want %v", err, got, tt.wantSkip)
+			}
+			if len(store.createdCards) != 0 {
+				t.Fatalf("cards = %d, want none", len(store.createdCards))
+			}
+		})
 	}
 }
