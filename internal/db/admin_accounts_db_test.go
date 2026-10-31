@@ -227,3 +227,108 @@ func TestAdminGetAccountActionTarget(t *testing.T) {
 		}
 	})
 }
+
+// TestAdminAccountRoleColumns checks the user_roles columns that the v1
+// admin account reads join: the user's role, or NULL columns for a user
+// without one.
+func TestAdminAccountRoleColumns(t *testing.T) {
+	conn := openMigratedDB(t)
+	q := New(conn)
+	ctx := context.Background()
+
+	type roleColumns struct {
+		id          pgtype.Int8
+		name        pgtype.Text
+		color       pgtype.Text
+		permissions pgtype.Int8
+		highlighted pgtype.Bool
+	}
+	seededRole := func(name string) roleColumns {
+		t.Helper()
+		var role UserRole
+		if err := conn.QueryRow(ctx,
+			`SELECT id, name, color, permissions, highlighted FROM user_roles WHERE name = $1`, name,
+		).Scan(&role.ID, &role.Name, &role.Color, &role.Permissions, &role.Highlighted); err != nil {
+			t.Fatalf("load role %s: %v", name, err)
+		}
+		return roleColumns{
+			id:          pgtype.Int8{Int64: role.ID, Valid: true},
+			name:        pgtype.Text{String: role.Name, Valid: true},
+			color:       pgtype.Text{String: role.Color, Valid: true},
+			permissions: pgtype.Int8{Int64: role.Permissions, Valid: true},
+			highlighted: pgtype.Bool{Bool: role.Highlighted, Valid: true},
+		}
+	}
+
+	// A highlighted role with a color, so every column holds a value.
+	if _, err := conn.Exec(ctx,
+		`INSERT INTO user_roles (name, color, permissions, position, highlighted) VALUES ('Team', '#ffcc00', 16, 5, true)`,
+	); err != nil {
+		t.Fatalf("insert role Team: %v", err)
+	}
+
+	tests := []struct {
+		username string
+		role     string
+	}{
+		{"olive", "Owner"},
+		{"adam", "Admin"},
+		{"dave", "Moderator"},
+		{"tess", "Team"},
+		{"nora", ""},
+	}
+	want := make(map[int64]roleColumns, len(tests))
+	for _, tt := range tests {
+		var accountID int64
+		if err := conn.QueryRow(ctx,
+			`INSERT INTO accounts (username, uri) VALUES ($1::text, 'https://example.com/users/' || $1::text) RETURNING id`, tt.username,
+		).Scan(&accountID); err != nil {
+			t.Fatalf("insert account %s: %v", tt.username, err)
+		}
+		if _, err := conn.Exec(ctx,
+			`INSERT INTO users (email, account_id, approved, role_id)
+			 VALUES ($1::text || '@example.com', $2, true, (SELECT id FROM user_roles WHERE name = NULLIF($3::text, '')))`,
+			tt.username, accountID, tt.role,
+		); err != nil {
+			t.Fatalf("insert user %s: %v", tt.username, err)
+		}
+		if tt.role != "" {
+			want[accountID] = seededRole(tt.role)
+		} else {
+			want[accountID] = roleColumns{}
+		}
+	}
+
+	t.Run("AdminGetAccount", func(t *testing.T) {
+		for accountID, wantRole := range want {
+			row, err := q.AdminGetAccount(ctx, accountID)
+			if err != nil {
+				t.Fatalf("AdminGetAccount(%d): %v", accountID, err)
+			}
+			got := roleColumns{row.RoleID, row.RoleName, row.RoleColor, row.RolePermissions, row.RoleHighlighted}
+			if got != wantRole {
+				t.Errorf("account %d role = %+v, want %+v", accountID, got, wantRole)
+			}
+		}
+	})
+
+	t.Run("AdminListAccounts", func(t *testing.T) {
+		rows, err := q.AdminListAccounts(ctx, AdminListAccountsParams{Limit: 100})
+		if err != nil {
+			t.Fatalf("AdminListAccounts: %v", err)
+		}
+		if len(rows) != len(want) {
+			t.Fatalf("listed %d accounts, want %d", len(rows), len(want))
+		}
+		for _, row := range rows {
+			wantRole, ok := want[row.ID]
+			if !ok {
+				t.Fatalf("listed unexpected account %d", row.ID)
+			}
+			got := roleColumns{row.RoleID, row.RoleName, row.RoleColor, row.RolePermissions, row.RoleHighlighted}
+			if got != wantRole {
+				t.Errorf("account %d role = %+v, want %+v", row.ID, got, wantRole)
+			}
+		}
+	})
+}
