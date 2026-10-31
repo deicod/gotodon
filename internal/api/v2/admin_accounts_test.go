@@ -121,6 +121,7 @@ func TestAdminAccountsHandler_RouteAuthorization(t *testing.T) {
 			if tt.authenticated {
 				ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(10))
 				ctx = context.WithValue(ctx, middleware.ContextKeyUserID, int64(20))
+				ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "admin:read admin:write")
 				req = req.WithContext(ctx)
 			}
 			rec := httptest.NewRecorder()

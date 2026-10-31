@@ -21,6 +21,7 @@ import (
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 	"github.com/deicod/gotodon/pkg/snowflake"
 )
 
@@ -1735,25 +1736,28 @@ func stringPointer(value string) *string {
 }
 
 // RegisterRoutes registers the dimensions route. It needs view_dashboard, as
-// in Mastodon's DashboardPolicy.
+// in Mastodon's DashboardPolicy, and admin:read: it is a POST but only reads,
+// as in Api::V1::Admin::DimensionsController.
 func (h *DimensionsHandler) RegisterRoutes(mux RouteRegistrar) {
-	viewDashboard := WithPermission(h.roles, auth.PermissionViewDashboard)
+	read := WithAccess(h.roles, oauth.ScopeAdminRead, auth.PermissionViewDashboard)
 
-	mux.HandleFunc("POST /api/v1/admin/dimensions", viewDashboard(h.Get))
+	mux.HandleFunc("POST /api/v1/admin/dimensions", read(h.Get))
 }
 
-// RegisterRoutes registers the measures route. It needs view_dashboard, as in
-// Mastodon's DashboardPolicy.
+// RegisterRoutes registers the measures route. It needs view_dashboard, as
+// in Mastodon's DashboardPolicy, and admin:read: it is a POST but only reads,
+// as in Api::V1::Admin::MeasuresController.
 func (h *MeasuresHandler) RegisterRoutes(mux RouteRegistrar) {
-	viewDashboard := WithPermission(h.roles, auth.PermissionViewDashboard)
+	read := WithAccess(h.roles, oauth.ScopeAdminRead, auth.PermissionViewDashboard)
 
-	mux.HandleFunc("POST /api/v1/admin/measures", viewDashboard(h.Get))
+	mux.HandleFunc("POST /api/v1/admin/measures", read(h.Get))
 }
 
 // RegisterRoutes registers the retention route. It needs view_dashboard, as
-// in Mastodon's DashboardPolicy.
+// in Mastodon's DashboardPolicy, and admin:read: it is a POST but only reads,
+// as in Api::V1::Admin::RetentionController.
 func (h *RetentionHandler) RegisterRoutes(mux RouteRegistrar) {
-	viewDashboard := WithPermission(h.roles, auth.PermissionViewDashboard)
+	read := WithAccess(h.roles, oauth.ScopeAdminRead, auth.PermissionViewDashboard)
 
-	mux.HandleFunc("POST /api/v1/admin/retention", viewDashboard(h.Get))
+	mux.HandleFunc("POST /api/v1/admin/retention", read(h.Get))
 }

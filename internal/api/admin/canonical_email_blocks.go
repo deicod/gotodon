@@ -16,6 +16,7 @@ import (
 	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 // CanonicalEmailBlocksHandler handles admin canonical email block endpoints.
@@ -218,13 +219,18 @@ func (h *CanonicalEmailBlocksHandler) Delete(w http.ResponseWriter, r *http.Requ
 }
 
 // RegisterRoutes registers canonical email block routes. Every action needs
-// manage_blocks, as in Mastodon's CanonicalEmailBlockPolicy.
+// manage_blocks, as in Mastodon's CanonicalEmailBlockPolicy. Reads need
+// admin:read:canonical_email_blocks and writes
+// admin:write:canonical_email_blocks, as in
+// Api::V1::Admin::CanonicalEmailBlocksController. POST …/test only matches an
+// address against the blocks, so it is a read there too.
 func (h *CanonicalEmailBlocksHandler) RegisterRoutes(mux RouteRegistrar) {
-	manageBlocks := WithPermission(h.roles, auth.PermissionManageBlocks)
+	read := WithAccess(h.roles, oauth.ScopeAdminReadCanonicalEmailBlocks, auth.PermissionManageBlocks)
+	write := WithAccess(h.roles, oauth.ScopeAdminWriteCanonicalEmailBlocks, auth.PermissionManageBlocks)
 
-	mux.HandleFunc("GET /api/v1/admin/canonical_email_blocks", manageBlocks(h.GetAll))
-	mux.HandleFunc("POST /api/v1/admin/canonical_email_blocks", manageBlocks(h.Create))
-	mux.HandleFunc("GET /api/v1/admin/canonical_email_blocks/{id}", manageBlocks(h.Get))
-	mux.HandleFunc("DELETE /api/v1/admin/canonical_email_blocks/{id}", manageBlocks(h.Delete))
-	mux.HandleFunc("POST /api/v1/admin/canonical_email_blocks/test", manageBlocks(h.Test))
+	mux.HandleFunc("GET /api/v1/admin/canonical_email_blocks", read(h.GetAll))
+	mux.HandleFunc("POST /api/v1/admin/canonical_email_blocks", write(h.Create))
+	mux.HandleFunc("GET /api/v1/admin/canonical_email_blocks/{id}", read(h.Get))
+	mux.HandleFunc("DELETE /api/v1/admin/canonical_email_blocks/{id}", write(h.Delete))
+	mux.HandleFunc("POST /api/v1/admin/canonical_email_blocks/test", read(h.Test))
 }

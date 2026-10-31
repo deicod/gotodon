@@ -295,7 +295,7 @@ func TestAdminRoutesAuthorization(t *testing.T) {
 
 				req := adminRouteRequest(route.pattern)
 				if c.authenticated {
-					req = withIdentity(req, int64Ptr(10), int64Ptr(20))
+					req = withScopes(withIdentity(req, int64Ptr(10), int64Ptr(20)), adminToken)
 				}
 				if _, matched := mux.Handler(req); matched != route.pattern {
 					t.Fatalf("request for %s matched %q", route.pattern, matched)
@@ -327,7 +327,7 @@ func TestAdminRoutesWithoutDatabase(t *testing.T) {
 	NewReportsHandler(nil).RegisterRoutes(mux)
 
 	for _, pattern := range mux.patterns {
-		req := withIdentity(adminRouteRequest(pattern), int64Ptr(10), int64Ptr(20))
+		req := withScopes(withIdentity(adminRouteRequest(pattern), int64Ptr(10), int64Ptr(20)), adminToken)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 

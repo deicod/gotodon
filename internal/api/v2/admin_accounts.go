@@ -18,6 +18,7 @@ import (
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 const (
@@ -502,9 +503,11 @@ func boolPointer(value bool) *bool {
 }
 
 // RegisterRoutes registers admin account routes. Listing accounts needs
-// manage_users, as in Mastodon's AccountPolicy#index?.
+// manage_users, as in Mastodon's AccountPolicy#index?, and
+// admin:read:accounts, as in Api::V2::Admin::AccountsController, which
+// inherits the v1 controller's scopes.
 func (h *AdminAccountsHandler) RegisterRoutes(mux adminapi.RouteRegistrar) {
-	manageUsers := adminapi.WithPermission(h.roles, auth.PermissionManageUsers)
+	read := adminapi.WithAccess(h.roles, oauth.ScopeAdminReadAccounts, auth.PermissionManageUsers)
 
-	mux.HandleFunc("GET /api/v2/admin/accounts", manageUsers(h.List))
+	mux.HandleFunc("GET /api/v2/admin/accounts", read(h.List))
 }

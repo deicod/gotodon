@@ -14,6 +14,7 @@ import (
 	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 // TagsHandler handles admin tag endpoints.
@@ -203,12 +204,15 @@ func (h *TagsHandler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 // RegisterRoutes registers admin tag routes. Every action needs
-// manage_taxonomies, as in Mastodon's TagPolicy.
+// manage_taxonomies, as in Mastodon's TagPolicy. Listing and showing need
+// admin:read and updating admin:write, as in Api::V1::Admin::TagsController,
+// which has no per-resource tag scopes.
 func (h *TagsHandler) RegisterRoutes(mux RouteRegistrar) {
-	manageTaxonomies := WithPermission(h.roles, auth.PermissionManageTaxonomies)
+	read := WithAccess(h.roles, oauth.ScopeAdminRead, auth.PermissionManageTaxonomies)
+	write := WithAccess(h.roles, oauth.ScopeAdminWrite, auth.PermissionManageTaxonomies)
 
-	mux.HandleFunc("GET /api/v1/admin/tags", manageTaxonomies(h.GetAll))
-	mux.HandleFunc("GET /api/v1/admin/tags/{id}", manageTaxonomies(h.Get))
-	mux.HandleFunc("PUT /api/v1/admin/tags/{id}", manageTaxonomies(h.Update))
-	mux.HandleFunc("PATCH /api/v1/admin/tags/{id}", manageTaxonomies(h.Update))
+	mux.HandleFunc("GET /api/v1/admin/tags", read(h.GetAll))
+	mux.HandleFunc("GET /api/v1/admin/tags/{id}", read(h.Get))
+	mux.HandleFunc("PUT /api/v1/admin/tags/{id}", write(h.Update))
+	mux.HandleFunc("PATCH /api/v1/admin/tags/{id}", write(h.Update))
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 // ReportsHandler handles admin report endpoints
@@ -512,16 +513,19 @@ func (h *ReportsHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 }
 
 // RegisterRoutes registers admin report routes. Every action needs
-// manage_reports, as in Mastodon's ReportPolicy.
+// manage_reports, as in Mastodon's ReportPolicy. Reads need
+// admin:read:reports and writes admin:write:reports, as in
+// Api::V1::Admin::ReportsController.
 func (h *ReportsHandler) RegisterRoutes(mux RouteRegistrar) {
-	manageReports := WithPermission(h.roles, auth.PermissionManageReports)
+	read := WithAccess(h.roles, oauth.ScopeAdminReadReports, auth.PermissionManageReports)
+	write := WithAccess(h.roles, oauth.ScopeAdminWriteReports, auth.PermissionManageReports)
 
-	mux.HandleFunc("GET /api/v1/admin/reports", manageReports(h.GetAll))
-	mux.HandleFunc("GET /api/v1/admin/reports/{id}", manageReports(h.Get))
-	mux.HandleFunc("PUT /api/v1/admin/reports/{id}", manageReports(h.Update))
-	mux.HandleFunc("PATCH /api/v1/admin/reports/{id}", manageReports(h.Update))
-	mux.HandleFunc("POST /api/v1/admin/reports/{id}/resolve", manageReports(h.Resolve))
-	mux.HandleFunc("POST /api/v1/admin/reports/{id}/assign_to_self", manageReports(h.AssignToSelf))
-	mux.HandleFunc("POST /api/v1/admin/reports/{id}/unassign", manageReports(h.Unassign))
-	mux.HandleFunc("POST /api/v1/admin/reports/{id}/reopen", manageReports(h.Reopen))
+	mux.HandleFunc("GET /api/v1/admin/reports", read(h.GetAll))
+	mux.HandleFunc("GET /api/v1/admin/reports/{id}", read(h.Get))
+	mux.HandleFunc("PUT /api/v1/admin/reports/{id}", write(h.Update))
+	mux.HandleFunc("PATCH /api/v1/admin/reports/{id}", write(h.Update))
+	mux.HandleFunc("POST /api/v1/admin/reports/{id}/resolve", write(h.Resolve))
+	mux.HandleFunc("POST /api/v1/admin/reports/{id}/assign_to_self", write(h.AssignToSelf))
+	mux.HandleFunc("POST /api/v1/admin/reports/{id}/unassign", write(h.Unassign))
+	mux.HandleFunc("POST /api/v1/admin/reports/{id}/reopen", write(h.Reopen))
 }

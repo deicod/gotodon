@@ -14,6 +14,7 @@ import (
 	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 // AccountsHandler handles admin account endpoints
@@ -485,19 +486,23 @@ func (h *AccountsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 // RegisterRoutes registers admin account routes. Permissions follow
 // Mastodon's AccountPolicy and UserPolicy. Account actions need manage_users:
 // Api::V1::Admin::AccountActionsController authorizes show? first, which
-// covers every per-type check of Admin::AccountAction.
+// covers every per-type check of Admin::AccountAction. Scopes follow
+// Api::V1::Admin::AccountsController and AccountActionsController: listing
+// and showing need admin:read:accounts, everything else, account actions
+// included, admin:write:accounts.
 func (h *AccountsHandler) RegisterRoutes(mux RouteRegistrar) {
-	manageUsers := WithPermission(h.roles, auth.PermissionManageUsers)
-	deleteUserData := WithPermission(h.roles, auth.PermissionDeleteUserData)
+	read := WithAccess(h.roles, oauth.ScopeAdminReadAccounts, auth.PermissionManageUsers)
+	write := WithAccess(h.roles, oauth.ScopeAdminWriteAccounts, auth.PermissionManageUsers)
+	deleteUserData := WithAccess(h.roles, oauth.ScopeAdminWriteAccounts, auth.PermissionDeleteUserData)
 
-	mux.HandleFunc("GET /api/v1/admin/accounts", manageUsers(h.GetAll))
-	mux.HandleFunc("GET /api/v1/admin/accounts/{id}", manageUsers(h.Get))
+	mux.HandleFunc("GET /api/v1/admin/accounts", read(h.GetAll))
+	mux.HandleFunc("GET /api/v1/admin/accounts/{id}", read(h.Get))
 	mux.HandleFunc("DELETE /api/v1/admin/accounts/{id}", deleteUserData(h.Delete))
-	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/action", manageUsers(h.TakeAction))
-	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/approve", manageUsers(h.Approve))
-	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/reject", manageUsers(h.Reject))
-	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/enable", manageUsers(h.Enable))
-	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unsilence", manageUsers(h.Unsilence))
-	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unsuspend", manageUsers(h.Unsuspend))
-	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unsensitive", manageUsers(h.Unsensitize))
+	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/action", write(h.TakeAction))
+	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/approve", write(h.Approve))
+	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/reject", write(h.Reject))
+	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/enable", write(h.Enable))
+	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unsilence", write(h.Unsilence))
+	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unsuspend", write(h.Unsuspend))
+	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unsensitive", write(h.Unsensitize))
 }

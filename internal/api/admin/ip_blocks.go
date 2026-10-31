@@ -15,6 +15,7 @@ import (
 	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 // IpBlocksHandler handles admin IP block endpoints.
@@ -322,14 +323,16 @@ func (h *IpBlocksHandler) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 // RegisterRoutes registers IP block routes. Every action needs manage_blocks,
-// as in Mastodon's IpBlockPolicy.
+// as in Mastodon's IpBlockPolicy. Reads need admin:read:ip_blocks and writes
+// admin:write:ip_blocks, as in Api::V1::Admin::IpBlocksController.
 func (h *IpBlocksHandler) RegisterRoutes(mux RouteRegistrar) {
-	manageBlocks := WithPermission(h.roles, auth.PermissionManageBlocks)
+	read := WithAccess(h.roles, oauth.ScopeAdminReadIPBlocks, auth.PermissionManageBlocks)
+	write := WithAccess(h.roles, oauth.ScopeAdminWriteIPBlocks, auth.PermissionManageBlocks)
 
-	mux.HandleFunc("GET /api/v1/admin/ip_blocks", manageBlocks(h.GetAll))
-	mux.HandleFunc("POST /api/v1/admin/ip_blocks", manageBlocks(h.Create))
-	mux.HandleFunc("GET /api/v1/admin/ip_blocks/{id}", manageBlocks(h.Get))
-	mux.HandleFunc("PUT /api/v1/admin/ip_blocks/{id}", manageBlocks(h.Update))
-	mux.HandleFunc("PATCH /api/v1/admin/ip_blocks/{id}", manageBlocks(h.Update))
-	mux.HandleFunc("DELETE /api/v1/admin/ip_blocks/{id}", manageBlocks(h.Delete))
+	mux.HandleFunc("GET /api/v1/admin/ip_blocks", read(h.GetAll))
+	mux.HandleFunc("POST /api/v1/admin/ip_blocks", write(h.Create))
+	mux.HandleFunc("GET /api/v1/admin/ip_blocks/{id}", read(h.Get))
+	mux.HandleFunc("PUT /api/v1/admin/ip_blocks/{id}", write(h.Update))
+	mux.HandleFunc("PATCH /api/v1/admin/ip_blocks/{id}", write(h.Update))
+	mux.HandleFunc("DELETE /api/v1/admin/ip_blocks/{id}", write(h.Delete))
 }

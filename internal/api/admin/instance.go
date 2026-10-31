@@ -19,6 +19,7 @@ import (
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 // InstanceHandler handles admin instance endpoints
@@ -878,35 +879,40 @@ func (h *TrendsHandler) RejectLinkPublisher(w http.ResponseWriter, r *http.Reque
 
 // RegisterRoutes registers the instance settings routes, which are
 // gotodon-specific. They need manage_settings, as Mastodon's admin settings
-// do (SettingsPolicy).
+// do (SettingsPolicy). Having no Mastodon controller to follow, they take the
+// general admin scopes: admin:read to show and admin:write to update.
 func (h *InstanceHandler) RegisterRoutes(mux RouteRegistrar) {
-	manageSettings := WithPermission(h.roles, auth.PermissionManageSettings)
+	read := WithAccess(h.roles, oauth.ScopeAdminRead, auth.PermissionManageSettings)
+	write := WithAccess(h.roles, oauth.ScopeAdminWrite, auth.PermissionManageSettings)
 
-	mux.HandleFunc("GET /api/v1/admin/instance", manageSettings(h.Get))
-	mux.HandleFunc("PATCH /api/v1/admin/instance", manageSettings(h.Update))
+	mux.HandleFunc("GET /api/v1/admin/instance", read(h.Get))
+	mux.HandleFunc("PATCH /api/v1/admin/instance", write(h.Update))
 }
 
 // RegisterRoutes registers admin trends routes. Every action needs
 // manage_taxonomies: TagPolicy#review?, Admin::StatusPolicy#review?,
-// PreviewCardPolicy and PreviewCardProviderPolicy in Mastodon.
+// PreviewCardPolicy and PreviewCardProviderPolicy in Mastodon. The lists need
+// admin:read and approving or rejecting admin:write, as in
+// Api::V1::Admin::Trends::*Controller.
 //
 // Mastodon does not authorize the tag, status and link lists: callers
 // without manage_taxonomies get the public trends from /api/v1/trends/*
 // instead of the admin view. gotodon refuses them with 403, since the public
 // endpoints already serve that data.
 func (h *TrendsHandler) RegisterRoutes(mux RouteRegistrar) {
-	manageTaxonomies := WithPermission(h.roles, auth.PermissionManageTaxonomies)
+	read := WithAccess(h.roles, oauth.ScopeAdminRead, auth.PermissionManageTaxonomies)
+	write := WithAccess(h.roles, oauth.ScopeAdminWrite, auth.PermissionManageTaxonomies)
 
-	mux.HandleFunc("GET /api/v1/admin/trends/tags", manageTaxonomies(h.GetTags))
-	mux.HandleFunc("POST /api/v1/admin/trends/tags/{id}/approve", manageTaxonomies(h.ApproveTag))
-	mux.HandleFunc("POST /api/v1/admin/trends/tags/{id}/reject", manageTaxonomies(h.RejectTag))
-	mux.HandleFunc("GET /api/v1/admin/trends/statuses", manageTaxonomies(h.GetStatuses))
-	mux.HandleFunc("POST /api/v1/admin/trends/statuses/{id}/approve", manageTaxonomies(h.ApproveStatus))
-	mux.HandleFunc("POST /api/v1/admin/trends/statuses/{id}/reject", manageTaxonomies(h.RejectStatus))
-	mux.HandleFunc("GET /api/v1/admin/trends/links", manageTaxonomies(h.GetLinks))
-	mux.HandleFunc("POST /api/v1/admin/trends/links/{id}/approve", manageTaxonomies(h.ApproveLink))
-	mux.HandleFunc("POST /api/v1/admin/trends/links/{id}/reject", manageTaxonomies(h.RejectLink))
-	mux.HandleFunc("GET /api/v1/admin/trends/links/publishers", manageTaxonomies(h.GetLinkPublishers))
-	mux.HandleFunc("POST /api/v1/admin/trends/links/publishers/{id}/approve", manageTaxonomies(h.ApproveLinkPublisher))
-	mux.HandleFunc("POST /api/v1/admin/trends/links/publishers/{id}/reject", manageTaxonomies(h.RejectLinkPublisher))
+	mux.HandleFunc("GET /api/v1/admin/trends/tags", read(h.GetTags))
+	mux.HandleFunc("POST /api/v1/admin/trends/tags/{id}/approve", write(h.ApproveTag))
+	mux.HandleFunc("POST /api/v1/admin/trends/tags/{id}/reject", write(h.RejectTag))
+	mux.HandleFunc("GET /api/v1/admin/trends/statuses", read(h.GetStatuses))
+	mux.HandleFunc("POST /api/v1/admin/trends/statuses/{id}/approve", write(h.ApproveStatus))
+	mux.HandleFunc("POST /api/v1/admin/trends/statuses/{id}/reject", write(h.RejectStatus))
+	mux.HandleFunc("GET /api/v1/admin/trends/links", read(h.GetLinks))
+	mux.HandleFunc("POST /api/v1/admin/trends/links/{id}/approve", write(h.ApproveLink))
+	mux.HandleFunc("POST /api/v1/admin/trends/links/{id}/reject", write(h.RejectLink))
+	mux.HandleFunc("GET /api/v1/admin/trends/links/publishers", read(h.GetLinkPublishers))
+	mux.HandleFunc("POST /api/v1/admin/trends/links/publishers/{id}/approve", write(h.ApproveLinkPublisher))
+	mux.HandleFunc("POST /api/v1/admin/trends/links/publishers/{id}/reject", write(h.RejectLinkPublisher))
 }
