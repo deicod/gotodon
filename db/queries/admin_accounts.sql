@@ -8,10 +8,7 @@ SELECT
     r.name AS role_name,
     r.permissions AS role_permissions,
     r.color AS role_color,
-    r.position AS role_position,
-    r.highlighted AS role_highlighted,
-    r.created_at AS role_created_at,
-    r.updated_at AS role_updated_at
+    r.highlighted AS role_highlighted
 FROM accounts a
 JOIN users u ON a.id = u.account_id
 LEFT JOIN user_roles r ON r.id = u.role_id
@@ -38,10 +35,7 @@ SELECT
     r.name AS role_name,
     r.permissions AS role_permissions,
     r.color AS role_color,
-    r.position AS role_position,
-    r.highlighted AS role_highlighted,
-    r.created_at AS role_created_at,
-    r.updated_at AS role_updated_at
+    r.highlighted AS role_highlighted
 FROM accounts a
 JOIN users u ON a.id = u.account_id
 LEFT JOIN user_roles r ON r.id = u.role_id

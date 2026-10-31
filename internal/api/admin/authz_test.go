@@ -19,9 +19,10 @@ import (
 	"github.com/deicod/gotodon/pkg/oauth"
 )
 
-// Seeded role values after migration 047.
+// Seeded role values after migrations 047 and 050. Before 050 the Owner
+// stored every bit, -1, which a custom role still can.
 const (
-	ownerPermissions     int64 = -1
+	ownerPermissions     int64 = auth.PermissionAdministrator
 	adminPermissions     int64 = 2031612
 	moderatorPermissions int64 = 1049884
 
@@ -435,6 +436,16 @@ func TestRequireAccess(t *testing.T) {
 		{
 			name:            "administrator bit",
 			roles:           func() *stubRoles { return rolesFor(auth.PermissionAdministrator) },
+			accountID:       int64Ptr(10),
+			userID:          int64Ptr(20),
+			scopes:          adminToken,
+			scope:           oauth.ScopeAdminRead,
+			anyOf:           []int64{auth.PermissionManageEmailSubscriptions},
+			wantRoleLookups: []int64{20},
+		},
+		{
+			name:            "every bit, as the Owner stored before migration 050",
+			roles:           func() *stubRoles { return rolesFor(-1) },
 			accountID:       int64Ptr(10),
 			userID:          int64Ptr(20),
 			scopes:          adminToken,

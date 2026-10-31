@@ -253,7 +253,10 @@ func TestBuildCredentialAccount_SourceFieldsRemainRaw(t *testing.T) {
 		Fields:   []byte(`[{"name":"Site","value":"https://example.com/profile"}]`),
 	}
 
-	cred := buildCredentialAccount(context.Background(), nil, cfg, dbAcc)
+	cred, err := buildCredentialAccount(context.Background(), nil, cfg, dbAcc)
+	if err != nil {
+		t.Fatalf("buildCredentialAccount() error = %v", err)
+	}
 
 	if len(cred.Fields) != 1 || len(cred.Source.Fields) != 1 {
 		t.Fatalf("fields length = %d/%d, want 1/1", len(cred.Fields), len(cred.Source.Fields))
@@ -376,7 +379,10 @@ func TestBuildCredentialAccount_SourceQuotePolicyFallsBackToPublicForInvalidStor
 		},
 	}
 
-	cred := buildCredentialAccount(context.Background(), stub, cfg, dbAcc)
+	cred, err := buildCredentialAccount(context.Background(), stub, cfg, dbAcc)
+	if err != nil {
+		t.Fatalf("buildCredentialAccount() error = %v", err)
+	}
 
 	if cred.Source.QuotePolicy != "public" {
 		t.Fatalf("source.quote_policy = %q, want public", cred.Source.QuotePolicy)

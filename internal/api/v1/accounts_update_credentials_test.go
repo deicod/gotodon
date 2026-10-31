@@ -33,6 +33,7 @@ type stubAccountUpdateQueries struct {
 	account              db.Account
 	getAccountErr        error
 	user                 db.User
+	roleErr              error
 }
 
 type stubProfileMediaUploader struct {
@@ -175,6 +176,9 @@ func (s *stubAccountUpdateQueries) CountFollowRequestsForAccount(ctx context.Con
 }
 
 func (s *stubAccountUpdateQueries) GetUserRole(ctx context.Context, userID int64) (db.UserRole, error) {
+	if s.roleErr != nil {
+		return db.UserRole{}, s.roleErr
+	}
 	return db.UserRole{}, pgx.ErrNoRows
 }
 
@@ -638,6 +642,57 @@ func TestAccountsHandler_UpdateCredentials_AccountLookupFailureReturns500AndDoes
 	}
 	if stub.updateCalled {
 		t.Fatal("expected UpdateAccount to not be called")
+	}
+}
+
+// The response renders the updated account with its role, as
+// verify_credentials does.
+func TestAccountsHandler_UpdateCredentials_Role(t *testing.T) {
+	tests := []struct {
+		name       string
+		roleErr    error
+		wantStatus int
+		wantBody   string
+	}{
+		{"user without a role", nil, http.StatusOK, everyoneRoleJSON},
+		{"role lookup fails", errors.New("db unavailable"), http.StatusInternalServerError, `{"error":"Failed to fetch account"}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stub := &stubAccountUpdateQueries{
+				account: db.Account{ID: 1, Username: "alice"},
+				user:    db.User{ID: 5, AccountID: 1},
+				roleErr: tt.roleErr,
+			}
+			h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
+
+			req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", bytes.NewBufferString(`{"display_name":"Alice"}`))
+			req.Header.Set("Content-Type", "application/json")
+			ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+			ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "write:accounts")
+			req = req.WithContext(ctx)
+			rec := httptest.NewRecorder()
+
+			h.UpdateCredentials(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d (%s), want %d", rec.Code, rec.Body.String(), tt.wantStatus)
+			}
+			// The update is saved before the response is rendered.
+			if !stub.updateCalled {
+				t.Fatal("expected UpdateAccount to be called")
+			}
+			if tt.wantStatus != http.StatusOK {
+				assertJSONEqual(t, rec.Body.Bytes(), tt.wantBody)
+				return
+			}
+			var body map[string]json.RawMessage
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			assertJSONEqual(t, body["role"], tt.wantBody)
+		})
 	}
 }
 

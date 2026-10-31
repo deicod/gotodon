@@ -29,9 +29,9 @@ var allPermissions = []int64{
 	PermissionManageEmailSubscriptions,
 }
 
-// Seeded role values after migration 047.
+// Seeded role values after migrations 047 and 050.
 const (
-	seededOwner     int64 = -1
+	seededOwner     int64 = PermissionAdministrator
 	seededAdmin     int64 = 2031612
 	seededModerator int64 = 1049884
 )
@@ -53,19 +53,30 @@ func TestPermissionAllCoversEveryFlag(t *testing.T) {
 	}
 }
 
+func TestPermissionDefault(t *testing.T) {
+	// Mastodon's UserRole::Flags::DEFAULT, invite_users, which the seeded
+	// everyone role holds.
+	if PermissionDefault != 65536 {
+		t.Fatalf("PermissionDefault = %d, want invite_users, 65536", PermissionDefault)
+	}
+}
+
 func TestComputedPermissions(t *testing.T) {
 	tests := []struct {
 		name   string
 		stored int64
 		want   int64
 	}{
-		{"no permissions", 0, 0},
+		{"no permissions: the everyone role's", 0, PermissionDefault},
 		{"administrator bit only", PermissionAdministrator, PermissionAll},
 		{"administrator with other bits", PermissionAdministrator | PermissionManageUsers, PermissionAll},
 		{"seeded Owner", seededOwner, PermissionAll},
-		{"seeded Admin keeps its bits", seededAdmin, seededAdmin},
-		{"seeded Moderator keeps its bits", seededModerator, seededModerator},
-		{"single permission", PermissionManageReports, PermissionManageReports},
+		{"Owner storing every bit", -1, PermissionAll},
+		// The values Mastodon reports for its config/roles.yml roles.
+		{"seeded Admin gains the everyone role's", seededAdmin, 2097148},
+		{"seeded Moderator gains the everyone role's", seededModerator, 1115420},
+		{"single permission", PermissionManageReports, PermissionManageReports | PermissionDefault},
+		{"stored default bits", PermissionManageReports | PermissionInviteUsers, PermissionManageReports | PermissionInviteUsers},
 	}
 
 	for _, tt := range tests {
@@ -89,11 +100,15 @@ func TestHasPermission(t *testing.T) {
 		{"granted", PermissionManageReports, []int64{PermissionManageReports}, true},
 		{"missing", PermissionManageReports, []int64{PermissionManageUsers}, false},
 		{"no role permissions", 0, []int64{PermissionManageUsers}, false},
+		{"no role permissions, the everyone role's", 0, []int64{PermissionInviteUsers}, true},
+		{"every role has the everyone role's", PermissionManageReports, []int64{PermissionInviteUsers}, true},
+		{"seeded Moderator has invite_users", seededModerator, []int64{PermissionInviteUsers}, true},
 		{"any of: first held", PermissionManageUsers, []int64{PermissionManageUsers, PermissionManageReports}, true},
 		{"any of: second held", PermissionManageReports, []int64{PermissionManageUsers, PermissionManageReports}, true},
 		{"any of: none held", PermissionViewDashboard, []int64{PermissionManageUsers, PermissionManageReports}, false},
 		{"administrator bit implies the rest", PermissionAdministrator, []int64{PermissionManageEmailSubscriptions}, true},
 		{"seeded Owner", seededOwner, []int64{PermissionManageFederation}, true},
+		{"Owner storing every bit", -1, []int64{PermissionManageFederation}, true},
 		{"seeded Admin has manage_federation", seededAdmin, []int64{PermissionManageFederation}, true},
 		{"seeded Admin lacks view_devops", seededAdmin, []int64{PermissionViewDevops}, false},
 		{"seeded Moderator has manage_reports", seededModerator, []int64{PermissionManageReports}, true},

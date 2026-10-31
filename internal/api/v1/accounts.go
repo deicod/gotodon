@@ -152,7 +152,9 @@ type Field struct {
 type CredentialAccount struct {
 	Account
 	Source AccountSource `json:"source"`
-	Role   *AccountRole  `json:"role,omitempty"`
+	// Role is the user's role, or the everyone role for a user without one.
+	// It is null only for an account without a user.
+	Role *AccountRole `json:"role"`
 }
 
 // AccountSource contains the profile source data
@@ -170,12 +172,13 @@ type AccountSource struct {
 	QuotePolicy         string   `json:"quote_policy"`
 }
 
-// AccountRole represents a user role
+// AccountRole is a user role as Mastodon's REST::RoleSerializer renders it.
+// SerializeRole builds one.
 type AccountRole struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
-	Color       string `json:"color"`
 	Permissions string `json:"permissions"`
+	Color       string `json:"color"`
 	Highlighted bool   `json:"highlighted"`
 }
 
@@ -231,7 +234,19 @@ func (h *AccountsHandler) VerifyCredentials(w http.ResponseWriter, r *http.Reque
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
-	web.JSON(w, http.StatusOK, buildCredentialAccount(ctx, h.queries, h.cfg, dbAcc))
+	writeCredentialAccount(ctx, w, h.queries, h.cfg, dbAcc)
+}
+
+// writeCredentialAccount answers with dbAcc as a credential account, or with
+// 500 when looking up its user or role fails.
+func writeCredentialAccount(ctx context.Context, w http.ResponseWriter, q accountCredentialQueries, cfg *config.Config, dbAcc db.Account) {
+	cred, err := buildCredentialAccount(ctx, q, cfg, dbAcc)
+	if err != nil {
+		slog.ErrorContext(ctx, "Failed to build credential account", "error", err)
+		web.JSONError(w, http.StatusInternalServerError, "Failed to fetch account")
+		return
+	}
+	web.JSON(w, http.StatusOK, cred)
 }
 
 // UpdateCredentialsRequest is the request for PATCH /api/v1/accounts/update_credentials
@@ -607,7 +622,7 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 			}
 		}
 
-		web.JSON(w, http.StatusOK, buildCredentialAccount(ctx, h.queries, h.cfg, dbAcc))
+		writeCredentialAccount(ctx, w, h.queries, h.cfg, dbAcc)
 		return
 	}
 

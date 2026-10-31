@@ -67,10 +67,7 @@ SELECT
     r.name AS role_name,
     r.permissions AS role_permissions,
     r.color AS role_color,
-    r.position AS role_position,
-    r.highlighted AS role_highlighted,
-    r.created_at AS role_created_at,
-    r.updated_at AS role_updated_at
+    r.highlighted AS role_highlighted
 FROM accounts a
 JOIN users u ON a.id = u.account_id
 LEFT JOIN user_roles r ON r.id = u.role_id
@@ -96,10 +93,7 @@ type AdminGetAccountRow struct {
 	RoleName               pgtype.Text        `db:"role_name" json:"role_name"`
 	RolePermissions        pgtype.Int8        `db:"role_permissions" json:"role_permissions"`
 	RoleColor              pgtype.Text        `db:"role_color" json:"role_color"`
-	RolePosition           pgtype.Int4        `db:"role_position" json:"role_position"`
 	RoleHighlighted        pgtype.Bool        `db:"role_highlighted" json:"role_highlighted"`
-	RoleCreatedAt          pgtype.Timestamptz `db:"role_created_at" json:"role_created_at"`
-	RoleUpdatedAt          pgtype.Timestamptz `db:"role_updated_at" json:"role_updated_at"`
 }
 
 func (q *Queries) AdminGetAccount(ctx context.Context, id int64) (AdminGetAccountRow, error) {
@@ -124,10 +118,7 @@ func (q *Queries) AdminGetAccount(ctx context.Context, id int64) (AdminGetAccoun
 		&i.RoleName,
 		&i.RolePermissions,
 		&i.RoleColor,
-		&i.RolePosition,
 		&i.RoleHighlighted,
-		&i.RoleCreatedAt,
-		&i.RoleUpdatedAt,
 	)
 	return i, err
 }
@@ -194,10 +185,7 @@ SELECT
     r.name AS role_name,
     r.permissions AS role_permissions,
     r.color AS role_color,
-    r.position AS role_position,
-    r.highlighted AS role_highlighted,
-    r.created_at AS role_created_at,
-    r.updated_at AS role_updated_at
+    r.highlighted AS role_highlighted
 FROM accounts a
 JOIN users u ON a.id = u.account_id
 LEFT JOIN user_roles r ON r.id = u.role_id
@@ -248,10 +236,7 @@ type AdminListAccountsRow struct {
 	RoleName               pgtype.Text        `db:"role_name" json:"role_name"`
 	RolePermissions        pgtype.Int8        `db:"role_permissions" json:"role_permissions"`
 	RoleColor              pgtype.Text        `db:"role_color" json:"role_color"`
-	RolePosition           pgtype.Int4        `db:"role_position" json:"role_position"`
 	RoleHighlighted        pgtype.Bool        `db:"role_highlighted" json:"role_highlighted"`
-	RoleCreatedAt          pgtype.Timestamptz `db:"role_created_at" json:"role_created_at"`
-	RoleUpdatedAt          pgtype.Timestamptz `db:"role_updated_at" json:"role_updated_at"`
 }
 
 func (q *Queries) AdminListAccounts(ctx context.Context, arg AdminListAccountsParams) ([]AdminListAccountsRow, error) {
@@ -294,10 +279,7 @@ func (q *Queries) AdminListAccounts(ctx context.Context, arg AdminListAccountsPa
 			&i.RoleName,
 			&i.RolePermissions,
 			&i.RoleColor,
-			&i.RolePosition,
 			&i.RoleHighlighted,
-			&i.RoleCreatedAt,
-			&i.RoleUpdatedAt,
 		); err != nil {
 			return nil, err
 		}

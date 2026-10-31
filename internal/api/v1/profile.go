@@ -59,7 +59,7 @@ func (h *ProfileHandler) DeleteAvatar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	web.JSON(w, http.StatusOK, h.dbAccountToCredential(ctx, dbAcc))
+	writeCredentialAccount(ctx, w, h.queries, h.cfg, dbAcc)
 }
 
 // DeleteHeader handles DELETE /api/v1/profile/header
@@ -89,11 +89,7 @@ func (h *ProfileHandler) DeleteHeader(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	web.JSON(w, http.StatusOK, h.dbAccountToCredential(ctx, dbAcc))
-}
-
-func (h *ProfileHandler) dbAccountToCredential(ctx context.Context, dbAcc db.Account) CredentialAccount {
-	return buildCredentialAccount(ctx, h.queries, h.cfg, dbAcc)
+	writeCredentialAccount(ctx, w, h.queries, h.cfg, dbAcc)
 }
 
 // RegisterRoutes registers the profile routes

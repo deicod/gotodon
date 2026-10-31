@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
+	v1 "github.com/deicod/gotodon/internal/api/v1"
 	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
@@ -71,34 +72,22 @@ func NewAccountsHandler(queries *db.Queries, localDomain string) *AccountsHandle
 
 // AdminAccount represents an account in the admin view
 type AdminAccount struct {
-	ID             string    `json:"id"`
-	Username       string    `json:"username"`
-	Domain         *string   `json:"domain"`
-	CreatedAt      time.Time `json:"created_at"`
-	Email          string    `json:"email,omitempty"`
-	IP             *string   `json:"ip,omitempty"`
-	Role           *Role     `json:"role,omitempty"`
-	Confirmed      bool      `json:"confirmed"`
-	Approved       bool      `json:"approved"`
-	Disabled       bool      `json:"disabled"`
-	Silenced       bool      `json:"silenced"`
-	Suspended      bool      `json:"suspended"`
-	Sensitized     bool      `json:"sensitized"`
-	InviteRequest  *string   `json:"invite_request,omitempty"`
-	CreatedByAppID *string   `json:"created_by_application_id,omitempty"`
-	InvitedByID    *string   `json:"invited_by_account_id,omitempty"`
-}
-
-// Role represents an admin role
-type Role struct {
-	ID          int    `json:"id"`
-	Name        string `json:"name"`
-	Color       string `json:"color"`
-	Position    int    `json:"position"`
-	Permissions int64  `json:"permissions"`
-	Highlighted bool   `json:"highlighted"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	ID             string          `json:"id"`
+	Username       string          `json:"username"`
+	Domain         *string         `json:"domain"`
+	CreatedAt      time.Time       `json:"created_at"`
+	Email          string          `json:"email,omitempty"`
+	IP             *string         `json:"ip,omitempty"`
+	Role           *v1.AccountRole `json:"role"`
+	Confirmed      bool            `json:"confirmed"`
+	Approved       bool            `json:"approved"`
+	Disabled       bool            `json:"disabled"`
+	Silenced       bool            `json:"silenced"`
+	Suspended      bool            `json:"suspended"`
+	Sensitized     bool            `json:"sensitized"`
+	InviteRequest  *string         `json:"invite_request,omitempty"`
+	CreatedByAppID *string         `json:"created_by_application_id,omitempty"`
+	InvitedByID    *string         `json:"invited_by_account_id,omitempty"`
 }
 
 // AccountAction represents an action taken on an account.
@@ -127,25 +116,12 @@ func accountHumanIdentifier(username string, domain pgtype.Text) string {
 	return username
 }
 
-func roleFromRow(roleID pgtype.Int8, roleName pgtype.Text, roleColor pgtype.Text, rolePosition pgtype.Int4, rolePermissions pgtype.Int8, roleHighlighted pgtype.Bool, roleCreatedAt pgtype.Timestamptz, roleUpdatedAt pgtype.Timestamptz) *Role {
-	if !roleID.Valid {
-		return nil
-	}
-
-	role := Role{
-		ID:          int(roleID.Int64),
-		Name:        roleName.String,
-		Color:       roleColor.String,
-		Position:    int(rolePosition.Int32),
-		Permissions: rolePermissions.Int64,
-		Highlighted: roleHighlighted.Bool,
-	}
-	if roleCreatedAt.Valid {
-		role.CreatedAt = roleCreatedAt.Time.Format(time.RFC3339)
-	}
-	if roleUpdatedAt.Valid {
-		role.UpdatedAt = roleUpdatedAt.Time.Format(time.RFC3339)
-	}
+// adminAccountRole returns the role of an account's user from the joined
+// user_roles columns, as REST::Admin::AccountSerializer#role gives it: the
+// user's role, or the everyone role for a user without one. The v1 queries
+// join users, so every account they return has a user and a role.
+func adminAccountRole(id pgtype.Int8, name, color pgtype.Text, permissions pgtype.Int8, highlighted pgtype.Bool) *v1.AccountRole {
+	role := v1.SerializeUserRole(id, name, color, permissions, highlighted)
 	return &role
 }
 
@@ -259,16 +235,7 @@ func (h *AccountsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
 			Silenced:   row.SilencedAt.Valid,
 			Suspended:  row.SuspendedAt.Valid,
 			Sensitized: row.SensitizedAt.Valid,
-			Role: roleFromRow(
-				row.RoleID,
-				row.RoleName,
-				row.RoleColor,
-				row.RolePosition,
-				row.RolePermissions,
-				row.RoleHighlighted,
-				row.RoleCreatedAt,
-				row.RoleUpdatedAt,
-			),
+			Role:       adminAccountRole(row.RoleID, row.RoleName, row.RoleColor, row.RolePermissions, row.RoleHighlighted),
 		}
 		if row.Domain.Valid {
 			d := row.Domain.String
@@ -306,16 +273,7 @@ func (h *AccountsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		Silenced:   row.SilencedAt.Valid,
 		Suspended:  row.SuspendedAt.Valid,
 		Sensitized: row.SensitizedAt.Valid,
-		Role: roleFromRow(
-			row.RoleID,
-			row.RoleName,
-			row.RoleColor,
-			row.RolePosition,
-			row.RolePermissions,
-			row.RoleHighlighted,
-			row.RoleCreatedAt,
-			row.RoleUpdatedAt,
-		),
+		Role:       adminAccountRole(row.RoleID, row.RoleName, row.RoleColor, row.RolePermissions, row.RoleHighlighted),
 	}
 	if row.Domain.Valid {
 		d := row.Domain.String
