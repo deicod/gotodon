@@ -24,6 +24,10 @@ const (
 	ownerPermissions     int64 = -1
 	adminPermissions     int64 = 2031612
 	moderatorPermissions int64 = 1049884
+
+	ownerPosition     int32 = 1000
+	adminPosition     int32 = 100
+	moderatorPosition int32 = 10
 )
 
 // stubRoles is a RoleLookup backed by maps. A user missing from roles has no
@@ -497,7 +501,7 @@ func TestRequireAccess(t *testing.T) {
 			}
 			rec := httptest.NewRecorder()
 
-			err := RequireAccess(rec, req, roles, tt.scope, tt.anyOf...)
+			allowed, err := RequireAccess(rec, req, roles, tt.scope, tt.anyOf...)
 
 			if tt.wantErr == nil {
 				if err != nil {
@@ -506,7 +510,23 @@ func TestRequireAccess(t *testing.T) {
 				if rec.Body.Len() != 0 {
 					t.Fatalf("allowed request wrote a response: %d %s", rec.Code, rec.Body.String())
 				}
+				if allowed == nil {
+					t.Fatal("RequireAccess() returned no request")
+				}
+				role, ok := ActingRole(allowed.Context())
+				if !ok {
+					t.Fatal("ActingRole() found no role in the returned request")
+				}
+				if want := stub.roles[20]; role != want {
+					t.Fatalf("ActingRole() = %+v, want %+v", role, want)
+				}
+				if _, ok := ActingRole(req.Context()); ok {
+					t.Fatal("RequireAccess() changed the caller's request")
+				}
 			} else {
+				if allowed != nil {
+					t.Fatalf("RequireAccess() returned a request with %v", err)
+				}
 				if !errors.Is(err, tt.wantErr) {
 					t.Fatalf("RequireAccess() = %v, want %v", err, tt.wantErr)
 				}
@@ -540,6 +560,53 @@ func equalIDs(got, want []int64) bool {
 		}
 	}
 	return true
+}
+
+func TestActingRoleWithoutRequireAccess(t *testing.T) {
+	req := withScopes(withIdentity(httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts", nil), int64Ptr(10), int64Ptr(20)), adminToken)
+	if role, ok := ActingRole(req.Context()); ok {
+		t.Fatalf("ActingRole() = %+v, want none", role)
+	}
+}
+
+func TestOverridesRole(t *testing.T) {
+	at := func(position int32) *int32 { return &position }
+	owner := db.UserRole{Name: "Owner", Permissions: ownerPermissions, Position: ownerPosition}
+	admin := db.UserRole{Name: "Admin", Permissions: adminPermissions, Position: adminPosition}
+	moderator := db.UserRole{Name: "Moderator", Permissions: moderatorPermissions, Position: moderatorPosition}
+
+	tests := []struct {
+		name   string
+		acting db.UserRole
+		target *int32
+		want   bool
+	}{
+		{"Owner over an account without a user", owner, nil, true},
+		{"Owner over a user without a role", owner, at(everyonePosition), true},
+		{"Owner over Moderator", owner, at(moderatorPosition), true},
+		{"Owner over Admin", owner, at(adminPosition), true},
+		{"Owner over Owner", owner, at(ownerPosition), false},
+		{"Admin over Moderator", admin, at(moderatorPosition), true},
+		{"Admin over Admin", admin, at(adminPosition), false},
+		{"Admin over Owner", admin, at(ownerPosition), false},
+		{"Moderator over an account without a user", moderator, nil, true},
+		{"Moderator over a user without a role", moderator, at(everyonePosition), true},
+		{"Moderator over Moderator", moderator, at(moderatorPosition), false},
+		{"Moderator over Admin", moderator, at(adminPosition), false},
+		{"Moderator over Owner", moderator, at(ownerPosition), false},
+		{"position 0 over a user without a role", db.UserRole{Position: 0}, at(everyonePosition), true},
+		{"everyone's position over a user without a role", db.UserRole{Position: everyonePosition}, at(everyonePosition), false},
+		{"negative position over an account without a user", db.UserRole{Position: -5}, nil, true},
+		{"negative position over a user without a role", db.UserRole{Position: -5}, at(everyonePosition), false},
+		{"permissions don't count", db.UserRole{Name: "Owner", Permissions: ownerPermissions, Position: moderatorPosition}, at(adminPosition), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := overridesRole(tt.acting, tt.target); got != tt.want {
+				t.Fatalf("overridesRole(%d, %v) = %t, want %t", tt.acting.Position, tt.target, got, tt.want)
+			}
+		})
+	}
 }
 
 func TestNewRoleLookup(t *testing.T) {
@@ -580,14 +647,18 @@ func TestWithAccess(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			called := false
+			var acting db.UserRole
+			var hasActing bool
 			next := func(w http.ResponseWriter, r *http.Request) {
 				called = true
+				acting, hasActing = ActingRole(r.Context())
 				if _, err := io.ReadAll(r.Body); err != nil {
 					t.Errorf("reading body: %v", err)
 				}
 				w.WriteHeader(http.StatusNoContent)
 			}
-			handler := WithAccess(rolesFor(tt.permissions), oauth.ScopeAdminWriteReports, auth.PermissionManageReports)(next)
+			roles := rolesFor(tt.permissions)
+			handler := WithAccess(roles, oauth.ScopeAdminWriteReports, auth.PermissionManageReports)(next)
 
 			probe := &bodyProbe{Reader: strings.NewReader(`{"comment":"x"}`)}
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/reports/1/resolve", probe)
@@ -601,6 +672,9 @@ func TestWithAccess(t *testing.T) {
 			}
 			if rec.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if tt.wantCalled && (!hasActing || acting != roles.roles[20]) {
+				t.Fatalf("handler's ActingRole() = %+v, %t, want %+v", acting, hasActing, roles.roles[20])
 			}
 			if !tt.wantCalled {
 				if probe.read {

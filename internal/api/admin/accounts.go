@@ -3,32 +3,70 @@ package admin
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/activitypub"
 	"github.com/deicod/gotodon/pkg/oauth"
 )
 
-// AccountsHandler handles admin account endpoints
-type AccountsHandler struct {
-	queries *db.Queries
-	roles   RoleLookup
+// accountsStore is the part of *db.Queries the admin accounts handler uses.
+// Tests use stubs.
+type accountsStore interface {
+	AdminListAccounts(ctx context.Context, arg db.AdminListAccountsParams) ([]db.AdminListAccountsRow, error)
+	AdminGetAccount(ctx context.Context, id int64) (db.AdminGetAccountRow, error)
+	AdminGetAccountActionTarget(ctx context.Context, id int64) (db.AdminGetAccountActionTargetRow, error)
+	AdminApproveAccount(ctx context.Context, accountID int64) error
+	AdminRejectAccount(ctx context.Context, accountID int64) error
+	AdminDeleteAccount(ctx context.Context, id int64) error
+	AdminDisableAccount(ctx context.Context, accountID int64) error
+	AdminEnableAccount(ctx context.Context, accountID int64) error
+	AdminSilenceAccount(ctx context.Context, id int64) error
+	AdminUnsilenceAccount(ctx context.Context, id int64) error
+	AdminSuspendAccount(ctx context.Context, id int64) error
+	AdminUnsuspendAccount(ctx context.Context, id int64) error
+	AdminSensitizeAccount(ctx context.Context, id int64) error
+	AdminUnsensitizeAccount(ctx context.Context, id int64) error
+	GetAccountByIDAllowSuspended(ctx context.Context, id int64) (db.Account, error)
+	GetUserByAccountID(ctx context.Context, accountID int64) (db.User, error)
+	CreateAdminActionLog(ctx context.Context, arg db.CreateAdminActionLogParams) error
 }
 
-// NewAccountsHandler creates a new admin accounts handler
-func NewAccountsHandler(queries *db.Queries) *AccountsHandler {
-	return &AccountsHandler{
-		queries: queries,
-		roles:   NewRoleLookup(queries),
+// AccountsHandler handles admin account endpoints
+type AccountsHandler struct {
+	store accountsStore
+	roles RoleLookup
+	// instanceActorURI identifies the instance actor, which can't be
+	// suspended. It is "" without a local domain, and then matches no
+	// account.
+	instanceActorURI string
+}
+
+// NewAccountsHandler creates a new admin accounts handler for the server at
+// localDomain, whose instance actor it recognizes.
+func NewAccountsHandler(queries *db.Queries, localDomain string) *AccountsHandler {
+	h := &AccountsHandler{
+		roles:            NewRoleLookup(queries),
+		instanceActorURI: activitypub.InstanceActorURI(localDomain),
 	}
+	// A nil *db.Queries leaves store nil rather than a non-nil interface
+	// holding a nil pointer. The routes are unreachable then: without a
+	// role lookup, WithAccess answers 500.
+	if queries != nil {
+		h.store = queries
+	}
+	return h
 }
 
 // AdminAccount represents an account in the admin view
@@ -112,10 +150,10 @@ func roleFromRow(roleID pgtype.Int8, roleName pgtype.Text, roleColor pgtype.Text
 }
 
 func (h *AccountsHandler) accountIdentifier(ctx context.Context, accountID int64) string {
-	if h.queries == nil {
+	if h.store == nil {
 		return strconv.FormatInt(accountID, 10)
 	}
-	account, err := h.queries.GetAccountByIDAllowSuspended(ctx, accountID)
+	account, err := h.store.GetAccountByIDAllowSuspended(ctx, accountID)
 	if err != nil {
 		return strconv.FormatInt(accountID, 10)
 	}
@@ -127,10 +165,10 @@ func (h *AccountsHandler) accountIdentifier(ctx context.Context, accountID int64
 }
 
 func (h *AccountsHandler) logAdminAction(ctx context.Context, adminID int64, action string, targetType string, targetID int64, humanIdentifier string, routeParam string, permalink string) {
-	if h.queries == nil || adminID <= 0 || action == "" || targetType == "" || targetID <= 0 {
+	if h.store == nil || adminID <= 0 || action == "" || targetType == "" || targetID <= 0 {
 		return
 	}
-	_ = h.queries.CreateAdminActionLog(ctx, db.CreateAdminActionLogParams{
+	_ = h.store.CreateAdminActionLog(ctx, db.CreateAdminActionLogParams{
 		AccountID:  adminID,
 		Action:     action,
 		TargetType: pgtype.Text{String: targetType, Valid: true},
@@ -155,15 +193,21 @@ func (h *AccountsHandler) logAccountAction(ctx context.Context, adminID, targetA
 }
 
 func (h *AccountsHandler) logUserAction(ctx context.Context, adminID, targetAccountID int64, action string) {
-	if h.queries == nil {
+	if h.store == nil {
 		return
 	}
-	user, err := h.queries.GetUserByAccountID(ctx, targetAccountID)
+	user, err := h.store.GetUserByAccountID(ctx, targetAccountID)
 	if err != nil {
 		return
 	}
+	h.logUserActionFor(ctx, adminID, targetAccountID, user.ID, action)
+}
+
+// logUserActionFor logs an action on the user userID of the account
+// targetAccountID, for when the user row is already gone.
+func (h *AccountsHandler) logUserActionFor(ctx context.Context, adminID, targetAccountID, userID int64, action string) {
 	routeParam := strconv.FormatInt(targetAccountID, 10)
-	h.logAdminAction(ctx, adminID, action, adminActionTargetUser, user.ID, h.accountIdentifier(ctx, targetAccountID), routeParam, "")
+	h.logAdminAction(ctx, adminID, action, adminActionTargetUser, userID, h.accountIdentifier(ctx, targetAccountID), routeParam, "")
 }
 
 // GetAll handles GET /api/v1/admin/accounts
@@ -196,7 +240,7 @@ func (h *AccountsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
 		Ip:              web.QueryParam(r, "ip"),
 	}
 
-	rows, err := h.queries.AdminListAccounts(r.Context(), params)
+	rows, err := h.store.AdminListAccounts(r.Context(), params)
 	if err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -245,7 +289,7 @@ func (h *AccountsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	row, err := h.queries.AdminGetAccount(r.Context(), accountID)
+	row, err := h.store.AdminGetAccount(r.Context(), accountID)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
@@ -285,13 +329,15 @@ func (h *AccountsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, acc)
 }
 
-// TakeAction handles POST /api/v1/admin/accounts/:id/action
+// TakeAction handles POST /api/v1/admin/accounts/:id/action. Like
+// Admin::AccountAction, it refuses with 403 an action that Mastodon's
+// policies refuse for the target; see accountActionAllowed.
 func (h *AccountsHandler) TakeAction(w http.ResponseWriter, r *http.Request) {
-	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
-	if err != nil {
-		web.JSONError(w, http.StatusNotFound, "Record not found")
+	target, ok := h.actionTarget(w, r)
+	if !ok {
 		return
 	}
+	accountID := target.ID
 
 	var req struct {
 		Type                  string `json:"type" form:"type"`
@@ -307,31 +353,45 @@ func (h *AccountsHandler) TakeAction(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	adminID, _ := middleware.GetAccountID(ctx)
+	var apply func(context.Context, int64) error
 	var logFn func()
 
 	switch req.Type {
 	case "disable":
-		err = h.queries.AdminDisableAccount(ctx, accountID)
+		apply = h.store.AdminDisableAccount
 		logFn = func() { h.logUserAction(ctx, adminID, accountID, "disable") }
 	case "sensitive":
-		err = h.queries.AdminSensitizeAccount(ctx, accountID)
+		apply = h.store.AdminSensitizeAccount
 		logFn = func() { h.logAccountAction(ctx, adminID, accountID, "sensitive") }
 	case "silence":
-		err = h.queries.AdminSilenceAccount(ctx, accountID)
+		apply = h.store.AdminSilenceAccount
 		logFn = func() { h.logAccountAction(ctx, adminID, accountID, "silence") }
 	case "suspend":
-		err = h.queries.AdminSuspendAccount(ctx, accountID)
+		apply = h.store.AdminSuspendAccount
 		logFn = func() { h.logAccountAction(ctx, adminID, accountID, "suspend") }
 	case "none":
-		// Do nothing, just log action?
+		// Changes no account state.
 	default:
 		web.JSONError(w, http.StatusUnprocessableEntity, "Invalid action type")
 		return
 	}
 
-	if err != nil {
-		web.JSONError(w, http.StatusInternalServerError, "Database error")
+	acting, ok := ActingRole(ctx)
+	if !ok {
+		slog.ErrorContext(ctx, "Admin account action without an acting role", "account_id", accountID)
+		web.JSONError(w, http.StatusInternalServerError, "Admin data unavailable")
 		return
+	}
+	if !h.accountActionAllowed(acting, req.Type, target) {
+		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
+		return
+	}
+
+	if apply != nil {
+		if err := apply(ctx, accountID); err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
 	}
 
 	if logFn != nil {
@@ -341,141 +401,244 @@ func (h *AccountsHandler) TakeAction(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
-// Approve handles POST /api/v1/admin/accounts/:id/approve
-func (h *AccountsHandler) Approve(w http.ResponseWriter, r *http.Request) {
+// accountActionAllowed reports whether acting may take an action of
+// actionType against target, as Admin::AccountAction authorizes it:
+//
+//   - every type, none included, needs acting to override the role of the
+//     target's user (AccountPolicy#warn?, which process_strike! checks);
+//   - disable needs a user to disable. Mastodon authorizes
+//     UserPolicy#disable? on a nil user there and fails with a 500;
+//     gotodon refuses instead;
+//   - suspend can't target the instance actor (AccountPolicy#suspend?).
+//
+// The type-specific policies, UserPolicy#disable? and AccountPolicy's
+// sensitive?, silence? and suspend?, compare the same roles as warn?.
+func (h *AccountsHandler) accountActionAllowed(acting db.UserRole, actionType string, target db.AdminGetAccountActionTargetRow) bool {
+	if !overridesRole(acting, userRolePosition(target)) {
+		return false
+	}
+	switch actionType {
+	case "disable":
+		return target.UserID.Valid
+	case "suspend":
+		return !h.isInstanceActor(target)
+	}
+	return true
+}
+
+// userRolePosition is the position of Mastodon's Account#user_role for
+// target: nil for an account without a user, and the everyone role's
+// position for a user without a role.
+func userRolePosition(target db.AdminGetAccountActionTargetRow) *int32 {
+	if !target.UserID.Valid {
+		return nil
+	}
+	position := everyonePosition
+	if target.RolePosition.Valid {
+		position = target.RolePosition.Int32
+	}
+	return &position
+}
+
+// isInstanceActor reports whether target is this server's instance actor:
+// the local account with the instance actor's URI. Mastodon recognizes it
+// by its fixed ID, -99; gotodon creates it with an ordinary one.
+func (h *AccountsHandler) isInstanceActor(target db.AdminGetAccountActionTargetRow) bool {
+	return h.instanceActorURI != "" && !target.Domain.Valid && target.Uri == h.instanceActorURI
+}
+
+// actionTarget looks up the account a write route names, as Mastodon's
+// set_account does before authorizing: an ID that isn't a number or names
+// no account gets 404 Record not found, and a failed lookup 500.
+func (h *AccountsHandler) actionTarget(w http.ResponseWriter, r *http.Request) (db.AdminGetAccountActionTargetRow, bool) {
 	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
-		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return db.AdminGetAccountActionTargetRow{}, false
+	}
+	target, err := h.store.AdminGetAccountActionTarget(r.Context(), accountID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return db.AdminGetAccountActionTargetRow{}, false
+	}
+	if err != nil {
+		slog.ErrorContext(r.Context(), "Admin account lookup failed", "account_id", accountID, "error", err)
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return db.AdminGetAccountActionTargetRow{}, false
+	}
+	return target, true
+}
+
+// Approve handles POST /api/v1/admin/accounts/:id/approve. It needs a local
+// account with a user who isn't approved yet (UserPolicy#approve?).
+func (h *AccountsHandler) Approve(w http.ResponseWriter, r *http.Request) {
+	target, ok := h.actionTarget(w, r)
+	if !ok || !requireLocalUser(w, target) {
+		return
+	}
+	if target.UserApproved.Bool {
+		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
 		return
 	}
 
-	if err := h.queries.AdminApproveAccount(r.Context(), accountID); err != nil {
+	if err := h.store.AdminApproveAccount(r.Context(), target.ID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
 	if adminID, ok := middleware.GetAccountID(r.Context()); ok {
-		h.logUserAction(r.Context(), adminID, accountID, "approve")
+		h.logUserAction(r.Context(), adminID, target.ID, "approve")
 	}
 
 	// Fetch updated
 	h.Get(w, r)
 }
 
-// Reject handles POST /api/v1/admin/accounts/:id/reject
+// Reject handles POST /api/v1/admin/accounts/:id/reject. It needs a local
+// account with a user who isn't approved yet (UserPolicy#reject?).
 func (h *AccountsHandler) Reject(w http.ResponseWriter, r *http.Request) {
-	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
-	if err != nil {
-		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
+	target, ok := h.actionTarget(w, r)
+	if !ok || !requireLocalUser(w, target) {
+		return
+	}
+	if target.UserApproved.Bool {
+		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
 		return
 	}
 
-	if err := h.queries.AdminRejectAccount(r.Context(), accountID); err != nil {
+	if err := h.store.AdminRejectAccount(r.Context(), target.ID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
+	// Rejecting deleted the user row, so the entry names the user that the
+	// target lookup found.
 	if adminID, ok := middleware.GetAccountID(r.Context()); ok {
-		h.logUserAction(r.Context(), adminID, accountID, "reject")
+		h.logUserActionFor(r.Context(), adminID, target.ID, target.UserID.Int64, "reject")
 	}
 
 	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
-// Enable handles POST /api/v1/admin/accounts/:id/enable
+// Enable handles POST /api/v1/admin/accounts/:id/enable. It needs a local
+// account with a user.
 func (h *AccountsHandler) Enable(w http.ResponseWriter, r *http.Request) {
-	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
-	if err != nil {
-		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
+	target, ok := h.actionTarget(w, r)
+	if !ok || !requireLocalUser(w, target) {
 		return
 	}
 
-	if err := h.queries.AdminEnableAccount(r.Context(), accountID); err != nil {
+	if err := h.store.AdminEnableAccount(r.Context(), target.ID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
 	if adminID, ok := middleware.GetAccountID(r.Context()); ok {
-		h.logUserAction(r.Context(), adminID, accountID, "enable")
+		h.logUserAction(r.Context(), adminID, target.ID, "enable")
 	}
 
 	h.Get(w, r)
+}
+
+// requireLocalUser is Api::V1::Admin::AccountsController's
+// require_local_account!: enable, approve and reject need a local account
+// with a user. Otherwise it answers as Mastodon's forbidden does, with the
+// generic 403 body Forbidden rather than a policy's This action is not
+// allowed.
+func requireLocalUser(w http.ResponseWriter, target db.AdminGetAccountActionTargetRow) bool {
+	if target.Domain.Valid || !target.UserID.Valid {
+		web.JSONError(w, http.StatusForbidden, "Forbidden")
+		return false
+	}
+	return true
 }
 
 // Unsilence handles POST /api/v1/admin/accounts/:id/unsilence
 func (h *AccountsHandler) Unsilence(w http.ResponseWriter, r *http.Request) {
-	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
-	if err != nil {
-		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
+	target, ok := h.actionTarget(w, r)
+	if !ok {
 		return
 	}
 
-	if err := h.queries.AdminUnsilenceAccount(r.Context(), accountID); err != nil {
+	if err := h.store.AdminUnsilenceAccount(r.Context(), target.ID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
 	if adminID, ok := middleware.GetAccountID(r.Context()); ok {
-		h.logAccountAction(r.Context(), adminID, accountID, "unsilence")
+		h.logAccountAction(r.Context(), adminID, target.ID, "unsilence")
 	}
 
 	h.Get(w, r)
 }
 
-// Unsuspend handles POST /api/v1/admin/accounts/:id/unsuspend
+// Unsuspend handles POST /api/v1/admin/accounts/:id/unsuspend. It only lifts
+// a suspension made on this server (AccountPolicy#unsuspend?), so an account
+// that its own server suspended, or that isn't suspended, gets 403.
 func (h *AccountsHandler) Unsuspend(w http.ResponseWriter, r *http.Request) {
-	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
-	if err != nil {
-		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
+	target, ok := h.actionTarget(w, r)
+	if !ok {
+		return
+	}
+	if !suspendedLocally(target) {
+		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
 		return
 	}
 
-	if err := h.queries.AdminUnsuspendAccount(r.Context(), accountID); err != nil {
+	if err := h.store.AdminUnsuspendAccount(r.Context(), target.ID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
 	if adminID, ok := middleware.GetAccountID(r.Context()); ok {
-		h.logAccountAction(r.Context(), adminID, accountID, "unsuspend")
+		h.logAccountAction(r.Context(), adminID, target.ID, "unsuspend")
 	}
 
 	h.Get(w, r)
 }
 
-// Unsensitize handles POST /api/v1/admin/accounts/:id/unsensitize
+// suspensionOriginLocal is Mastodon's suspension_origin enum value :local.
+const suspensionOriginLocal = 0
+
+// suspendedLocally is Account#suspension_origin_local?. It reads only the
+// origin, which suspending sets and unsuspending clears.
+func suspendedLocally(target db.AdminGetAccountActionTargetRow) bool {
+	return target.SuspensionOrigin.Valid && target.SuspensionOrigin.Int32 == suspensionOriginLocal
+}
+
+// Unsensitize handles POST /api/v1/admin/accounts/:id/unsensitive
 func (h *AccountsHandler) Unsensitize(w http.ResponseWriter, r *http.Request) {
-	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
-	if err != nil {
-		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
+	target, ok := h.actionTarget(w, r)
+	if !ok {
 		return
 	}
 
-	if err := h.queries.AdminUnsensitizeAccount(r.Context(), accountID); err != nil {
+	if err := h.store.AdminUnsensitizeAccount(r.Context(), target.ID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
 	if adminID, ok := middleware.GetAccountID(r.Context()); ok {
-		h.logAccountAction(r.Context(), adminID, accountID, "unsensitive")
+		h.logAccountAction(r.Context(), adminID, target.ID, "unsensitive")
 	}
 
 	h.Get(w, r)
 }
 
-// Delete handles DELETE /api/v1/admin/accounts/:id
+// Delete handles DELETE /api/v1/admin/accounts/:id. Like Mastodon's
+// AccountPolicy#destroy?, it only deletes an account that is suspended
+// temporarily: suspended, with the deletion request that suspending creates.
 func (h *AccountsHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
-	if err != nil {
-		web.JSONError(w, http.StatusNotFound, "Record not found")
+	target, ok := h.actionTarget(w, r)
+	if !ok {
+		return
+	}
+	if !target.SuspendedAt.Valid || !target.DeletionRequested {
+		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
 		return
 	}
 
-	if _, err := h.queries.AdminGetAccount(r.Context(), accountID); err != nil {
-		web.JSONError(w, http.StatusNotFound, "Record not found")
-		return
-	}
-
-	if err := h.queries.AdminDeleteAccount(r.Context(), accountID); err != nil {
+	if err := h.store.AdminDeleteAccount(r.Context(), target.ID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
@@ -486,10 +649,11 @@ func (h *AccountsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 // RegisterRoutes registers admin account routes. Permissions follow
 // Mastodon's AccountPolicy and UserPolicy. Account actions need manage_users:
 // Api::V1::Admin::AccountActionsController authorizes show? first, which
-// covers every per-type check of Admin::AccountAction. Scopes follow
-// Api::V1::Admin::AccountsController and AccountActionsController: listing
-// and showing need admin:read:accounts, everything else, account actions
-// included, admin:write:accounts.
+// covers the permission of every per-type check of Admin::AccountAction.
+// The handlers check the policies' conditions on the target account. Scopes
+// follow Api::V1::Admin::AccountsController and AccountActionsController:
+// listing and showing need admin:read:accounts, everything else, account
+// actions included, admin:write:accounts.
 func (h *AccountsHandler) RegisterRoutes(mux RouteRegistrar) {
 	read := WithAccess(h.roles, oauth.ScopeAdminReadAccounts, auth.PermissionManageUsers)
 	write := WithAccess(h.roles, oauth.ScopeAdminWriteAccounts, auth.PermissionManageUsers)

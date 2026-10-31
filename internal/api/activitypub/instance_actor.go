@@ -33,7 +33,7 @@ func EnsureInstanceActor(ctx context.Context, store InstanceActorStore, domain s
 		return db.Account{}, errors.New("instance actor domain missing")
 	}
 
-	actorURI := instanceActorURIForDomain(domain)
+	actorURI := activitypub.InstanceActorURI(domain)
 	account, err := store.GetAccountByURI(ctx, actorURI)
 	if err == nil {
 		return ensureInstanceActorFields(ctx, store, domain, account)
@@ -59,7 +59,7 @@ func ensureInstanceActorFields(ctx context.Context, store InstanceActorStore, do
 		return account, nil
 	}
 
-	actorURI := instanceActorURIForDomain(domain)
+	actorURI := activitypub.InstanceActorURI(domain)
 	if actorURI == "" {
 		return account, errors.New("instance actor domain missing")
 	}
@@ -177,14 +177,6 @@ func createInstanceActor(ctx context.Context, store InstanceActorStore, domain, 
 	}
 
 	return ensureInstanceActorFields(ctx, store, domain, account)
-}
-
-func instanceActorURIForDomain(domain string) string {
-	domain = strings.TrimSpace(domain)
-	if domain == "" {
-		return ""
-	}
-	return fmt.Sprintf("https://%s/actor", domain)
 }
 
 func instanceActorURLForDomain(domain string) string {
