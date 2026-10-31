@@ -53,11 +53,11 @@ func (s *stubStore) GetAccountByID(_ context.Context, id int64) (db.Account, err
 type stubActivityPubRenderer struct {
 	statusCalled bool
 	actorCalled  bool
-	username    string
-	statusID    string
-	accept      string
-	statusToSet int
-	actorToSet  int
+	username     string
+	statusID     string
+	accept       string
+	statusToSet  int
+	actorToSet   int
 }
 
 func (s *stubActivityPubRenderer) GetStatus(w http.ResponseWriter, r *http.Request) {

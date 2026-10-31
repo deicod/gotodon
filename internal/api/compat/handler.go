@@ -37,9 +37,9 @@ type activityPubRenderer interface {
 //   - GET /@username
 //   - GET /@username/{statusID}
 type Handler struct {
-	store    store
-	cfg      *config.Config
-	ap      activityPubRenderer
+	store store
+	cfg   *config.Config
+	ap    activityPubRenderer
 }
 
 func NewHandler(store store, cfg *config.Config, ap activityPubRenderer) *Handler {

@@ -312,9 +312,9 @@ func (s *accountSerializeStub) GetAccountsByUsernamesAndDomains(ctx context.Cont
 
 type accountCredentialStub struct {
 	accountSerializeStub
-	user         db.User
-	followCount  int64
-	userRoleErr  error
+	user        db.User
+	followCount int64
+	userRoleErr error
 }
 
 func (s *accountCredentialStub) GetUserByAccountID(ctx context.Context, accountID int64) (db.User, error) {

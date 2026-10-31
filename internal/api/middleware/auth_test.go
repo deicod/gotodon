@@ -102,4 +102,3 @@ func TestAuthenticate_RevokedTokenMessage(t *testing.T) {
 		t.Fatalf("error = %v, want %q", errResp["error"], "The access token was revoked")
 	}
 }
-
