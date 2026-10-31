@@ -1,41 +1,18 @@
 package admin
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/auth"
+	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 )
-
-// accountRoleStore answers the v1 admin account reads with fixed rows, so
-// tests can set their role columns.
-type accountRoleStore struct {
-	stubAccountsStore
-	list     []db.AdminListAccountsRow
-	listErr  error
-	accounts map[int64]db.AdminGetAccountRow
-}
-
-func (s *accountRoleStore) AdminListAccounts(context.Context, db.AdminListAccountsParams) ([]db.AdminListAccountsRow, error) {
-	return s.list, s.listErr
-}
-
-func (s *accountRoleStore) AdminGetAccount(_ context.Context, id int64) (db.AdminGetAccountRow, error) {
-	row, ok := s.accounts[id]
-	if !ok {
-		return db.AdminGetAccountRow{}, pgx.ErrNoRows
-	}
-	return row, nil
-}
 
 // The roles of the accounts in the responses, and their JSON as
 // REST::RoleSerializer renders it, with exactly its keys. Both Owners report
@@ -90,22 +67,28 @@ func roleColumns(role *db.UserRole) (id pgtype.Int8, name, color pgtype.Text, pe
 		pgtype.Bool{Bool: role.Highlighted, Valid: true}
 }
 
+// listRow is a local account whose user, numbered as the account plus 100,
+// has role, or no role when role is nil.
 func listRow(id int64, role *db.UserRole) db.AdminListAccountsRow {
-	row := db.AdminListAccountsRow{ID: id, Username: "user" + idOf(id)}
+	row := db.AdminListAccountsRow{
+		ID:       id,
+		Username: "user" + idOf(id),
+		UserID:   pgtype.Int8{Int64: id + 100, Valid: true},
+		Approved: pgtype.Bool{Bool: true, Valid: true},
+		Disabled: pgtype.Bool{Bool: false, Valid: true},
+	}
 	row.RoleID, row.RoleName, row.RoleColor, row.RolePermissions, row.RoleHighlighted = roleColumns(role)
 	return row
 }
 
 func getRow(id int64, role *db.UserRole) db.AdminGetAccountRow {
-	row := db.AdminGetAccountRow{ID: id, Username: "user" + idOf(id)}
-	row.RoleID, row.RoleName, row.RoleColor, row.RolePermissions, row.RoleHighlighted = roleColumns(role)
-	return row
+	return db.AdminGetAccountRow(listRow(id, role))
 }
 
 // serveAccountReads serves the admin account routes for an Owner, with
 // WithAccess in front as in production, and sends GET path.
-func serveAccountReads(store *accountRoleStore, path string) *httptest.ResponseRecorder {
-	h := NewAccountsHandler(nil, localDomain)
+func serveAccountReads(store *stubAccountsStore, path string) *httptest.ResponseRecorder {
+	h := NewAccountsHandler(nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: localDomain}})
 	h.store = store
 	h.roles = &stubRoles{
 		usersByAccount: map[int64]db.User{actingAccount: {ID: 20, AccountID: actingAccount}},
@@ -146,7 +129,7 @@ func assertRoleJSON(t *testing.T, account map[string]json.RawMessage, want strin
 // TestAccountsGetAllRole checks GET /api/v1/admin/accounts renders each
 // account's role as REST::Admin::AccountSerializer does.
 func TestAccountsGetAllRole(t *testing.T) {
-	store := &accountRoleStore{}
+	store := &stubAccountsStore{}
 	for i, tc := range accountRoleCases {
 		store.list = append(store.list, listRow(int64(200+i), tc.role))
 	}
@@ -180,7 +163,7 @@ func TestAccountsGetRole(t *testing.T) {
 	for i, tc := range accountRoleCases {
 		t.Run(tc.name, func(t *testing.T) {
 			id := int64(200 + i)
-			store := &accountRoleStore{accounts: map[int64]db.AdminGetAccountRow{id: getRow(id, tc.role)}}
+			store := &stubAccountsStore{rows: map[int64]db.AdminGetAccountRow{id: getRow(id, tc.role)}}
 
 			rec := serveAccountReads(store, "/api/v1/admin/accounts/"+idOf(id))
 
@@ -197,21 +180,41 @@ func TestAccountsGetRole(t *testing.T) {
 }
 
 // TestAccountsReadFailures checks the v1 admin account reads when the
-// query finds nothing or fails.
+// query finds nothing or a lookup fails. Like Mastodon's Account.find, only
+// a missing row is 404.
 func TestAccountsReadFailures(t *testing.T) {
-	errDatabase := errors.New("database unavailable")
+	const (
+		listPath = "/api/v1/admin/accounts"
+		showPath = "/api/v1/admin/accounts/200"
+		notFound = `{"error":"Record not found"}`
+		dbError  = `{"error":"Database error"}`
+	)
+	listed := func() []db.AdminListAccountsRow { return []db.AdminListAccountsRow{listRow(200, nil)} }
+	shown := func() map[int64]db.AdminGetAccountRow {
+		return map[int64]db.AdminGetAccountRow{200: getRow(200, nil)}
+	}
+	userIP := func() []db.AdminListUserIPsRow {
+		return []db.AdminListUserIPsRow{{UserID: 300}}
+	}
 
 	tests := []struct {
 		name       string
-		store      *accountRoleStore
+		store      *stubAccountsStore
 		path       string
 		wantStatus int
 		wantBody   string
 	}{
-		{"empty list", &accountRoleStore{}, "/api/v1/admin/accounts", http.StatusOK, "[]"},
-		{"list fails", &accountRoleStore{listErr: errDatabase}, "/api/v1/admin/accounts", http.StatusInternalServerError, `{"error":"Database error"}`},
-		{"unknown account", &accountRoleStore{}, "/api/v1/admin/accounts/999", http.StatusNotFound, `{"error":"Record not found"}`},
-		{"malformed id", &accountRoleStore{}, "/api/v1/admin/accounts/abc", http.StatusNotFound, `{"error":"Record not found"}`},
+		{"empty list", &stubAccountsStore{}, listPath, http.StatusOK, "[]"},
+		{"list fails", &stubAccountsStore{listErr: errDatabase}, listPath, http.StatusInternalServerError, dbError},
+		{"listed account lookup fails", &stubAccountsStore{list: listed(), accountsErr: errDatabase}, listPath, http.StatusInternalServerError, dbError},
+		{"listed account is gone", &stubAccountsStore{list: listed(), missingAccounts: []int64{200}}, listPath, http.StatusInternalServerError, dbError},
+		{"listed user's IP lookup fails", &stubAccountsStore{list: listed(), ips: userIP(), ipsErr: errDatabase}, listPath, http.StatusInternalServerError, dbError},
+		{"unknown account", &stubAccountsStore{}, "/api/v1/admin/accounts/999", http.StatusNotFound, notFound},
+		{"malformed id", &stubAccountsStore{}, "/api/v1/admin/accounts/abc", http.StatusNotFound, notFound},
+		{"account lookup fails", &stubAccountsStore{rows: shown(), getErr: errDatabase}, showPath, http.StatusInternalServerError, dbError},
+		{"shown account's entity lookup fails", &stubAccountsStore{rows: shown(), accountsErr: errDatabase}, showPath, http.StatusInternalServerError, dbError},
+		{"shown account's entity is gone", &stubAccountsStore{rows: shown(), missingAccounts: []int64{200}}, showPath, http.StatusInternalServerError, dbError},
+		{"shown user's IP lookup fails", &stubAccountsStore{rows: shown(), ipsErr: errDatabase}, showPath, http.StatusInternalServerError, dbError},
 	}
 
 	for _, tt := range tests {

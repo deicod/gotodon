@@ -1,46 +1,3 @@
--- name: AdminListAccounts :many
-SELECT 
-    a.id, a.username, a.domain, a.created_at, 
-    u.email, u.current_sign_in_at as ip, -- Placeholder for IP, using timestamps or actual IP if available in users
-    u.confirmed_at, u.approved, u.disabled, a.silenced_at, a.suspended_at, a.sensitized_at,
-    u.invite_id, u.created_by_application_id,
-    r.id AS role_id,
-    r.name AS role_name,
-    r.permissions AS role_permissions,
-    r.color AS role_color,
-    r.highlighted AS role_highlighted
-FROM accounts a
-JOIN users u ON a.id = u.account_id
-LEFT JOIN user_roles r ON r.id = u.role_id
-WHERE 
-    (CASE WHEN @local_only::boolean THEN a.domain IS NULL ELSE TRUE END)
-    AND (CASE WHEN @status_active::boolean THEN u.disabled = false AND a.suspended_at IS NULL ELSE TRUE END)
-    AND (CASE WHEN @status_pending::boolean THEN u.approved = false ELSE TRUE END)
-    AND (CASE WHEN @status_disabled::boolean THEN u.disabled = true OR a.suspended_at IS NOT NULL ELSE TRUE END)
-    AND (CASE WHEN @status_silenced::boolean THEN a.silenced_at IS NOT NULL ELSE TRUE END)
-    AND (CASE WHEN @status_suspended::boolean THEN a.suspended_at IS NOT NULL ELSE TRUE END)
-    AND (CASE WHEN @username_curr::text != '' THEN a.username ILIKE '%' || @username_curr || '%' ELSE TRUE END)
-    AND (CASE WHEN @email::text != '' THEN u.email ILIKE '%' || @email || '%' ELSE TRUE END)
-    AND (CASE WHEN @ip::text != '' THEN u.sign_up_ip::text = @ip ELSE TRUE END)
-ORDER BY a.created_at DESC
-LIMIT $1 OFFSET $2;
-
--- name: AdminGetAccount :one
-SELECT 
-    a.id, a.username, a.domain, a.created_at, 
-    u.email, u.sign_up_ip,
-    u.confirmed_at, u.approved, u.disabled, a.silenced_at, a.suspended_at, a.sensitized_at,
-    u.invite_id, u.created_by_application_id,
-    r.id AS role_id,
-    r.name AS role_name,
-    r.permissions AS role_permissions,
-    r.color AS role_color,
-    r.highlighted AS role_highlighted
-FROM accounts a
-JOIN users u ON a.id = u.account_id
-LEFT JOIN user_roles r ON r.id = u.role_id
-WHERE a.id = $1;
-
 -- name: AdminGetAccountActionTarget :one
 -- The account state that Mastodon's AccountPolicy, UserPolicy and
 -- Api::V1::Admin::AccountsController check before an admin account action.
@@ -63,7 +20,15 @@ LEFT JOIN users u ON u.account_id = a.id
 LEFT JOIN user_roles r ON r.id = u.role_id
 WHERE a.id = $1;
 
--- name: AdminListAccountsV2 :many
+-- name: AdminListAccounts :many
+-- Mastodon's AccountFilter, which Api::V1::Admin::AccountsController#index
+-- and its v2 subclass translate their query parameters into. Like
+-- AccountFilter#results, it leaves out the instance actor, which gotodon
+-- recognizes by its URI rather than by Mastodon's fixed ID -99. The users
+-- columns are NULL for an account without a user, and the user_roles
+-- columns for a user without a role. Paginable#to_a_paginated_by_id: with
+-- min_id, the accounts right after min_id in ascending order, which the
+-- caller reverses; otherwise the newest ones.
 SELECT
     a.id,
     a.username,
@@ -123,11 +88,55 @@ WHERE
     AND (CASE WHEN @invited_by::bigint > 0 THEN i.user_id = @invited_by ELSE TRUE END)
     AND (CASE WHEN @permissions::text = 'staff' THEN (r.permissions & 16) = 16 OR (r.permissions & 1) = 1 ELSE TRUE END)
     AND (CASE WHEN @role_ids::bigint[] IS NOT NULL AND cardinality(@role_ids::bigint[]) > 0 THEN u.role_id = ANY(@role_ids::bigint[]) ELSE TRUE END)
+    AND (CASE WHEN @instance_actor_uri::text != '' THEN NOT (a.domain IS NULL AND a.uri = @instance_actor_uri) ELSE TRUE END)
     AND (CASE WHEN @max_id::bigint > 0 THEN a.id < @max_id ELSE TRUE END)
     AND (CASE WHEN @since_id::bigint > 0 THEN a.id > @since_id ELSE TRUE END)
     AND (CASE WHEN @min_id::bigint > 0 THEN a.id > @min_id ELSE TRUE END)
-ORDER BY a.id DESC
+ORDER BY
+    CASE WHEN @min_id::bigint > 0 THEN a.id END ASC,
+    a.id DESC
 LIMIT $1;
+
+-- name: AdminGetAccount :one
+-- The account that Api::V1::Admin::AccountsController#show renders, with
+-- or without a user. It selects the columns of AdminListAccounts in the
+-- same order, so that its row converts to AdminListAccountsRow.
+SELECT
+    a.id,
+    a.username,
+    a.domain,
+    a.created_at,
+    s.followers_count,
+    s.following_count,
+    s.statuses_count,
+    s.last_status_at,
+    u.id AS user_id,
+    u.email,
+    u.sign_up_ip,
+    u.confirmed_at,
+    u.approved,
+    u.disabled,
+    a.silenced_at,
+    a.suspended_at,
+    a.sensitized_at,
+    u.invite_id,
+    u.created_by_application_id,
+    u.locale,
+    uir.text AS invite_request,
+    inviter.account_id AS invited_by_account_id,
+    r.id AS role_id,
+    r.name AS role_name,
+    r.permissions AS role_permissions,
+    r.color AS role_color,
+    r.highlighted AS role_highlighted
+FROM accounts a
+LEFT JOIN users u ON a.id = u.account_id
+LEFT JOIN account_stats s ON s.account_id = a.id
+LEFT JOIN invites i ON i.id = u.invite_id
+LEFT JOIN users inviter ON inviter.id = i.user_id
+LEFT JOIN user_roles r ON r.id = u.role_id
+LEFT JOIN user_invite_requests uir ON uir.user_id = u.id
+WHERE a.id = $1;
 
 -- name: AdminListUserIPs :many
 SELECT
