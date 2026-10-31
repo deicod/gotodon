@@ -555,6 +555,7 @@ type Querier interface {
 	// The administrator flag (bit 0) implies every permission, mirroring Mastodon's UserRole.
 	ListUsersWithPermission(ctx context.Context, permission int64) ([]User, error)
 	ListWebAuthnCredentialsByUser(ctx context.Context, userID pgtype.Int8) ([]WebauthnCredential, error)
+	LocalCustomEmojiShortcodeTaken(ctx context.Context, shortcode string) (bool, error)
 	MarkAnnualReportViewed(ctx context.Context, id int64) (GeneratedAnnualReport, error)
 	MarkConversationRead(ctx context.Context, arg MarkConversationReadParams) (int64, error)
 	MarkConversationUnread(ctx context.Context, arg MarkConversationUnreadParams) (int64, error)

@@ -382,6 +382,20 @@ func (q *Queries) ListCustomEmojisByShortcodesAndDomains(ctx context.Context, ar
 	return items, nil
 }
 
+const localCustomEmojiShortcodeTaken = `-- name: LocalCustomEmojiShortcodeTaken :one
+SELECT EXISTS (
+    SELECT 1 FROM custom_emojis
+    WHERE shortcode = $1 AND domain IS NULL
+)
+`
+
+func (q *Queries) LocalCustomEmojiShortcodeTaken(ctx context.Context, shortcode string) (bool, error) {
+	row := q.db.QueryRow(ctx, localCustomEmojiShortcodeTaken, shortcode)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const updateCustomEmoji = `-- name: UpdateCustomEmoji :one
 UPDATE custom_emojis
 SET disabled = $2, visible_in_picker = $3, updated_at = NOW()
