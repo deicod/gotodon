@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -150,26 +151,46 @@ func TestPushSubscriptionsHandler_Create_HTTPRejected(t *testing.T) {
 	}
 }
 
-func TestPushSubscriptionsHandler_Create_HTTPLocalhostAllowed(t *testing.T) {
-	store := newStubWebPushStore()
-	h := NewPushSubscriptionsHandler(store, &config.Config{Secrets: config.SecretsConfig{SecretKeyBase: "test"}})
+// Endpoints that push messages could never be sent to are refused up front:
+// anything but https, credentials, and hosts that are internal addresses or
+// localhost names.
+func TestPushSubscriptionsHandler_Create_RejectsInvalidEndpoints(t *testing.T) {
+	for _, endpoint := range []string{
+		"http://localhost:1234",
+		"https://localhost:1234/push",
+		"https://push.localhost/push",
+		"https://127.0.0.1/push",
+		"https://[::1]/push",
+		"https://10.0.0.1/push",
+		"https://169.254.169.254/latest/meta-data/",
+		"https://[::ffff:192.168.1.1]/push",
+		"https://user:pass@push.example.com/push",
+		"https://push.example.com:0/push",
+		"wss://push.example.com/push",
+		"/relative/push",
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			store := newStubWebPushStore()
+			h := NewPushSubscriptionsHandler(store, &config.Config{Secrets: config.SecretsConfig{SecretKeyBase: "test"}})
 
-	body := `{"subscription":{"endpoint":"http://localhost:1234","keys":{"p256dh":"key","auth":"auth"}}}`
-	req := httptest.NewRequest(http.MethodPost, "/api/web/push_subscriptions", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	ctx := context.WithValue(req.Context(), middleware.ContextKeyUserID, int64(10))
-	ctx = context.WithValue(ctx, middleware.ContextKeyAccountID, int64(99))
-	ctx = context.WithValue(ctx, middleware.ContextKeyTokenID, int64(5))
-	req = req.WithContext(ctx)
+			body := `{"subscription":{"endpoint":` + strconv.Quote(endpoint) + `,"keys":{"p256dh":"key","auth":"auth"}}}`
+			req := httptest.NewRequest(http.MethodPost, "/api/web/push_subscriptions", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			ctx := context.WithValue(req.Context(), middleware.ContextKeyUserID, int64(10))
+			ctx = context.WithValue(ctx, middleware.ContextKeyAccountID, int64(99))
+			ctx = context.WithValue(ctx, middleware.ContextKeyTokenID, int64(5))
+			req = req.WithContext(ctx)
 
-	rec := httptest.NewRecorder()
-	h.Create(rec, req)
+			rec := httptest.NewRecorder()
+			h.Create(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	if len(store.subs) != 1 {
-		t.Fatalf("subscriptions = %d, want 1", len(store.subs))
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+			}
+			if len(store.subs) != 0 {
+				t.Fatalf("subscriptions = %d, want 0", len(store.subs))
+			}
+		})
 	}
 }
 

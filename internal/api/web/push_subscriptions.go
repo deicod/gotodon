@@ -7,9 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"net"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +17,7 @@ import (
 
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/push"
 	webutil "github.com/deicod/gotodon/internal/web"
 )
 
@@ -111,8 +110,12 @@ func (h *PushSubscriptionsHandler) Create(w http.ResponseWriter, r *http.Request
 	}
 
 	endpoint := strings.TrimSpace(req.Subscription.Endpoint)
-	if endpoint == "" || !isValidEndpoint(endpoint) {
+	if endpoint == "" {
 		webutil.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Endpoint is required")
+		return
+	}
+	if push.ValidateEndpoint(endpoint) != nil {
+		webutil.JSONError(w, http.StatusUnprocessableEntity, "Validation failed: Endpoint is invalid")
 		return
 	}
 	keys, err := parseSubscriptionKeys(req.Subscription.Keys)
@@ -414,32 +417,6 @@ func parseSubscriptionKeys(input map[string]any) (subscriptionKeys, error) {
 		return subscriptionKeys{}, errors.New("missing keys")
 	}
 	return keys, nil
-}
-
-func isValidEndpoint(endpoint string) bool {
-	parsed, err := url.Parse(endpoint)
-	if err != nil {
-		return false
-	}
-	host := parsed.Hostname()
-	if host == "" {
-		return false
-	}
-	switch strings.ToLower(parsed.Scheme) {
-	case "https":
-		return true
-	case "http":
-		// Browsers treat localhost as a secure context in development, but production endpoints should be HTTPS.
-		if strings.EqualFold(host, "localhost") {
-			return true
-		}
-		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-			return true
-		}
-		return false
-	default:
-		return false
-	}
 }
 
 func parseStandard(value any) bool {

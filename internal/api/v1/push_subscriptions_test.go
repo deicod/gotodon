@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -171,6 +172,34 @@ func TestPushHandler_Update_NotFound(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestPushHandler_Create_RejectsInvalidEndpoints(t *testing.T) {
+	for _, endpoint := range []string{
+		"http://push.example.com/push",
+		"https://localhost/push",
+		"https://127.0.0.1:8080/push",
+		"https://[fd00::1]/push",
+		"https://169.254.169.254/latest/meta-data/",
+		"https://user@push.example.com/push",
+		"javascript:alert(1)",
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			stub := &pushSubscriptionStub{upsertErr: pgx.ErrNoRows}
+			handler := NewPushHandler(stub, &config.Config{})
+
+			body := `{"subscription":{"endpoint":` + strconv.Quote(endpoint) + `,"keys":{"p256dh":"key","auth":"auth"}},"data":{"alerts":{"follow":true}}}`
+			req, rec := mockPushRequest(http.MethodPost, "/api/v1/push/subscription", body, 123, 77, 55)
+			handler.Create(rec, req)
+
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+			}
+			if stub.upsertCalled || stub.createCalled {
+				t.Fatalf("upsert = %v, create = %v, want the subscription not stored", stub.upsertCalled, stub.createCalled)
+			}
+		})
 	}
 }
 
