@@ -127,8 +127,8 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				if event.Event == EventKill {
-					_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-					_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(10*time.Second))
+					_ = conn.SetWriteDeadline(time.Now().Add(streamWriteTimeout))
+					_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(streamWriteTimeout))
 					_ = conn.Close()
 					return
 				}
@@ -138,13 +138,13 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					"stream":  event.Stream,
 				}
 				data, _ := json.Marshal(msg)
-				_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+				_ = conn.SetWriteDeadline(time.Now().Add(streamWriteTimeout))
 				if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
 					return
 				}
 
 			case <-ticker.C:
-				_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+				_ = conn.SetWriteDeadline(time.Now().Add(streamWriteTimeout))
 				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 					return
 				}

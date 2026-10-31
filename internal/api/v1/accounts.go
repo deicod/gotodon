@@ -288,6 +288,9 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 	contentType := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
 	multipartCredentials := strings.HasPrefix(contentType, "multipart/form-data")
 	if multipartCredentials {
+		// Avatar and header images need longer than the server's ordinary
+		// request budget.
+		web.ExtendUploadDeadlines(w)
 		r.Body = http.MaxBytesReader(w, r.Body, maxProfileMediaBodySize)
 	}
 

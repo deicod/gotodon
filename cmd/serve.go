@@ -653,10 +653,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	logger.Info("Starting Gotodon server", "addr", addr, "domain", cfg.Instance.LocalDomain)
 
-	srv := &http.Server{
-		Addr:    addr,
-		Handler: handler,
-	}
+	srv := web.NewServer(addr, handler)
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

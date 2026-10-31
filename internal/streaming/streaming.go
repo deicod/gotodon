@@ -46,6 +46,10 @@ const (
 
 const streamingPathPrefix = "/api/v1/streaming"
 
+// streamWriteTimeout bounds each write to a streaming client, so one that
+// stops reading is disconnected instead of pinning its handler.
+const streamWriteTimeout = 10 * time.Second
+
 // UserStreamKey returns the account-scoped stream key for the user stream.
 func UserStreamKey(accountID int64) string {
 	return fmt.Sprintf("%s:%d", StreamUser, accountID)
@@ -487,9 +491,25 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+	// The stream outlives the server's whole-request read and write timeouts.
+	// Lift the read deadline (a disconnect still cancels the request context)
+	// and bound each write instead, so a client that stops reading is dropped.
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Time{})
+	send := func(format string, args ...any) error {
+		_ = rc.SetWriteDeadline(time.Now().Add(streamWriteTimeout))
+		if _, err := fmt.Fprintf(w, format, args...); err != nil {
+			return err
+		}
+		return rc.Flush()
+	}
+
+	// Commit the headers, refusing writers that cannot stream.
+	_ = rc.SetWriteDeadline(time.Now().Add(streamWriteTimeout))
+	if err := rc.Flush(); err != nil {
+		if errors.Is(err, http.ErrNotSupported) {
+			http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -510,8 +530,9 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer h.hub.Unregister(sub)
 
 	// Send initial connection event
-	_, _ = fmt.Fprintf(w, ":ok\n\n")
-	flusher.Flush()
+	if err := send(":ok\n\n"); err != nil {
+		return
+	}
 
 	// Keep-alive ticker
 	ticker := time.NewTicker(15 * time.Second)
@@ -529,13 +550,14 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if event.Event == EventKill {
 				return
 			}
-			_, _ = fmt.Fprintf(w, "event: %s\n", event.Event)
-			_, _ = fmt.Fprintf(w, "data: %s\n\n", event.Payload)
-			flusher.Flush()
+			if err := send("event: %s\ndata: %s\n\n", event.Event, event.Payload); err != nil {
+				return
+			}
 
 		case <-ticker.C:
-			_, _ = fmt.Fprintf(w, ":heartbeat\n\n")
-			flusher.Flush()
+			if err := send(":heartbeat\n\n"); err != nil {
+				return
+			}
 		}
 	}
 }
