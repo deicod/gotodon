@@ -353,7 +353,7 @@ func TestAdminRoutesAuthorization(t *testing.T) {
 		{name: "user without a role", authenticated: true, scopes: token(adminToken), allowed: never, refusal: http.StatusForbidden, message: notAllowed},
 		{name: "Owner", authenticated: true, hasRole: true, permissions: fixed(ownerPermissions), scopes: token(adminToken), allowed: always},
 		{name: "Admin", authenticated: true, hasRole: true, permissions: fixed(adminPermissions), scopes: token(adminToken), allowed: always},
-		{name: "administrator bit only", authenticated: true, hasRole: true, permissions: fixed(auth.PermissionAdministrator), scopes: token(adminToken), allowed: always},
+		{name: "Owner storing every bit", authenticated: true, hasRole: true, permissions: fixed(-1), scopes: token(adminToken), allowed: always},
 		{
 			name: "Moderator", authenticated: true, hasRole: true, permissions: fixed(moderatorPermissions), scopes: token(adminToken),
 			allowed: func(route int) bool { return adminRoutes[route].moderator }, refusal: http.StatusForbidden, message: notAllowed,

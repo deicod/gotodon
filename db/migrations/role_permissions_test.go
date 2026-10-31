@@ -16,9 +16,15 @@ import (
 	"github.com/deicod/gotodon/internal/auth"
 )
 
-// rolePermissionsMigrationVersion is the migration that corrects the
-// permissions of the roles seeded by 001_initial_schema.sql.
-const rolePermissionsMigrationVersion = 47
+const (
+	// rolePermissionsMigrationVersion is the migration that corrects the
+	// permissions of the Admin and Moderator roles seeded by
+	// 001_initial_schema.sql.
+	rolePermissionsMigrationVersion = 47
+	// ownerPermissionsMigrationVersion is the migration that stores the
+	// seeded Owner role as Mastodon does.
+	ownerPermissionsMigrationVersion = 50
+)
 
 // permissionFlags lists Mastodon's UserRole::FLAGS names in bit order next to
 // the matching internal/auth constant.
@@ -51,10 +57,13 @@ var permissionFlags = []struct {
 	{"manage_email_subscriptions", auth.PermissionManageEmailSubscriptions},
 }
 
-// ownerPermissions is the Owner role's seeded value. Migration 047 keeps it:
-// the v1 APIs report stored permissions rather than computed ones, so -1 is
-// what lets clients see every permission bit for the Owner (see #109).
-const ownerPermissions = -1
+// The Owner role's permissions: the value 001_initial_schema.sql seeded it
+// with, which migration 047 keeps, and the value migration 050 gives it, the
+// administrator bit alone as in Mastodon's config/roles.yml.
+const (
+	seededOwnerPermissions int64 = -1
+	ownerPermissions             = auth.PermissionAdministrator
+)
 
 // defaultRoles describes the roles migration 047 corrects: the value
 // 001_initial_schema.sql seeded them with, the value 047 gives them, and the
@@ -163,12 +172,35 @@ type roleUpdate struct {
 }
 
 func TestDefaultRolePermissionsMigrationSQL(t *testing.T) {
-	matches, err := fs.Glob(Migrations, fmt.Sprintf("%03d_*.sql", rolePermissionsMigrationVersion))
+	wantUp := make(map[string]roleUpdate, len(defaultRoles))
+	wantDown := make(map[string]roleUpdate, len(defaultRoles))
+	for _, role := range defaultRoles {
+		wantUp[role.name] = roleUpdate{set: role.want, where: role.seeded}
+		wantDown[role.name] = roleUpdate{set: role.seeded, where: role.want}
+	}
+
+	assertMigrationRoleUpdates(t, rolePermissionsMigrationVersion, wantUp, wantDown)
+}
+
+func TestOwnerRolePermissionsMigrationSQL(t *testing.T) {
+	assertMigrationRoleUpdates(t, ownerPermissionsMigrationVersion,
+		map[string]roleUpdate{"Owner": {set: ownerPermissions, where: seededOwnerPermissions}},
+		map[string]roleUpdate{"Owner": {set: seededOwnerPermissions, where: ownerPermissions}},
+	)
+}
+
+// assertMigrationRoleUpdates checks that the up and down sections of the
+// migration version hold exactly the given guarded role updates and nothing
+// else.
+func assertMigrationRoleUpdates(t *testing.T, version int64, wantUp, wantDown map[string]roleUpdate) {
+	t.Helper()
+
+	matches, err := fs.Glob(Migrations, fmt.Sprintf("%03d_*.sql", version))
 	if err != nil {
 		t.Fatalf("glob migration: %v", err)
 	}
 	if len(matches) != 1 {
-		t.Fatalf("found migrations %v for version %d, want exactly one", matches, rolePermissionsMigrationVersion)
+		t.Fatalf("found migrations %v for version %d, want exactly one", matches, version)
 	}
 
 	content, err := fs.ReadFile(Migrations, matches[0])
@@ -185,18 +217,11 @@ func TestDefaultRolePermissionsMigrationSQL(t *testing.T) {
 		t.Fatalf("%s has no -- +goose Up section", matches[0])
 	}
 
-	wantUp := make(map[string]roleUpdate, len(defaultRoles))
-	wantDown := make(map[string]roleUpdate, len(defaultRoles))
-	for _, role := range defaultRoles {
-		wantUp[role.name] = roleUpdate{set: role.want, where: role.seeded}
-		wantDown[role.name] = roleUpdate{set: role.seeded, where: role.want}
-	}
-
 	if got := parseRoleUpdates(t, up); !maps.Equal(got, wantUp) {
-		t.Errorf("up section updates %v, want %v", got, wantUp)
+		t.Errorf("%s: up section updates %v, want %v", matches[0], got, wantUp)
 	}
 	if got := parseRoleUpdates(t, down); !maps.Equal(got, wantDown) {
-		t.Errorf("down section updates %v, want %v", got, wantDown)
+		t.Errorf("%s: down section updates %v, want %v", matches[0], got, wantDown)
 	}
 }
 
@@ -244,16 +269,18 @@ func parseRoleUpdates(t *testing.T, section string) map[string]roleUpdate {
 }
 
 func TestDefaultRolePermissionsMigration(t *testing.T) {
-	seeded := map[string]int64{"Owner": ownerPermissions}
-	corrected := map[string]int64{"Owner": ownerPermissions}
+	seeded := map[string]int64{"Owner": seededOwnerPermissions}
+	corrected := map[string]int64{"Owner": seededOwnerPermissions}
 	for _, role := range defaultRoles {
 		seeded[role.name] = role.seeded
 		corrected[role.name] = role.want
 	}
 
-	t.Run("fresh install", func(t *testing.T) {
+	// Migration 050 changes the Owner later, so this stops at 047.
+	// TestOwnerRolePermissionsMigration covers the whole chain.
+	t.Run("fresh install up to 047", func(t *testing.T) {
 		db, _ := openSchemaTestDB(t)
-		applyMigrations(t, db)
+		migrateUpTo(t, db, rolePermissionsMigrationVersion)
 
 		after := loadRoles(t, db)
 		assertRolePermissions(t, after, corrected)
@@ -295,7 +322,7 @@ func TestDefaultRolePermissionsMigration(t *testing.T) {
 		after := loadRoles(t, db)
 
 		assertRolePermissions(t, after, map[string]int64{
-			"Owner":     ownerPermissions,
+			"Owner":     seededOwnerPermissions,
 			"Admin":     corrected["Admin"],
 			"Moderator": customModerator,
 			supportRole: supportPermissions,
@@ -307,7 +334,7 @@ func TestDefaultRolePermissionsMigration(t *testing.T) {
 		after = loadRoles(t, db)
 
 		assertRolePermissions(t, after, map[string]int64{
-			"Owner":     ownerPermissions,
+			"Owner":     seededOwnerPermissions,
 			"Admin":     seeded["Admin"],
 			"Moderator": customModerator,
 			supportRole: supportPermissions,
@@ -331,11 +358,116 @@ func TestDefaultRolePermissionsMigration(t *testing.T) {
 		after := loadRoles(t, db)
 
 		assertRolePermissions(t, after, map[string]int64{
-			"Owner":     ownerPermissions,
+			"Owner":     seededOwnerPermissions,
 			"Admin":     seeded["Admin"],
 			"Moderator": customModerator,
 		})
 		assertRolesTouched(t, before, after, "Admin")
+	})
+}
+
+func TestOwnerRolePermissionsMigration(t *testing.T) {
+	before := map[string]int64{"Owner": seededOwnerPermissions}
+	after := map[string]int64{"Owner": ownerPermissions}
+	for _, role := range defaultRoles {
+		before[role.name] = role.want
+		after[role.name] = role.want
+	}
+
+	// Both values report every permission, so the Owner's API responses and
+	// authorization don't change.
+	if seeded, migrated := auth.ComputedPermissions(seededOwnerPermissions), auth.ComputedPermissions(ownerPermissions); seeded != auth.PermissionAll || migrated != auth.PermissionAll {
+		t.Fatalf("Owner computes to %d before and %d after the migration, want %d both times", seeded, migrated, auth.PermissionAll)
+	}
+
+	t.Run("fresh install", func(t *testing.T) {
+		db, _ := openSchemaTestDB(t)
+		applyMigrations(t, db)
+
+		migrated := loadRoles(t, db)
+		assertRolePermissions(t, migrated, after)
+		if got := decodePermissions(migrated["Owner"].permissions); !slices.Equal(got, []string{"administrator"}) {
+			t.Errorf("Owner permissions = %v, want [administrator]", got)
+		}
+
+		migrateDownTo(t, db, ownerPermissionsMigrationVersion-1)
+		reverted := loadRoles(t, db)
+
+		assertRolePermissions(t, reverted, before)
+		assertRolesTouched(t, migrated, reverted, "Owner")
+	})
+
+	t.Run("upgrade", func(t *testing.T) {
+		db, _ := openSchemaTestDB(t)
+		migrateUpTo(t, db, ownerPermissionsMigrationVersion-1)
+		upgradable := loadRoles(t, db)
+		assertRolePermissions(t, upgradable, before)
+
+		migrateUpTo(t, db, ownerPermissionsMigrationVersion)
+		migrated := loadRoles(t, db)
+
+		assertRolePermissions(t, migrated, after)
+		assertRolesTouched(t, upgradable, migrated, "Owner")
+	})
+
+	t.Run("Owner customized before the upgrade", func(t *testing.T) {
+		db, _ := openSchemaTestDB(t)
+		ctx := context.Background()
+		migrateUpTo(t, db, ownerPermissionsMigrationVersion-1)
+
+		// Every flag, without the bits above them that -1 also sets.
+		const customOwner = auth.PermissionAll
+		// A role with another name that holds the Owner's seeded value.
+		const rootRole = "Root"
+
+		if _, err := db.ExecContext(ctx, `UPDATE user_roles SET permissions = $1 WHERE name = 'Owner'`, customOwner); err != nil {
+			t.Fatalf("customize Owner: %v", err)
+		}
+		if _, err := db.ExecContext(ctx, `INSERT INTO user_roles (name, permissions, position) VALUES ($1, $2, 500)`, rootRole, seededOwnerPermissions); err != nil {
+			t.Fatalf("insert %s role: %v", rootRole, err)
+		}
+		customized := map[string]int64{
+			"Owner":     customOwner,
+			"Admin":     before["Admin"],
+			"Moderator": before["Moderator"],
+			rootRole:    seededOwnerPermissions,
+		}
+
+		upgradable := loadRoles(t, db)
+		migrateUpTo(t, db, ownerPermissionsMigrationVersion)
+		migrated := loadRoles(t, db)
+
+		assertRolePermissions(t, migrated, customized)
+		assertRolesTouched(t, upgradable, migrated)
+
+		migrateDownTo(t, db, ownerPermissionsMigrationVersion-1)
+		reverted := loadRoles(t, db)
+
+		assertRolePermissions(t, reverted, customized)
+		assertRolesTouched(t, migrated, reverted)
+	})
+
+	t.Run("Owner customized after the upgrade", func(t *testing.T) {
+		db, _ := openSchemaTestDB(t)
+		ctx := context.Background()
+		migrateUpTo(t, db, ownerPermissionsMigrationVersion)
+		assertRolePermissions(t, loadRoles(t, db), after)
+
+		customOwner := ownerPermissions | auth.PermissionViewDevops
+		if _, err := db.ExecContext(ctx, `UPDATE user_roles SET permissions = $1 WHERE name = 'Owner'`, customOwner); err != nil {
+			t.Fatalf("customize Owner: %v", err)
+		}
+
+		migrated := loadRoles(t, db)
+		migrateDownTo(t, db, ownerPermissionsMigrationVersion-1)
+		reverted := loadRoles(t, db)
+
+		assertRolePermissions(t, reverted, map[string]int64{
+			"Owner":     customOwner,
+			"Admin":     before["Admin"],
+			"Moderator": before["Moderator"],
+		})
+		assertRolesTouched(t, migrated, reverted)
 	})
 }
 

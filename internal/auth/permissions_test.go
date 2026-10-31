@@ -29,9 +29,9 @@ var allPermissions = []int64{
 	PermissionManageEmailSubscriptions,
 }
 
-// Seeded role values after migration 047.
+// Seeded role values after migrations 047 and 050.
 const (
-	seededOwner     int64 = -1
+	seededOwner     int64 = PermissionAdministrator
 	seededAdmin     int64 = 2031612
 	seededModerator int64 = 1049884
 )
@@ -108,6 +108,7 @@ func TestHasPermission(t *testing.T) {
 		{"any of: none held", PermissionViewDashboard, []int64{PermissionManageUsers, PermissionManageReports}, false},
 		{"administrator bit implies the rest", PermissionAdministrator, []int64{PermissionManageEmailSubscriptions}, true},
 		{"seeded Owner", seededOwner, []int64{PermissionManageFederation}, true},
+		{"Owner storing every bit", -1, []int64{PermissionManageFederation}, true},
 		{"seeded Admin has manage_federation", seededAdmin, []int64{PermissionManageFederation}, true},
 		{"seeded Admin lacks view_devops", seededAdmin, []int64{PermissionViewDevops}, false},
 		{"seeded Moderator has manage_reports", seededModerator, []int64{PermissionManageReports}, true},

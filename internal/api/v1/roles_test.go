@@ -9,9 +9,9 @@ import (
 	"github.com/deicod/gotodon/internal/db"
 )
 
-// Roles as gotodon seeds them, and their responses. The Owner stores either
-// the administrator bit alone, as Mastodon's config/roles.yml has it, or every
-// bit. Both report every permission.
+// Roles as gotodon seeds them, and their responses. The Owner stores the
+// administrator bit alone since migration 050, as Mastodon's config/roles.yml
+// has it, and every bit before. Both report every permission.
 var (
 	ownerRole           = db.UserRole{ID: 1, Name: "Owner", Position: 1000, Permissions: 1}
 	everyBitOwnerRole   = db.UserRole{ID: 1, Name: "Owner", Position: 1000, Permissions: -1}

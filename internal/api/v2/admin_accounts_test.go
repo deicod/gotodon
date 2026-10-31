@@ -102,7 +102,7 @@ func TestAdminAccountsHandler_RouteAuthorization(t *testing.T) {
 		outsideScopes = "This action is outside the authorized scopes"
 		notAllowed    = "This action is not allowed"
 	)
-	owner := stubRoles{hasRole: true, permissions: -1}
+	owner := stubRoles{hasRole: true, permissions: auth.PermissionAdministrator}
 
 	tests := []struct {
 		name          string
@@ -119,6 +119,7 @@ func TestAdminAccountsHandler_RouteAuthorization(t *testing.T) {
 		{"app token with admin scopes", false, adminToken, false, owner, http.StatusUnauthorized, "The access token is invalid"},
 		{"user without a role", true, adminToken, false, stubRoles{}, http.StatusForbidden, notAllowed},
 		{"Owner", true, adminToken, false, owner, http.StatusInternalServerError, ""},
+		{"Owner storing every bit", true, adminToken, false, stubRoles{hasRole: true, permissions: -1}, http.StatusInternalServerError, ""},
 		{"Admin", true, adminToken, false, stubRoles{hasRole: true, permissions: 2031612}, http.StatusInternalServerError, ""},
 		{"Moderator", true, adminToken, false, stubRoles{hasRole: true, permissions: 1049884}, http.StatusInternalServerError, ""},
 		{"manage_users only", true, adminToken, false, stubRoles{hasRole: true, permissions: auth.PermissionManageUsers}, http.StatusInternalServerError, ""},
