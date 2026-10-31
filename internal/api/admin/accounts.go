@@ -14,8 +14,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
-	v1 "github.com/deicod/gotodon/internal/api/v1"
 	"github.com/deicod/gotodon/internal/auth"
+	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/activitypub"
@@ -25,7 +25,7 @@ import (
 // accountsStore is the part of *db.Queries the admin accounts handler uses.
 // Tests use stubs.
 type accountsStore interface {
-	AdminListAccounts(ctx context.Context, arg db.AdminListAccountsParams) ([]db.AdminListAccountsRow, error)
+	AccountListStore
 	AdminGetAccount(ctx context.Context, id int64) (db.AdminGetAccountRow, error)
 	AdminGetAccountActionTarget(ctx context.Context, id int64) (db.AdminGetAccountActionTargetRow, error)
 	AdminApproveAccount(ctx context.Context, accountID int64) error
@@ -48,17 +48,32 @@ type accountsStore interface {
 type AccountsHandler struct {
 	store accountsStore
 	roles RoleLookup
+	cfg   *config.Config
 	// instanceActorURI identifies the instance actor, which can't be
 	// suspended. It is "" without a local domain, and then matches no
 	// account.
 	instanceActorURI string
 }
 
-// NewAccountsHandler creates a new admin accounts handler for the server at
-// localDomain, whose instance actor it recognizes.
-func NewAccountsHandler(queries *db.Queries, localDomain string) *AccountsHandler {
+// v1AccountsLinkParams are the query parameters that the v1 list's Link
+// headers keep: Api::V1::Admin::AccountsController::PAGINATION_PARAMS.
+var v1AccountsLinkParams = []string{
+	"limit", "local", "remote", "by_domain", "active", "pending", "disabled",
+	"sensitized", "silenced", "suspended", "username", "display_name",
+	"email", "ip", "staff",
+}
+
+// NewAccountsHandler creates a new admin accounts handler. cfg names the
+// server's local domain, whose instance actor the handler recognizes, and
+// may be nil.
+func NewAccountsHandler(queries *db.Queries, cfg *config.Config) *AccountsHandler {
+	localDomain := ""
+	if cfg != nil {
+		localDomain = cfg.Instance.LocalDomain
+	}
 	h := &AccountsHandler{
 		roles:            NewRoleLookup(queries),
+		cfg:              cfg,
 		instanceActorURI: activitypub.InstanceActorURI(localDomain),
 	}
 	// A nil *db.Queries leaves store nil rather than a non-nil interface
@@ -68,26 +83,6 @@ func NewAccountsHandler(queries *db.Queries, localDomain string) *AccountsHandle
 		h.store = queries
 	}
 	return h
-}
-
-// AdminAccount represents an account in the admin view
-type AdminAccount struct {
-	ID             string          `json:"id"`
-	Username       string          `json:"username"`
-	Domain         *string         `json:"domain"`
-	CreatedAt      time.Time       `json:"created_at"`
-	Email          string          `json:"email,omitempty"`
-	IP             *string         `json:"ip,omitempty"`
-	Role           *v1.AccountRole `json:"role"`
-	Confirmed      bool            `json:"confirmed"`
-	Approved       bool            `json:"approved"`
-	Disabled       bool            `json:"disabled"`
-	Silenced       bool            `json:"silenced"`
-	Suspended      bool            `json:"suspended"`
-	Sensitized     bool            `json:"sensitized"`
-	InviteRequest  *string         `json:"invite_request,omitempty"`
-	CreatedByAppID *string         `json:"created_by_application_id,omitempty"`
-	InvitedByID    *string         `json:"invited_by_account_id,omitempty"`
 }
 
 // AccountAction represents an action taken on an account.
@@ -114,15 +109,6 @@ func accountHumanIdentifier(username string, domain pgtype.Text) string {
 		return username + "@" + domain.String
 	}
 	return username
-}
-
-// adminAccountRole returns the role of an account's user from the joined
-// user_roles columns, as REST::Admin::AccountSerializer#role gives it: the
-// user's role, or the everyone role for a user without one. The v1 queries
-// join users, so every account they return has a user and a role.
-func adminAccountRole(id pgtype.Int8, name, color pgtype.Text, permissions pgtype.Int8, highlighted pgtype.Bool) *v1.AccountRole {
-	role := v1.SerializeUserRole(id, name, color, permissions, highlighted)
-	return &role
 }
 
 func (h *AccountsHandler) accountIdentifier(ctx context.Context, accountID int64) string {
@@ -186,69 +172,45 @@ func (h *AccountsHandler) logUserActionFor(ctx context.Context, adminID, targetA
 	h.logAdminAction(ctx, adminID, action, adminActionTargetUser, userID, h.accountIdentifier(ctx, targetAccountID), routeParam, "")
 }
 
-// GetAll handles GET /api/v1/admin/accounts
+// GetAll handles GET /api/v1/admin/accounts. Like
+// Api::V1::Admin::AccountsController#translated_filter_params, it lists
+// local, active accounts unless the request asks for others with presence
+// flags, which any non-blank value sets: remote selects remote accounts, and
+// active, pending, disabled, silenced and suspended select a status, the
+// last of them that is present winning in that order. staff selects users
+// whose role can manage reports. by_domain, username, display_name, email
+// and ip filter as in v2. local only names the default, and sensitized,
+// though Mastodon accepts it, selects nothing in v1.
 func (h *AccountsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
-	// Parse query parameters
-	limit := 100
-	if l := web.QueryParam(r, "limit"); l != "" {
-		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 200 {
-			limit = parsed
+	query := r.URL.Query()
+	present := func(name string) bool { return strings.TrimSpace(query.Get(name)) != "" }
+
+	filter := AccountFilter{
+		Origin:      "local",
+		Status:      "active",
+		ByDomain:    query.Get("by_domain"),
+		Username:    query.Get("username"),
+		DisplayName: query.Get("display_name"),
+		Email:       query.Get("email"),
+		IP:          query.Get("ip"),
+		Staff:       present("staff"),
+	}
+	if present("remote") {
+		filter.Origin = "remote"
+	}
+	for _, status := range []string{"active", "pending", "disabled", "silenced", "suspended"} {
+		if present(status) {
+			filter.Status = status
 		}
 	}
-	offset := 0
-	if o := web.QueryParam(r, "offset"); o != "" {
-		if parsed, err := strconv.Atoi(o); err == nil && parsed >= 0 {
-			offset = parsed
-		}
-	}
 
-	params := db.AdminListAccountsParams{
-		Limit:           int32(limit),
-		Offset:          int32(offset),
-		LocalOnly:       web.QueryParam(r, "local") == "true",
-		StatusActive:    web.QueryParam(r, "status") == "active",
-		StatusPending:   web.QueryParam(r, "status") == "pending",
-		StatusDisabled:  web.QueryParam(r, "status") == "disabled",
-		StatusSilenced:  web.QueryParam(r, "status") == "silenced",
-		StatusSuspended: web.QueryParam(r, "status") == "suspended",
-		UsernameCurr:    web.QueryParam(r, "username"),
-		Email:           web.QueryParam(r, "email"),
-		Ip:              web.QueryParam(r, "ip"),
-	}
-
-	rows, err := h.store.AdminListAccounts(r.Context(), params)
-	if err != nil {
-		web.JSONError(w, http.StatusInternalServerError, "Database error")
-		return
-	}
-
-	accounts := make([]AdminAccount, 0, len(rows))
-	for _, row := range rows {
-		acc := AdminAccount{
-			ID:         strconv.FormatInt(row.ID, 10),
-			Username:   row.Username,
-			CreatedAt:  row.CreatedAt.Time,
-			Email:      row.Email,
-			Confirmed:  row.ConfirmedAt.Valid,
-			Approved:   row.Approved,
-			Disabled:   row.Disabled,
-			Silenced:   row.SilencedAt.Valid,
-			Suspended:  row.SuspendedAt.Valid,
-			Sensitized: row.SensitizedAt.Valid,
-			Role:       adminAccountRole(row.RoleID, row.RoleName, row.RoleColor, row.RolePermissions, row.RoleHighlighted),
-		}
-		if row.Domain.Valid {
-			d := row.Domain.String
-			acc.Domain = &d
-		}
-
-		accounts = append(accounts, acc)
-	}
-
-	web.JSON(w, http.StatusOK, accounts)
+	// A nil store converts to a nil AccountListStore.
+	NewAccountList(h.store, h.cfg, "/api/v1/admin/accounts", v1AccountsLinkParams).Serve(w, r, filter)
 }
 
-// Get handles GET /api/v1/admin/accounts/:id
+// Get handles GET /api/v1/admin/accounts/:id. Like Mastodon's Account.find,
+// it shows any account, with or without a user: an ID that isn't a number
+// or names no account gets 404 Record not found, and a failed lookup 500.
 func (h *AccountsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
@@ -256,35 +218,27 @@ func (h *AccountsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	row, err := h.store.AdminGetAccount(r.Context(), accountID)
-	if err != nil {
+	ctx := r.Context()
+	row, err := h.store.AdminGetAccount(ctx, accountID)
+	if errors.Is(err, pgx.ErrNoRows) {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
-
-	acc := AdminAccount{
-		ID:         strconv.FormatInt(row.ID, 10),
-		Username:   row.Username,
-		CreatedAt:  row.CreatedAt.Time,
-		Email:      row.Email,
-		Confirmed:  row.ConfirmedAt.Valid,
-		Approved:   row.Approved,
-		Disabled:   row.Disabled,
-		Silenced:   row.SilencedAt.Valid,
-		Suspended:  row.SuspendedAt.Valid,
-		Sensitized: row.SensitizedAt.Valid,
-		Role:       adminAccountRole(row.RoleID, row.RoleName, row.RoleColor, row.RolePermissions, row.RoleHighlighted),
-	}
-	if row.Domain.Valid {
-		d := row.Domain.String
-		acc.Domain = &d
-	}
-	if row.SignUpIp != nil {
-		ip := row.SignUpIp.String()
-		acc.IP = &ip
+	if err != nil {
+		slog.ErrorContext(ctx, "Admin account lookup failed", "account_id", accountID, "error", err)
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
-	web.JSON(w, http.StatusOK, acc)
+	// AdminGetAccount selects the columns of AdminListAccounts.
+	accounts, err := SerializeAccounts(ctx, h.store, h.cfg, []db.AdminListAccountsRow{db.AdminListAccountsRow(row)})
+	if err != nil {
+		slog.ErrorContext(ctx, "Admin account serialization failed", "account_id", accountID, "error", err)
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+
+	web.JSON(w, http.StatusOK, accounts[0])
 }
 
 // TakeAction handles POST /api/v1/admin/accounts/:id/action. Like

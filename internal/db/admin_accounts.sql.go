@@ -58,19 +58,41 @@ func (q *Queries) AdminEnableAccount(ctx context.Context, accountID int64) error
 }
 
 const adminGetAccount = `-- name: AdminGetAccount :one
-SELECT 
-    a.id, a.username, a.domain, a.created_at, 
-    u.email, u.sign_up_ip,
-    u.confirmed_at, u.approved, u.disabled, a.silenced_at, a.suspended_at, a.sensitized_at,
-    u.invite_id, u.created_by_application_id,
+SELECT
+    a.id,
+    a.username,
+    a.domain,
+    a.created_at,
+    s.followers_count,
+    s.following_count,
+    s.statuses_count,
+    s.last_status_at,
+    u.id AS user_id,
+    u.email,
+    u.sign_up_ip,
+    u.confirmed_at,
+    u.approved,
+    u.disabled,
+    a.silenced_at,
+    a.suspended_at,
+    a.sensitized_at,
+    u.invite_id,
+    u.created_by_application_id,
+    u.locale,
+    uir.text AS invite_request,
+    inviter.account_id AS invited_by_account_id,
     r.id AS role_id,
     r.name AS role_name,
     r.permissions AS role_permissions,
     r.color AS role_color,
     r.highlighted AS role_highlighted
 FROM accounts a
-JOIN users u ON a.id = u.account_id
+LEFT JOIN users u ON a.id = u.account_id
+LEFT JOIN account_stats s ON s.account_id = a.id
+LEFT JOIN invites i ON i.id = u.invite_id
+LEFT JOIN users inviter ON inviter.id = i.user_id
 LEFT JOIN user_roles r ON r.id = u.role_id
+LEFT JOIN user_invite_requests uir ON uir.user_id = u.id
 WHERE a.id = $1
 `
 
@@ -79,16 +101,24 @@ type AdminGetAccountRow struct {
 	Username               string             `db:"username" json:"username"`
 	Domain                 pgtype.Text        `db:"domain" json:"domain"`
 	CreatedAt              pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	Email                  string             `db:"email" json:"email"`
+	FollowersCount         pgtype.Int8        `db:"followers_count" json:"followers_count"`
+	FollowingCount         pgtype.Int8        `db:"following_count" json:"following_count"`
+	StatusesCount          pgtype.Int8        `db:"statuses_count" json:"statuses_count"`
+	LastStatusAt           pgtype.Timestamptz `db:"last_status_at" json:"last_status_at"`
+	UserID                 pgtype.Int8        `db:"user_id" json:"user_id"`
+	Email                  pgtype.Text        `db:"email" json:"email"`
 	SignUpIp               *netip.Addr        `db:"sign_up_ip" json:"sign_up_ip"`
 	ConfirmedAt            pgtype.Timestamptz `db:"confirmed_at" json:"confirmed_at"`
-	Approved               bool               `db:"approved" json:"approved"`
-	Disabled               bool               `db:"disabled" json:"disabled"`
+	Approved               pgtype.Bool        `db:"approved" json:"approved"`
+	Disabled               pgtype.Bool        `db:"disabled" json:"disabled"`
 	SilencedAt             pgtype.Timestamptz `db:"silenced_at" json:"silenced_at"`
 	SuspendedAt            pgtype.Timestamptz `db:"suspended_at" json:"suspended_at"`
 	SensitizedAt           pgtype.Timestamptz `db:"sensitized_at" json:"sensitized_at"`
 	InviteID               pgtype.Int8        `db:"invite_id" json:"invite_id"`
 	CreatedByApplicationID pgtype.Int8        `db:"created_by_application_id" json:"created_by_application_id"`
+	Locale                 pgtype.Text        `db:"locale" json:"locale"`
+	InviteRequest          pgtype.Text        `db:"invite_request" json:"invite_request"`
+	InvitedByAccountID     pgtype.Int8        `db:"invited_by_account_id" json:"invited_by_account_id"`
 	RoleID                 pgtype.Int8        `db:"role_id" json:"role_id"`
 	RoleName               pgtype.Text        `db:"role_name" json:"role_name"`
 	RolePermissions        pgtype.Int8        `db:"role_permissions" json:"role_permissions"`
@@ -96,6 +126,9 @@ type AdminGetAccountRow struct {
 	RoleHighlighted        pgtype.Bool        `db:"role_highlighted" json:"role_highlighted"`
 }
 
+// The account that Api::V1::Admin::AccountsController#show renders, with
+// or without a user. It selects the columns of AdminListAccounts in the
+// same order, so that its row converts to AdminListAccountsRow.
 func (q *Queries) AdminGetAccount(ctx context.Context, id int64) (AdminGetAccountRow, error) {
 	row := q.db.QueryRow(ctx, adminGetAccount, id)
 	var i AdminGetAccountRow
@@ -104,6 +137,11 @@ func (q *Queries) AdminGetAccount(ctx context.Context, id int64) (AdminGetAccoun
 		&i.Username,
 		&i.Domain,
 		&i.CreatedAt,
+		&i.FollowersCount,
+		&i.FollowingCount,
+		&i.StatusesCount,
+		&i.LastStatusAt,
+		&i.UserID,
 		&i.Email,
 		&i.SignUpIp,
 		&i.ConfirmedAt,
@@ -114,6 +152,9 @@ func (q *Queries) AdminGetAccount(ctx context.Context, id int64) (AdminGetAccoun
 		&i.SensitizedAt,
 		&i.InviteID,
 		&i.CreatedByApplicationID,
+		&i.Locale,
+		&i.InviteRequest,
+		&i.InvitedByAccountID,
 		&i.RoleID,
 		&i.RoleName,
 		&i.RolePermissions,
@@ -176,122 +217,6 @@ func (q *Queries) AdminGetAccountActionTarget(ctx context.Context, id int64) (Ad
 }
 
 const adminListAccounts = `-- name: AdminListAccounts :many
-SELECT 
-    a.id, a.username, a.domain, a.created_at, 
-    u.email, u.current_sign_in_at as ip, -- Placeholder for IP, using timestamps or actual IP if available in users
-    u.confirmed_at, u.approved, u.disabled, a.silenced_at, a.suspended_at, a.sensitized_at,
-    u.invite_id, u.created_by_application_id,
-    r.id AS role_id,
-    r.name AS role_name,
-    r.permissions AS role_permissions,
-    r.color AS role_color,
-    r.highlighted AS role_highlighted
-FROM accounts a
-JOIN users u ON a.id = u.account_id
-LEFT JOIN user_roles r ON r.id = u.role_id
-WHERE 
-    (CASE WHEN $3::boolean THEN a.domain IS NULL ELSE TRUE END)
-    AND (CASE WHEN $4::boolean THEN u.disabled = false AND a.suspended_at IS NULL ELSE TRUE END)
-    AND (CASE WHEN $5::boolean THEN u.approved = false ELSE TRUE END)
-    AND (CASE WHEN $6::boolean THEN u.disabled = true OR a.suspended_at IS NOT NULL ELSE TRUE END)
-    AND (CASE WHEN $7::boolean THEN a.silenced_at IS NOT NULL ELSE TRUE END)
-    AND (CASE WHEN $8::boolean THEN a.suspended_at IS NOT NULL ELSE TRUE END)
-    AND (CASE WHEN $9::text != '' THEN a.username ILIKE '%' || $9 || '%' ELSE TRUE END)
-    AND (CASE WHEN $10::text != '' THEN u.email ILIKE '%' || $10 || '%' ELSE TRUE END)
-    AND (CASE WHEN $11::text != '' THEN u.sign_up_ip::text = $11 ELSE TRUE END)
-ORDER BY a.created_at DESC
-LIMIT $1 OFFSET $2
-`
-
-type AdminListAccountsParams struct {
-	Limit           int32  `db:"limit" json:"limit"`
-	Offset          int32  `db:"offset" json:"offset"`
-	LocalOnly       bool   `db:"local_only" json:"local_only"`
-	StatusActive    bool   `db:"status_active" json:"status_active"`
-	StatusPending   bool   `db:"status_pending" json:"status_pending"`
-	StatusDisabled  bool   `db:"status_disabled" json:"status_disabled"`
-	StatusSilenced  bool   `db:"status_silenced" json:"status_silenced"`
-	StatusSuspended bool   `db:"status_suspended" json:"status_suspended"`
-	UsernameCurr    string `db:"username_curr" json:"username_curr"`
-	Email           string `db:"email" json:"email"`
-	Ip              string `db:"ip" json:"ip"`
-}
-
-type AdminListAccountsRow struct {
-	ID                     int64              `db:"id" json:"id"`
-	Username               string             `db:"username" json:"username"`
-	Domain                 pgtype.Text        `db:"domain" json:"domain"`
-	CreatedAt              pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	Email                  string             `db:"email" json:"email"`
-	Ip                     pgtype.Timestamptz `db:"ip" json:"ip"`
-	ConfirmedAt            pgtype.Timestamptz `db:"confirmed_at" json:"confirmed_at"`
-	Approved               bool               `db:"approved" json:"approved"`
-	Disabled               bool               `db:"disabled" json:"disabled"`
-	SilencedAt             pgtype.Timestamptz `db:"silenced_at" json:"silenced_at"`
-	SuspendedAt            pgtype.Timestamptz `db:"suspended_at" json:"suspended_at"`
-	SensitizedAt           pgtype.Timestamptz `db:"sensitized_at" json:"sensitized_at"`
-	InviteID               pgtype.Int8        `db:"invite_id" json:"invite_id"`
-	CreatedByApplicationID pgtype.Int8        `db:"created_by_application_id" json:"created_by_application_id"`
-	RoleID                 pgtype.Int8        `db:"role_id" json:"role_id"`
-	RoleName               pgtype.Text        `db:"role_name" json:"role_name"`
-	RolePermissions        pgtype.Int8        `db:"role_permissions" json:"role_permissions"`
-	RoleColor              pgtype.Text        `db:"role_color" json:"role_color"`
-	RoleHighlighted        pgtype.Bool        `db:"role_highlighted" json:"role_highlighted"`
-}
-
-func (q *Queries) AdminListAccounts(ctx context.Context, arg AdminListAccountsParams) ([]AdminListAccountsRow, error) {
-	rows, err := q.db.Query(ctx, adminListAccounts,
-		arg.Limit,
-		arg.Offset,
-		arg.LocalOnly,
-		arg.StatusActive,
-		arg.StatusPending,
-		arg.StatusDisabled,
-		arg.StatusSilenced,
-		arg.StatusSuspended,
-		arg.UsernameCurr,
-		arg.Email,
-		arg.Ip,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []AdminListAccountsRow{}
-	for rows.Next() {
-		var i AdminListAccountsRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Username,
-			&i.Domain,
-			&i.CreatedAt,
-			&i.Email,
-			&i.Ip,
-			&i.ConfirmedAt,
-			&i.Approved,
-			&i.Disabled,
-			&i.SilencedAt,
-			&i.SuspendedAt,
-			&i.SensitizedAt,
-			&i.InviteID,
-			&i.CreatedByApplicationID,
-			&i.RoleID,
-			&i.RoleName,
-			&i.RolePermissions,
-			&i.RoleColor,
-			&i.RoleHighlighted,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const adminListAccountsV2 = `-- name: AdminListAccountsV2 :many
 SELECT
     a.id,
     a.username,
@@ -351,31 +276,35 @@ WHERE
     AND (CASE WHEN $9::bigint > 0 THEN i.user_id = $9 ELSE TRUE END)
     AND (CASE WHEN $10::text = 'staff' THEN (r.permissions & 16) = 16 OR (r.permissions & 1) = 1 ELSE TRUE END)
     AND (CASE WHEN $11::bigint[] IS NOT NULL AND cardinality($11::bigint[]) > 0 THEN u.role_id = ANY($11::bigint[]) ELSE TRUE END)
-    AND (CASE WHEN $12::bigint > 0 THEN a.id < $12 ELSE TRUE END)
-    AND (CASE WHEN $13::bigint > 0 THEN a.id > $13 ELSE TRUE END)
+    AND (CASE WHEN $12::text != '' THEN NOT (a.domain IS NULL AND a.uri = $12) ELSE TRUE END)
+    AND (CASE WHEN $13::bigint > 0 THEN a.id < $13 ELSE TRUE END)
     AND (CASE WHEN $14::bigint > 0 THEN a.id > $14 ELSE TRUE END)
-ORDER BY a.id DESC
+    AND (CASE WHEN $15::bigint > 0 THEN a.id > $15 ELSE TRUE END)
+ORDER BY
+    CASE WHEN $15::bigint > 0 THEN a.id END ASC,
+    a.id DESC
 LIMIT $1
 `
 
-type AdminListAccountsV2Params struct {
-	Limit       int32   `db:"limit" json:"limit"`
-	Origin      string  `db:"origin" json:"origin"`
-	ByDomain    string  `db:"by_domain" json:"by_domain"`
-	Status      string  `db:"status" json:"status"`
-	Username    string  `db:"username" json:"username"`
-	DisplayName string  `db:"display_name" json:"display_name"`
-	Email       string  `db:"email" json:"email"`
-	Ip          string  `db:"ip" json:"ip"`
-	InvitedBy   int64   `db:"invited_by" json:"invited_by"`
-	Permissions string  `db:"permissions" json:"permissions"`
-	RoleIds     []int64 `db:"role_ids" json:"role_ids"`
-	MaxID       int64   `db:"max_id" json:"max_id"`
-	SinceID     int64   `db:"since_id" json:"since_id"`
-	MinID       int64   `db:"min_id" json:"min_id"`
+type AdminListAccountsParams struct {
+	Limit            int32   `db:"limit" json:"limit"`
+	Origin           string  `db:"origin" json:"origin"`
+	ByDomain         string  `db:"by_domain" json:"by_domain"`
+	Status           string  `db:"status" json:"status"`
+	Username         string  `db:"username" json:"username"`
+	DisplayName      string  `db:"display_name" json:"display_name"`
+	Email            string  `db:"email" json:"email"`
+	Ip               string  `db:"ip" json:"ip"`
+	InvitedBy        int64   `db:"invited_by" json:"invited_by"`
+	Permissions      string  `db:"permissions" json:"permissions"`
+	RoleIds          []int64 `db:"role_ids" json:"role_ids"`
+	InstanceActorUri string  `db:"instance_actor_uri" json:"instance_actor_uri"`
+	MaxID            int64   `db:"max_id" json:"max_id"`
+	SinceID          int64   `db:"since_id" json:"since_id"`
+	MinID            int64   `db:"min_id" json:"min_id"`
 }
 
-type AdminListAccountsV2Row struct {
+type AdminListAccountsRow struct {
 	ID                     int64              `db:"id" json:"id"`
 	Username               string             `db:"username" json:"username"`
 	Domain                 pgtype.Text        `db:"domain" json:"domain"`
@@ -405,8 +334,16 @@ type AdminListAccountsV2Row struct {
 	RoleHighlighted        pgtype.Bool        `db:"role_highlighted" json:"role_highlighted"`
 }
 
-func (q *Queries) AdminListAccountsV2(ctx context.Context, arg AdminListAccountsV2Params) ([]AdminListAccountsV2Row, error) {
-	rows, err := q.db.Query(ctx, adminListAccountsV2,
+// Mastodon's AccountFilter, which Api::V1::Admin::AccountsController#index
+// and its v2 subclass translate their query parameters into. Like
+// AccountFilter#results, it leaves out the instance actor, which gotodon
+// recognizes by its URI rather than by Mastodon's fixed ID -99. The users
+// columns are NULL for an account without a user, and the user_roles
+// columns for a user without a role. Paginable#to_a_paginated_by_id: with
+// min_id, the accounts right after min_id in ascending order, which the
+// caller reverses; otherwise the newest ones.
+func (q *Queries) AdminListAccounts(ctx context.Context, arg AdminListAccountsParams) ([]AdminListAccountsRow, error) {
+	rows, err := q.db.Query(ctx, adminListAccounts,
 		arg.Limit,
 		arg.Origin,
 		arg.ByDomain,
@@ -418,6 +355,7 @@ func (q *Queries) AdminListAccountsV2(ctx context.Context, arg AdminListAccounts
 		arg.InvitedBy,
 		arg.Permissions,
 		arg.RoleIds,
+		arg.InstanceActorUri,
 		arg.MaxID,
 		arg.SinceID,
 		arg.MinID,
@@ -426,9 +364,9 @@ func (q *Queries) AdminListAccountsV2(ctx context.Context, arg AdminListAccounts
 		return nil, err
 	}
 	defer rows.Close()
-	items := []AdminListAccountsV2Row{}
+	items := []AdminListAccountsRow{}
 	for rows.Next() {
-		var i AdminListAccountsV2Row
+		var i AdminListAccountsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Username,

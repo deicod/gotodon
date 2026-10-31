@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -175,15 +176,18 @@ func TestAdminAccountsHandler_RouteAuthorization(t *testing.T) {
 // stubAdminAccountsStore is an adminAccountsStore that lists rows and finds
 // an account for every ID. Errors, when set, are returned instead.
 type stubAdminAccountsStore struct {
-	rows        []db.AdminListAccountsV2Row
-	listErr     error
+	rows    []db.AdminListAccountsRow
+	listErr error
+	// params records the params of every listing.
+	params      []db.AdminListAccountsParams
 	accountsErr error
 	ipsErr      error
 	// missing is left out of GetAccountsByIDs.
 	missing int64
 }
 
-func (s *stubAdminAccountsStore) AdminListAccountsV2(context.Context, db.AdminListAccountsV2Params) ([]db.AdminListAccountsV2Row, error) {
+func (s *stubAdminAccountsStore) AdminListAccounts(_ context.Context, arg db.AdminListAccountsParams) ([]db.AdminListAccountsRow, error) {
+	s.params = append(s.params, arg)
 	return s.rows, s.listErr
 }
 
@@ -207,13 +211,19 @@ func (s *stubAdminAccountsStore) AdminListUserIPs(context.Context, []int64) ([]d
 // serveAdminAccounts serves GET /api/v2/admin/accounts for an Owner, with
 // WithAccess in front as in production.
 func serveAdminAccounts(store *stubAdminAccountsStore) *httptest.ResponseRecorder {
+	return serveAdminAccountsPath(store, "/api/v2/admin/accounts")
+}
+
+// serveAdminAccountsPath serves path, the list with a query, as
+// serveAdminAccounts does.
+func serveAdminAccountsPath(store *stubAdminAccountsStore, path string) *httptest.ResponseRecorder {
 	h := NewAdminAccountsHandler(nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}})
 	h.store = store
 	h.roles = stubRoles{hasRole: true, permissions: auth.PermissionAdministrator}
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v2/admin/accounts", nil)
+	req := httptest.NewRequest(http.MethodGet, path, nil)
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(10))
 	ctx = context.WithValue(ctx, middleware.ContextKeyUserID, int64(20))
 	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "admin:read")
@@ -224,8 +234,8 @@ func serveAdminAccounts(store *stubAdminAccountsStore) *httptest.ResponseRecorde
 
 // v2AccountRow is a local account with a user, whose role is role, or a
 // user without a role when role is nil.
-func v2AccountRow(id int64, role *db.UserRole) db.AdminListAccountsV2Row {
-	row := db.AdminListAccountsV2Row{
+func v2AccountRow(id int64, role *db.UserRole) db.AdminListAccountsRow {
+	row := db.AdminListAccountsRow{
 		ID:       id,
 		Username: fmt.Sprintf("user%d", id),
 		UserID:   pgtype.Int8{Int64: id + 100, Valid: true},
@@ -248,7 +258,7 @@ func v2AccountRow(id int64, role *db.UserRole) db.AdminListAccountsV2Row {
 // null for an account without a user.
 func TestAdminAccountsHandler_ListRole(t *testing.T) {
 	ownerJSON := `{"id":"1","name":"Owner","permissions":"8388607","color":"","highlighted":false}`
-	remote := db.AdminListAccountsV2Row{
+	remote := db.AdminListAccountsRow{
 		ID:       306,
 		Username: "bob",
 		Domain:   pgtype.Text{String: "remote.example", Valid: true},
@@ -256,7 +266,7 @@ func TestAdminAccountsHandler_ListRole(t *testing.T) {
 
 	tests := []struct {
 		name string
-		row  db.AdminListAccountsV2Row
+		row  db.AdminListAccountsRow
 		want string
 	}{
 		{"Owner storing the administrator bit", v2AccountRow(300, &db.UserRole{ID: 1, Name: "Owner", Permissions: auth.PermissionAdministrator}), ownerJSON},
@@ -324,7 +334,7 @@ func TestAdminAccountsHandler_ListRole(t *testing.T) {
 // TestAdminAccountsHandler_ListStoreFailures checks that a failed query
 // answers 500.
 func TestAdminAccountsHandler_ListStoreFailures(t *testing.T) {
-	rows := []db.AdminListAccountsV2Row{v2AccountRow(300, nil)}
+	rows := []db.AdminListAccountsRow{v2AccountRow(300, nil)}
 
 	tests := []struct {
 		name  string
@@ -347,5 +357,84 @@ func TestAdminAccountsHandler_ListStoreFailures(t *testing.T) {
 				t.Fatalf("body = %s, want the database error", got)
 			}
 		})
+	}
+}
+
+// TestAdminAccountsHandler_ListFilters checks how the v2 list translates
+// its query parameters, as Api::V2::Admin::AccountsController's
+// translated_filter_params does: without v1's defaults.
+func TestAdminAccountsHandler_ListFilters(t *testing.T) {
+	base := db.AdminListAccountsParams{Limit: 100, InstanceActorUri: "https://example.com/actor"}
+	with := func(change func(*db.AdminListAccountsParams)) db.AdminListAccountsParams {
+		params := base
+		change(&params)
+		return params
+	}
+
+	tests := []struct {
+		name  string
+		query string
+		want  db.AdminListAccountsParams
+	}{
+		{"no parameters lists every account", "", base},
+		{"origin and status", "origin=remote&status=suspended", with(func(p *db.AdminListAccountsParams) {
+			p.Origin, p.Status = "remote", "suspended"
+		})},
+		{"a domain drops the remote origin", "origin=remote&by_domain=remote.example", with(func(p *db.AdminListAccountsParams) {
+			p.ByDomain = "remote.example"
+		})},
+		{"a domain keeps the local origin", "origin=local&by_domain=remote.example", with(func(p *db.AdminListAccountsParams) {
+			p.Origin, p.ByDomain = "local", "remote.example"
+		})},
+		{"role IDs", "role_ids[]=1&role_ids[]=2", with(func(p *db.AdminListAccountsParams) { p.RoleIds = []int64{1, 2} })},
+		{"staff replaces role IDs", "permissions=staff&role_ids[]=1", with(func(p *db.AdminListAccountsParams) { p.Permissions = "staff" })},
+		{"invited by", "invited_by=7", with(func(p *db.AdminListAccountsParams) { p.InvitedBy = 7 })},
+		{"v1 presence flags are ignored", "remote=1&suspended=1&staff=1", base},
+		{"username without its @", "username=@bob", with(func(p *db.AdminListAccountsParams) { p.Username = "bob" })},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &stubAdminAccountsStore{}
+			rec := serveAdminAccountsPath(store, "/api/v2/admin/accounts?"+tt.query)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d (%s), want %d", rec.Code, strings.TrimSpace(rec.Body.String()), http.StatusOK)
+			}
+			if len(store.params) != 1 {
+				t.Fatalf("listed %d times, want once", len(store.params))
+			}
+			if got := store.params[0]; !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("params =\n%+v\nwant\n%+v", got, tt.want)
+			}
+		})
+	}
+
+	for _, query := range []string{"invited_by=abc", "invited_by=0", "role_ids[]=abc", "ip=not-an-ip", "max_id=0"} {
+		t.Run("selects nothing: "+query, func(t *testing.T) {
+			store := &stubAdminAccountsStore{rows: []db.AdminListAccountsRow{v2AccountRow(300, nil)}}
+			rec := serveAdminAccountsPath(store, "/api/v2/admin/accounts?"+query)
+
+			if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "[]" {
+				t.Fatalf("response = %d %s, want 200 []", rec.Code, strings.TrimSpace(rec.Body.String()))
+			}
+			if len(store.params) != 0 {
+				t.Fatalf("listed with %+v, want no query", store.params)
+			}
+		})
+	}
+}
+
+// TestAdminAccountsHandler_ListLinks checks that the v2 Link headers point
+// to the v2 list and keep v2's parameters.
+func TestAdminAccountsHandler_ListLinks(t *testing.T) {
+	const base = "https://example.com/api/v2/admin/accounts"
+	store := &stubAdminAccountsStore{rows: []db.AdminListAccountsRow{v2AccountRow(9, nil), v2AccountRow(8, nil)}}
+	rec := serveAdminAccountsPath(store, "/api/v2/admin/accounts?limit=2&origin=local&remote=1&role_ids[]=3")
+
+	want := `<` + base + `?limit=2&max_id=8&origin=local&role_ids%5B%5D=3>; rel="next", <` +
+		base + `?limit=2&min_id=9&origin=local&role_ids%5B%5D=3>; rel="prev"`
+	if got := rec.Header().Get("Link"); got != want {
+		t.Fatalf("Link =\n%s\nwant\n%s", got, want)
 	}
 }

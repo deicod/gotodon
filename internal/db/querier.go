@@ -37,6 +37,9 @@ type Querier interface {
 	AdminDeleteIpBlock(ctx context.Context, id int64) error
 	AdminDisableAccount(ctx context.Context, accountID int64) error
 	AdminEnableAccount(ctx context.Context, accountID int64) error
+	// The account that Api::V1::Admin::AccountsController#show renders, with
+	// or without a user. It selects the columns of AdminListAccounts in the
+	// same order, so that its row converts to AdminListAccountsRow.
 	AdminGetAccount(ctx context.Context, id int64) (AdminGetAccountRow, error)
 	// The account state that Mastodon's AccountPolicy, UserPolicy and
 	// Api::V1::Admin::AccountsController check before an admin account action.
@@ -52,8 +55,15 @@ type Querier interface {
 	AdminGetIpBlockByIP(ctx context.Context, ip string) (AdminGetIpBlockByIPRow, error)
 	AdminGetReport(ctx context.Context, id int64) (Report, error)
 	AdminGetTag(ctx context.Context, id int64) (Tag, error)
+	// Mastodon's AccountFilter, which Api::V1::Admin::AccountsController#index
+	// and its v2 subclass translate their query parameters into. Like
+	// AccountFilter#results, it leaves out the instance actor, which gotodon
+	// recognizes by its URI rather than by Mastodon's fixed ID -99. The users
+	// columns are NULL for an account without a user, and the user_roles
+	// columns for a user without a role. Paginable#to_a_paginated_by_id: with
+	// min_id, the accounts right after min_id in ascending order, which the
+	// caller reverses; otherwise the newest ones.
 	AdminListAccounts(ctx context.Context, arg AdminListAccountsParams) ([]AdminListAccountsRow, error)
-	AdminListAccountsV2(ctx context.Context, arg AdminListAccountsV2Params) ([]AdminListAccountsV2Row, error)
 	AdminListCanonicalEmailBlocks(ctx context.Context, arg AdminListCanonicalEmailBlocksParams) ([]CanonicalEmailBlock, error)
 	AdminListCustomEmojis(ctx context.Context, arg AdminListCustomEmojisParams) ([]CustomEmoji, error)
 	AdminListDomainBlocks(ctx context.Context, arg AdminListDomainBlocksParams) ([]DomainBlock, error)

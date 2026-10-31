@@ -3,7 +3,6 @@ package admin
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/pkg/activitypub"
 )
@@ -29,6 +29,24 @@ type stubAccountsStore struct {
 	// writeErr, when set, is returned by every state change.
 	writeErr error
 
+	// list and listErr answer AdminListAccounts, which records its params
+	// in listParams.
+	list       []db.AdminListAccountsRow
+	listErr    error
+	listParams []db.AdminListAccountsParams
+	// rows are AdminGetAccount's rows. An account in targets without a row
+	// gets one made from its target.
+	rows map[int64]db.AdminGetAccountRow
+	// getErr, when set, is returned by AdminGetAccount.
+	getErr error
+	// accountsErr, when set, is returned by GetAccountsByIDs, which leaves
+	// out the accounts in missingAccounts.
+	accountsErr     error
+	missingAccounts []int64
+	// ips and ipsErr answer AdminListUserIPs.
+	ips    []db.AdminListUserIPsRow
+	ipsErr error
+
 	changes []string
 	logs    []db.CreateAdminActionLogParams
 }
@@ -38,18 +56,77 @@ func (s *stubAccountsStore) change(name string, id int64) error {
 	return s.writeErr
 }
 
-func (s *stubAccountsStore) AdminListAccounts(context.Context, db.AdminListAccountsParams) ([]db.AdminListAccountsRow, error) {
-	return nil, errors.New("AdminListAccounts not stubbed")
+func (s *stubAccountsStore) AdminListAccounts(_ context.Context, arg db.AdminListAccountsParams) ([]db.AdminListAccountsRow, error) {
+	s.listParams = append(s.listParams, arg)
+	return s.list, s.listErr
 }
 
-// AdminGetAccount answers like the real query, which joins users: an
-// account without a user isn't found.
+// AdminGetAccount answers like the real query, which left-joins users: it
+// finds every account, with the user columns NULL for one without a user.
 func (s *stubAccountsStore) AdminGetAccount(_ context.Context, id int64) (db.AdminGetAccountRow, error) {
+	if s.getErr != nil {
+		return db.AdminGetAccountRow{}, s.getErr
+	}
+	if row, ok := s.rows[id]; ok {
+		return row, nil
+	}
 	target, ok := s.targets[id]
-	if !ok || !target.UserID.Valid {
+	if !ok {
 		return db.AdminGetAccountRow{}, pgx.ErrNoRows
 	}
-	return db.AdminGetAccountRow{ID: id, Username: fmt.Sprintf("user%d", id), Domain: target.Domain}, nil
+	row := db.AdminGetAccountRow{
+		ID:          id,
+		Username:    fmt.Sprintf("user%d", id),
+		Domain:      target.Domain,
+		SuspendedAt: target.SuspendedAt,
+		UserID:      target.UserID,
+	}
+	if target.UserID.Valid {
+		row.Email = pgtype.Text{String: fmt.Sprintf("user%d@%s", id, localDomain), Valid: true}
+		row.Approved = target.UserApproved
+		row.Disabled = pgtype.Bool{Bool: false, Valid: true}
+	}
+	return row, nil
+}
+
+// accountOf returns account id as its row in rows or list has it, or as
+// user<id> with the domain of its target.
+func (s *stubAccountsStore) accountOf(id int64) db.Account {
+	if row, ok := s.rows[id]; ok {
+		return db.Account{ID: id, Username: row.Username, Domain: row.Domain}
+	}
+	for _, row := range s.list {
+		if row.ID == id {
+			return db.Account{ID: id, Username: row.Username, Domain: row.Domain}
+		}
+	}
+	return db.Account{ID: id, Username: fmt.Sprintf("user%d", id), Domain: s.targets[id].Domain}
+}
+
+func (s *stubAccountsStore) GetAccountsByIDs(_ context.Context, ids []int64) ([]db.Account, error) {
+	if s.accountsErr != nil {
+		return nil, s.accountsErr
+	}
+	accounts := make([]db.Account, 0, len(ids))
+	for _, id := range ids {
+		if !slices.Contains(s.missingAccounts, id) {
+			accounts = append(accounts, s.accountOf(id))
+		}
+	}
+	return accounts, nil
+}
+
+func (s *stubAccountsStore) AdminListUserIPs(_ context.Context, userIDs []int64) ([]db.AdminListUserIPsRow, error) {
+	if s.ipsErr != nil {
+		return nil, s.ipsErr
+	}
+	var rows []db.AdminListUserIPsRow
+	for _, row := range s.ips {
+		if slices.Contains(userIDs, row.UserID) {
+			rows = append(rows, row)
+		}
+	}
+	return rows, nil
 }
 
 func (s *stubAccountsStore) AdminGetAccountActionTarget(_ context.Context, id int64) (db.AdminGetAccountActionTargetRow, error) {
@@ -186,6 +263,9 @@ const (
 	// targetRemoteWithUser is a remote account with a user row, which
 	// require_local_account! refuses as remote.
 	targetRemoteWithUser int64 = 117
+	// targetRemoteSuspendedLocally is a remote account that this server
+	// suspended.
+	targetRemoteSuspendedLocally int64 = 118
 	// targetUnknown names no account.
 	targetUnknown int64 = 999
 )
@@ -246,6 +326,8 @@ func newAccountTargets(actingPosition int32) map[int64]db.AdminGetAccountActionT
 		targetSuspendedOwner:     suspended(localTarget(targetSuspendedOwner, at(ownerPosition), true), suspensionOriginLocal, true),
 		targetDeletionRequested:  deletionRequested(localTarget(targetDeletionRequested, nil, true)),
 		targetRemoteWithUser:     remoteWithUser(localTarget(targetRemoteWithUser, nil, false)),
+		targetRemoteSuspendedLocally: suspended(
+			remoteTarget(targetRemoteSuspendedLocally, "https://remote.example/users/rose"), suspensionOriginLocal, true),
 	}
 }
 
@@ -287,7 +369,7 @@ func newAccountsFixture(a actor) *accountsFixture {
 // newAccountsFixtureFor serves the routes for a server at domain.
 func newAccountsFixtureFor(a actor, domain string) *accountsFixture {
 	store := &stubAccountsStore{targets: newAccountTargets(a.position)}
-	h := NewAccountsHandler(nil, domain)
+	h := NewAccountsHandler(nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: domain}})
 	h.store = store
 	h.roles = &stubRoles{
 		usersByAccount: map[int64]db.User{actingAccount: {ID: 20, AccountID: actingAccount}},
@@ -566,7 +648,7 @@ func TestAccountsTakeActionRequests(t *testing.T) {
 // closed when it runs without WithAccess in front.
 func TestAccountsTakeActionWithoutActingRole(t *testing.T) {
 	store := &stubAccountsStore{targets: newAccountTargets(ownerPosition)}
-	h := NewAccountsHandler(nil, localDomain)
+	h := NewAccountsHandler(nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: localDomain}})
 	h.store = store
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/104/action", strings.NewReader(`{"type":"suspend"}`))
