@@ -8,6 +8,10 @@ their `/ap/` aliases) passes three middlewares before the activity is processed:
 3. `middleware.RejectInboxReplays` makes sure each signed request is processed at
    most once while its signature can still verify.
 
+Verifying a signature fetches the sending actor's key. The actor URI comes from
+the unauthenticated request, so that fetch only reaches public addresses, as
+[Remote fetches](remote-fetches.md) describes.
+
 ## Body size limit
 
 Inbox requests are not authenticated until their signature verifies, and that
