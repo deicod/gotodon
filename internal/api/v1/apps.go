@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"unicode/utf8"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgtype"
 

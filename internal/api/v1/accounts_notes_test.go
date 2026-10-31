@@ -259,7 +259,7 @@ func TestAccountsHandler_Lookup_DBUnavailable(t *testing.T) {
 
 type stubSetNoteQueries struct {
 	db.Querier
-	getAccountByIDCalls   int
+	getAccountByIDCalls    int
 	upsertAccountNoteCalls int
 	deleteAccountNoteCalls int
 	lastUpsert             db.UpsertAccountNoteParams

@@ -17,6 +17,7 @@ import (
 	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 const emailDomainHistoryDays = 7
@@ -269,12 +270,15 @@ func (h *EmailDomainBlocksHandler) Delete(w http.ResponseWriter, r *http.Request
 }
 
 // RegisterRoutes registers email domain block routes. Every action needs
-// manage_blocks, as in Mastodon's EmailDomainBlockPolicy.
+// manage_blocks, as in Mastodon's EmailDomainBlockPolicy. Reads need
+// admin:read:email_domain_blocks and writes admin:write:email_domain_blocks,
+// as in Api::V1::Admin::EmailDomainBlocksController.
 func (h *EmailDomainBlocksHandler) RegisterRoutes(mux RouteRegistrar) {
-	manageBlocks := WithPermission(h.roles, auth.PermissionManageBlocks)
+	read := WithAccess(h.roles, oauth.ScopeAdminReadEmailDomainBlocks, auth.PermissionManageBlocks)
+	write := WithAccess(h.roles, oauth.ScopeAdminWriteEmailDomainBlocks, auth.PermissionManageBlocks)
 
-	mux.HandleFunc("GET /api/v1/admin/email_domain_blocks", manageBlocks(h.GetAll))
-	mux.HandleFunc("POST /api/v1/admin/email_domain_blocks", manageBlocks(h.Create))
-	mux.HandleFunc("GET /api/v1/admin/email_domain_blocks/{id}", manageBlocks(h.Get))
-	mux.HandleFunc("DELETE /api/v1/admin/email_domain_blocks/{id}", manageBlocks(h.Delete))
+	mux.HandleFunc("GET /api/v1/admin/email_domain_blocks", read(h.GetAll))
+	mux.HandleFunc("POST /api/v1/admin/email_domain_blocks", write(h.Create))
+	mux.HandleFunc("GET /api/v1/admin/email_domain_blocks/{id}", read(h.Get))
+	mux.HandleFunc("DELETE /api/v1/admin/email_domain_blocks/{id}", write(h.Delete))
 }

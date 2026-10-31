@@ -12,6 +12,7 @@ import (
 	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 // mockAdminRequest creates a request carrying an authenticated account, for
@@ -102,100 +103,103 @@ func newAdminMux(roles RoleLookup) *recordingMux {
 	return mux
 }
 
-// adminRoutes is the expected route → permission mapping, from Mastodon's
-// app/policies. moderator records whether the seeded Moderator role may use
-// the route, as #103's acceptance criteria state it.
+// adminRoutes is the expected mapping of route to OAuth scope, from the
+// authorize_if_got_token! calls in Mastodon's app/controllers/api/v1/admin,
+// and to permission, from Mastodon's app/policies. moderator records whether
+// the seeded Moderator role may use the route, as #103's acceptance criteria
+// state it.
 var adminRoutes = []struct {
 	pattern    string
+	scope      string
 	permission int64
 	moderator  bool
 }{
 	// AccountPolicy, UserPolicy
-	{"GET /api/v1/admin/accounts", auth.PermissionManageUsers, true},
-	{"GET /api/v1/admin/accounts/{id}", auth.PermissionManageUsers, true},
-	{"DELETE /api/v1/admin/accounts/{id}", auth.PermissionDeleteUserData, false},
-	{"POST /api/v1/admin/accounts/{id}/action", auth.PermissionManageUsers, true},
-	{"POST /api/v1/admin/accounts/{id}/approve", auth.PermissionManageUsers, true},
-	{"POST /api/v1/admin/accounts/{id}/reject", auth.PermissionManageUsers, true},
-	{"POST /api/v1/admin/accounts/{id}/enable", auth.PermissionManageUsers, true},
-	{"POST /api/v1/admin/accounts/{id}/unsilence", auth.PermissionManageUsers, true},
-	{"POST /api/v1/admin/accounts/{id}/unsuspend", auth.PermissionManageUsers, true},
-	{"POST /api/v1/admin/accounts/{id}/unsensitive", auth.PermissionManageUsers, true},
+	{"GET /api/v1/admin/accounts", oauth.ScopeAdminReadAccounts, auth.PermissionManageUsers, true},
+	{"GET /api/v1/admin/accounts/{id}", oauth.ScopeAdminReadAccounts, auth.PermissionManageUsers, true},
+	{"DELETE /api/v1/admin/accounts/{id}", oauth.ScopeAdminWriteAccounts, auth.PermissionDeleteUserData, false},
+	{"POST /api/v1/admin/accounts/{id}/action", oauth.ScopeAdminWriteAccounts, auth.PermissionManageUsers, true},
+	{"POST /api/v1/admin/accounts/{id}/approve", oauth.ScopeAdminWriteAccounts, auth.PermissionManageUsers, true},
+	{"POST /api/v1/admin/accounts/{id}/reject", oauth.ScopeAdminWriteAccounts, auth.PermissionManageUsers, true},
+	{"POST /api/v1/admin/accounts/{id}/enable", oauth.ScopeAdminWriteAccounts, auth.PermissionManageUsers, true},
+	{"POST /api/v1/admin/accounts/{id}/unsilence", oauth.ScopeAdminWriteAccounts, auth.PermissionManageUsers, true},
+	{"POST /api/v1/admin/accounts/{id}/unsuspend", oauth.ScopeAdminWriteAccounts, auth.PermissionManageUsers, true},
+	{"POST /api/v1/admin/accounts/{id}/unsensitive", oauth.ScopeAdminWriteAccounts, auth.PermissionManageUsers, true},
 
 	// DomainAllowPolicy
-	{"GET /api/v1/admin/domain_allows", auth.PermissionManageFederation, false},
-	{"POST /api/v1/admin/domain_allows", auth.PermissionManageFederation, false},
-	{"GET /api/v1/admin/domain_allows/{id}", auth.PermissionManageFederation, false},
-	{"DELETE /api/v1/admin/domain_allows/{id}", auth.PermissionManageFederation, false},
+	{"GET /api/v1/admin/domain_allows", oauth.ScopeAdminReadDomainAllows, auth.PermissionManageFederation, false},
+	{"POST /api/v1/admin/domain_allows", oauth.ScopeAdminWriteDomainAllows, auth.PermissionManageFederation, false},
+	{"GET /api/v1/admin/domain_allows/{id}", oauth.ScopeAdminReadDomainAllows, auth.PermissionManageFederation, false},
+	{"DELETE /api/v1/admin/domain_allows/{id}", oauth.ScopeAdminWriteDomainAllows, auth.PermissionManageFederation, false},
 
 	// DomainBlockPolicy
-	{"GET /api/v1/admin/domain_blocks", auth.PermissionManageFederation, false},
-	{"POST /api/v1/admin/domain_blocks", auth.PermissionManageFederation, false},
-	{"GET /api/v1/admin/domain_blocks/{id}", auth.PermissionManageFederation, false},
-	{"PUT /api/v1/admin/domain_blocks/{id}", auth.PermissionManageFederation, false},
-	{"PATCH /api/v1/admin/domain_blocks/{id}", auth.PermissionManageFederation, false},
-	{"DELETE /api/v1/admin/domain_blocks/{id}", auth.PermissionManageFederation, false},
+	{"GET /api/v1/admin/domain_blocks", oauth.ScopeAdminReadDomainBlocks, auth.PermissionManageFederation, false},
+	{"POST /api/v1/admin/domain_blocks", oauth.ScopeAdminWriteDomainBlocks, auth.PermissionManageFederation, false},
+	{"GET /api/v1/admin/domain_blocks/{id}", oauth.ScopeAdminReadDomainBlocks, auth.PermissionManageFederation, false},
+	{"PUT /api/v1/admin/domain_blocks/{id}", oauth.ScopeAdminWriteDomainBlocks, auth.PermissionManageFederation, false},
+	{"PATCH /api/v1/admin/domain_blocks/{id}", oauth.ScopeAdminWriteDomainBlocks, auth.PermissionManageFederation, false},
+	{"DELETE /api/v1/admin/domain_blocks/{id}", oauth.ScopeAdminWriteDomainBlocks, auth.PermissionManageFederation, false},
 
 	// IpBlockPolicy
-	{"GET /api/v1/admin/ip_blocks", auth.PermissionManageBlocks, false},
-	{"POST /api/v1/admin/ip_blocks", auth.PermissionManageBlocks, false},
-	{"GET /api/v1/admin/ip_blocks/{id}", auth.PermissionManageBlocks, false},
-	{"PUT /api/v1/admin/ip_blocks/{id}", auth.PermissionManageBlocks, false},
-	{"PATCH /api/v1/admin/ip_blocks/{id}", auth.PermissionManageBlocks, false},
-	{"DELETE /api/v1/admin/ip_blocks/{id}", auth.PermissionManageBlocks, false},
+	{"GET /api/v1/admin/ip_blocks", oauth.ScopeAdminReadIPBlocks, auth.PermissionManageBlocks, false},
+	{"POST /api/v1/admin/ip_blocks", oauth.ScopeAdminWriteIPBlocks, auth.PermissionManageBlocks, false},
+	{"GET /api/v1/admin/ip_blocks/{id}", oauth.ScopeAdminReadIPBlocks, auth.PermissionManageBlocks, false},
+	{"PUT /api/v1/admin/ip_blocks/{id}", oauth.ScopeAdminWriteIPBlocks, auth.PermissionManageBlocks, false},
+	{"PATCH /api/v1/admin/ip_blocks/{id}", oauth.ScopeAdminWriteIPBlocks, auth.PermissionManageBlocks, false},
+	{"DELETE /api/v1/admin/ip_blocks/{id}", oauth.ScopeAdminWriteIPBlocks, auth.PermissionManageBlocks, false},
 
 	// CanonicalEmailBlockPolicy
-	{"GET /api/v1/admin/canonical_email_blocks", auth.PermissionManageBlocks, false},
-	{"POST /api/v1/admin/canonical_email_blocks", auth.PermissionManageBlocks, false},
-	{"GET /api/v1/admin/canonical_email_blocks/{id}", auth.PermissionManageBlocks, false},
-	{"DELETE /api/v1/admin/canonical_email_blocks/{id}", auth.PermissionManageBlocks, false},
-	{"POST /api/v1/admin/canonical_email_blocks/test", auth.PermissionManageBlocks, false},
+	{"GET /api/v1/admin/canonical_email_blocks", oauth.ScopeAdminReadCanonicalEmailBlocks, auth.PermissionManageBlocks, false},
+	{"POST /api/v1/admin/canonical_email_blocks", oauth.ScopeAdminWriteCanonicalEmailBlocks, auth.PermissionManageBlocks, false},
+	{"GET /api/v1/admin/canonical_email_blocks/{id}", oauth.ScopeAdminReadCanonicalEmailBlocks, auth.PermissionManageBlocks, false},
+	{"DELETE /api/v1/admin/canonical_email_blocks/{id}", oauth.ScopeAdminWriteCanonicalEmailBlocks, auth.PermissionManageBlocks, false},
+	{"POST /api/v1/admin/canonical_email_blocks/test", oauth.ScopeAdminReadCanonicalEmailBlocks, auth.PermissionManageBlocks, false},
 
 	// EmailDomainBlockPolicy
-	{"GET /api/v1/admin/email_domain_blocks", auth.PermissionManageBlocks, false},
-	{"POST /api/v1/admin/email_domain_blocks", auth.PermissionManageBlocks, false},
-	{"GET /api/v1/admin/email_domain_blocks/{id}", auth.PermissionManageBlocks, false},
-	{"DELETE /api/v1/admin/email_domain_blocks/{id}", auth.PermissionManageBlocks, false},
+	{"GET /api/v1/admin/email_domain_blocks", oauth.ScopeAdminReadEmailDomainBlocks, auth.PermissionManageBlocks, false},
+	{"POST /api/v1/admin/email_domain_blocks", oauth.ScopeAdminWriteEmailDomainBlocks, auth.PermissionManageBlocks, false},
+	{"GET /api/v1/admin/email_domain_blocks/{id}", oauth.ScopeAdminReadEmailDomainBlocks, auth.PermissionManageBlocks, false},
+	{"DELETE /api/v1/admin/email_domain_blocks/{id}", oauth.ScopeAdminWriteEmailDomainBlocks, auth.PermissionManageBlocks, false},
 
 	// TagPolicy
-	{"GET /api/v1/admin/tags", auth.PermissionManageTaxonomies, true},
-	{"GET /api/v1/admin/tags/{id}", auth.PermissionManageTaxonomies, true},
-	{"PUT /api/v1/admin/tags/{id}", auth.PermissionManageTaxonomies, true},
-	{"PATCH /api/v1/admin/tags/{id}", auth.PermissionManageTaxonomies, true},
+	{"GET /api/v1/admin/tags", oauth.ScopeAdminRead, auth.PermissionManageTaxonomies, true},
+	{"GET /api/v1/admin/tags/{id}", oauth.ScopeAdminRead, auth.PermissionManageTaxonomies, true},
+	{"PUT /api/v1/admin/tags/{id}", oauth.ScopeAdminWrite, auth.PermissionManageTaxonomies, true},
+	{"PATCH /api/v1/admin/tags/{id}", oauth.ScopeAdminWrite, auth.PermissionManageTaxonomies, true},
 
 	// ReportPolicy
-	{"GET /api/v1/admin/reports", auth.PermissionManageReports, true},
-	{"GET /api/v1/admin/reports/{id}", auth.PermissionManageReports, true},
-	{"PUT /api/v1/admin/reports/{id}", auth.PermissionManageReports, true},
-	{"PATCH /api/v1/admin/reports/{id}", auth.PermissionManageReports, true},
-	{"POST /api/v1/admin/reports/{id}/resolve", auth.PermissionManageReports, true},
-	{"POST /api/v1/admin/reports/{id}/assign_to_self", auth.PermissionManageReports, true},
-	{"POST /api/v1/admin/reports/{id}/unassign", auth.PermissionManageReports, true},
-	{"POST /api/v1/admin/reports/{id}/reopen", auth.PermissionManageReports, true},
+	{"GET /api/v1/admin/reports", oauth.ScopeAdminReadReports, auth.PermissionManageReports, true},
+	{"GET /api/v1/admin/reports/{id}", oauth.ScopeAdminReadReports, auth.PermissionManageReports, true},
+	{"PUT /api/v1/admin/reports/{id}", oauth.ScopeAdminWriteReports, auth.PermissionManageReports, true},
+	{"PATCH /api/v1/admin/reports/{id}", oauth.ScopeAdminWriteReports, auth.PermissionManageReports, true},
+	{"POST /api/v1/admin/reports/{id}/resolve", oauth.ScopeAdminWriteReports, auth.PermissionManageReports, true},
+	{"POST /api/v1/admin/reports/{id}/assign_to_self", oauth.ScopeAdminWriteReports, auth.PermissionManageReports, true},
+	{"POST /api/v1/admin/reports/{id}/unassign", oauth.ScopeAdminWriteReports, auth.PermissionManageReports, true},
+	{"POST /api/v1/admin/reports/{id}/reopen", oauth.ScopeAdminWriteReports, auth.PermissionManageReports, true},
 
 	// SettingsPolicy (instance settings are gotodon-specific)
-	{"GET /api/v1/admin/instance", auth.PermissionManageSettings, false},
-	{"PATCH /api/v1/admin/instance", auth.PermissionManageSettings, false},
+	{"GET /api/v1/admin/instance", oauth.ScopeAdminRead, auth.PermissionManageSettings, false},
+	{"PATCH /api/v1/admin/instance", oauth.ScopeAdminWrite, auth.PermissionManageSettings, false},
 
 	// TagPolicy#review?, Admin::StatusPolicy#review?, PreviewCardPolicy,
 	// PreviewCardProviderPolicy
-	{"GET /api/v1/admin/trends/tags", auth.PermissionManageTaxonomies, true},
-	{"POST /api/v1/admin/trends/tags/{id}/approve", auth.PermissionManageTaxonomies, true},
-	{"POST /api/v1/admin/trends/tags/{id}/reject", auth.PermissionManageTaxonomies, true},
-	{"GET /api/v1/admin/trends/statuses", auth.PermissionManageTaxonomies, true},
-	{"POST /api/v1/admin/trends/statuses/{id}/approve", auth.PermissionManageTaxonomies, true},
-	{"POST /api/v1/admin/trends/statuses/{id}/reject", auth.PermissionManageTaxonomies, true},
-	{"GET /api/v1/admin/trends/links", auth.PermissionManageTaxonomies, true},
-	{"POST /api/v1/admin/trends/links/{id}/approve", auth.PermissionManageTaxonomies, true},
-	{"POST /api/v1/admin/trends/links/{id}/reject", auth.PermissionManageTaxonomies, true},
-	{"GET /api/v1/admin/trends/links/publishers", auth.PermissionManageTaxonomies, true},
-	{"POST /api/v1/admin/trends/links/publishers/{id}/approve", auth.PermissionManageTaxonomies, true},
-	{"POST /api/v1/admin/trends/links/publishers/{id}/reject", auth.PermissionManageTaxonomies, true},
+	{"GET /api/v1/admin/trends/tags", oauth.ScopeAdminRead, auth.PermissionManageTaxonomies, true},
+	{"POST /api/v1/admin/trends/tags/{id}/approve", oauth.ScopeAdminWrite, auth.PermissionManageTaxonomies, true},
+	{"POST /api/v1/admin/trends/tags/{id}/reject", oauth.ScopeAdminWrite, auth.PermissionManageTaxonomies, true},
+	{"GET /api/v1/admin/trends/statuses", oauth.ScopeAdminRead, auth.PermissionManageTaxonomies, true},
+	{"POST /api/v1/admin/trends/statuses/{id}/approve", oauth.ScopeAdminWrite, auth.PermissionManageTaxonomies, true},
+	{"POST /api/v1/admin/trends/statuses/{id}/reject", oauth.ScopeAdminWrite, auth.PermissionManageTaxonomies, true},
+	{"GET /api/v1/admin/trends/links", oauth.ScopeAdminRead, auth.PermissionManageTaxonomies, true},
+	{"POST /api/v1/admin/trends/links/{id}/approve", oauth.ScopeAdminWrite, auth.PermissionManageTaxonomies, true},
+	{"POST /api/v1/admin/trends/links/{id}/reject", oauth.ScopeAdminWrite, auth.PermissionManageTaxonomies, true},
+	{"GET /api/v1/admin/trends/links/publishers", oauth.ScopeAdminRead, auth.PermissionManageTaxonomies, true},
+	{"POST /api/v1/admin/trends/links/publishers/{id}/approve", oauth.ScopeAdminWrite, auth.PermissionManageTaxonomies, true},
+	{"POST /api/v1/admin/trends/links/publishers/{id}/reject", oauth.ScopeAdminWrite, auth.PermissionManageTaxonomies, true},
 
 	// DashboardPolicy
-	{"POST /api/v1/admin/dimensions", auth.PermissionViewDashboard, true},
-	{"POST /api/v1/admin/measures", auth.PermissionViewDashboard, true},
-	{"POST /api/v1/admin/retention", auth.PermissionViewDashboard, true},
+	{"POST /api/v1/admin/dimensions", oauth.ScopeAdminRead, auth.PermissionViewDashboard, true},
+	{"POST /api/v1/admin/measures", oauth.ScopeAdminRead, auth.PermissionViewDashboard, true},
+	{"POST /api/v1/admin/retention", oauth.ScopeAdminRead, auth.PermissionViewDashboard, true},
 }
 
 func TestAdminRoutesAllDeclarePermissions(t *testing.T) {
@@ -247,37 +251,134 @@ func adminRouteRequest(pattern string) *http.Request {
 	return req
 }
 
+// readPOSTs are the POST routes that only read, which Mastodon guards with
+// admin:read.
+var readPOSTs = []string{
+	"POST /api/v1/admin/canonical_email_blocks/test",
+	"POST /api/v1/admin/dimensions",
+	"POST /api/v1/admin/measures",
+	"POST /api/v1/admin/retention",
+}
+
+// isReadScope reports whether scope is admin:read or one of its children.
+func isReadScope(scope string) bool {
+	return scope == oauth.ScopeAdminRead || strings.HasPrefix(scope, oauth.ScopeAdminRead+":")
+}
+
+// TestAdminRoutesScopeColumn keeps the scope column consistent with the
+// routes' methods: GET routes and readPOSTs need a read scope, every other
+// route a write scope, and every scope is one WithAccess accepts.
+func TestAdminRoutesScopeColumn(t *testing.T) {
+	for _, route := range adminRoutes {
+		if !isAdminScope(route.scope) {
+			t.Errorf("%s: %q is not an admin scope", route.pattern, route.scope)
+		}
+		method, _, _ := strings.Cut(route.pattern, " ")
+		wantRead := method == http.MethodGet || slices.Contains(readPOSTs, route.pattern)
+		if got := isReadScope(route.scope); got != wantRead {
+			t.Errorf("%s: scope %q is a read scope = %t, want %t", route.pattern, route.scope, got, wantRead)
+		}
+	}
+}
+
 func TestAdminRoutesAuthorization(t *testing.T) {
+	const (
+		invalidToken  = "The access token is invalid"
+		outsideScopes = "This action is outside the authorized scopes"
+		notAllowed    = "This action is not allowed"
+	)
+
 	type caller struct {
 		name          string
 		authenticated bool
 		hasRole       bool
 		permissions   func(routePermission int64) int64
-		allowed       func(route int) bool
-		refusal       int
+		// scopes returns the token's scopes for a route; nil leaves them
+		// out of the context.
+		scopes  func(route int) string
+		allowed func(route int) bool
+		refusal int
+		message string
 	}
 	always := func(int) bool { return true }
 	never := func(int) bool { return false }
 	fixed := func(p int64) func(int64) int64 { return func(int64) int64 { return p } }
+	token := func(scopes string) func(int) string { return func(int) string { return scopes } }
+	reads := func(route int) bool { return isReadScope(adminRoutes[route].scope) }
+	writes := func(route int) bool { return !reads(route) }
+	routeScopeIs := func(scope string) func(int) bool {
+		return func(route int) bool { return adminRoutes[route].scope == scope }
+	}
+	parentScope := func(route int) string {
+		if reads(route) {
+			return oauth.ScopeAdminRead
+		}
+		return oauth.ScopeAdminWrite
+	}
+	// everyOtherAdminScope holds every admin scope but the route's own and
+	// its parent, so the per-resource scopes are refused on routes that need
+	// a parent, and no resource's scope covers another's.
+	everyOtherAdminScope := func(route int) string {
+		var scopes []string
+		for scope := range oauth.ValidScopes {
+			if isAdminScope(scope) && scope != adminRoutes[route].scope && scope != parentScope(route) {
+				scopes = append(scopes, scope)
+			}
+		}
+		slices.Sort(scopes)
+		return strings.Join(scopes, " ")
+	}
+	owner := caller{authenticated: true, hasRole: true, permissions: fixed(ownerPermissions)}
+	ownerWith := func(name string, scopes func(int) string, allowed func(int) bool) caller {
+		c := owner
+		c.name, c.scopes, c.allowed = name, scopes, allowed
+		c.refusal, c.message = http.StatusForbidden, outsideScopes
+		return c
+	}
 
 	callers := []caller{
-		{name: "unauthenticated", allowed: never, refusal: http.StatusUnauthorized},
-		{name: "user without a role", authenticated: true, allowed: never, refusal: http.StatusForbidden},
-		{name: "Owner", authenticated: true, hasRole: true, permissions: fixed(ownerPermissions), allowed: always},
-		{name: "Admin", authenticated: true, hasRole: true, permissions: fixed(adminPermissions), allowed: always},
-		{name: "administrator bit only", authenticated: true, hasRole: true, permissions: fixed(auth.PermissionAdministrator), allowed: always},
+		// Identity and role, with a token holding both admin scopes.
+		{name: "unauthenticated", allowed: never, refusal: http.StatusUnauthorized, message: invalidToken},
+		{name: "app token with admin scopes", scopes: token(adminToken), allowed: never, refusal: http.StatusUnauthorized, message: invalidToken},
+		{name: "user without a role", authenticated: true, scopes: token(adminToken), allowed: never, refusal: http.StatusForbidden, message: notAllowed},
+		{name: "Owner", authenticated: true, hasRole: true, permissions: fixed(ownerPermissions), scopes: token(adminToken), allowed: always},
+		{name: "Admin", authenticated: true, hasRole: true, permissions: fixed(adminPermissions), scopes: token(adminToken), allowed: always},
+		{name: "administrator bit only", authenticated: true, hasRole: true, permissions: fixed(auth.PermissionAdministrator), scopes: token(adminToken), allowed: always},
 		{
-			name: "Moderator", authenticated: true, hasRole: true, permissions: fixed(moderatorPermissions),
-			allowed: func(route int) bool { return adminRoutes[route].moderator }, refusal: http.StatusForbidden,
+			name: "Moderator", authenticated: true, hasRole: true, permissions: fixed(moderatorPermissions), scopes: token(adminToken),
+			allowed: func(route int) bool { return adminRoutes[route].moderator }, refusal: http.StatusForbidden, message: notAllowed,
 		},
 		{
 			name: "exactly the route's permission", authenticated: true, hasRole: true,
-			permissions: func(p int64) int64 { return p }, allowed: always,
+			permissions: func(p int64) int64 { return p }, scopes: token(adminToken), allowed: always,
 		},
 		{
 			name: "every permission but the route's", authenticated: true, hasRole: true,
 			permissions: func(p int64) int64 { return auth.PermissionAll &^ (p | auth.PermissionAdministrator) },
-			allowed:     never, refusal: http.StatusForbidden,
+			scopes:      token(adminToken), allowed: never, refusal: http.StatusForbidden, message: notAllowed,
+		},
+
+		// Scopes, for an Owner.
+		ownerWith("Owner, read write follow push", token("read write follow push"), never),
+		ownerWith("Owner, empty scope string", token(""), never),
+		ownerWith("Owner, no scopes", nil, never),
+		ownerWith("Owner, admin:read", token(oauth.ScopeAdminRead), reads),
+		ownerWith("Owner, admin:write", token(oauth.ScopeAdminWrite), writes),
+		ownerWith("Owner, read write admin:read", token("read write admin:read"), reads),
+		ownerWith("Owner, exactly the route's scope", func(route int) string { return adminRoutes[route].scope }, always),
+		ownerWith("Owner, the route's parent scope", parentScope, always),
+		ownerWith("Owner, every other admin scope", everyOtherAdminScope, never),
+		ownerWith("Owner, admin:read:accounts", token(oauth.ScopeAdminReadAccounts), routeScopeIs(oauth.ScopeAdminReadAccounts)),
+		ownerWith("Owner, admin:write:accounts", token(oauth.ScopeAdminWriteAccounts), routeScopeIs(oauth.ScopeAdminWriteAccounts)),
+		ownerWith("Owner, admin:write:domain_blocks", token(oauth.ScopeAdminWriteDomainBlocks), routeScopeIs(oauth.ScopeAdminWriteDomainBlocks)),
+		ownerWith("Owner, admin:read:canonical_email_blocks", token(oauth.ScopeAdminReadCanonicalEmailBlocks), routeScopeIs(oauth.ScopeAdminReadCanonicalEmailBlocks)),
+
+		// The scope is checked before the role is looked up.
+		{name: "user without a role, user scopes", authenticated: true, scopes: token("read write follow push"), allowed: never, refusal: http.StatusForbidden, message: outsideScopes},
+		{
+			name: "every permission but the route's, user scopes", authenticated: true, hasRole: true,
+			permissions: func(p int64) int64 { return auth.PermissionAll &^ (p | auth.PermissionAdministrator) },
+			scopes:      token("read write follow push"), allowed: never, refusal: http.StatusForbidden, message: outsideScopes,
 		},
 	}
 
@@ -297,6 +398,9 @@ func TestAdminRoutesAuthorization(t *testing.T) {
 				if c.authenticated {
 					req = withIdentity(req, int64Ptr(10), int64Ptr(20))
 				}
+				if c.scopes != nil {
+					req = withScopes(req, c.scopes(i))
+				}
 				if _, matched := mux.Handler(req); matched != route.pattern {
 					t.Fatalf("request for %s matched %q", route.pattern, matched)
 				}
@@ -312,6 +416,13 @@ func TestAdminRoutesAuthorization(t *testing.T) {
 				}
 				if rec.Code != c.refusal {
 					t.Errorf("%s: status = %d (%s), want %d", route.pattern, rec.Code, strings.TrimSpace(rec.Body.String()), c.refusal)
+					continue
+				}
+				if got := errorMessage(t, rec); got != c.message {
+					t.Errorf("%s: error = %q, want %q", route.pattern, got, c.message)
+				}
+				if c.message == outsideScopes && (len(roles.userLookups) != 0 || len(roles.roleLookups) != 0) {
+					t.Errorf("%s: refused by scope after looking up users %v and roles %v", route.pattern, roles.userLookups, roles.roleLookups)
 				}
 			}
 		})
@@ -327,7 +438,7 @@ func TestAdminRoutesWithoutDatabase(t *testing.T) {
 	NewReportsHandler(nil).RegisterRoutes(mux)
 
 	for _, pattern := range mux.patterns {
-		req := withIdentity(adminRouteRequest(pattern), int64Ptr(10), int64Ptr(20))
+		req := withScopes(withIdentity(adminRouteRequest(pattern), int64Ptr(10), int64Ptr(20)), adminToken)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 

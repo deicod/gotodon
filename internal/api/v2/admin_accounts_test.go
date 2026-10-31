@@ -89,25 +89,51 @@ type failingRow struct{}
 
 func (failingRow) Scan(...any) error { return errDatabase }
 
-// GET /api/v2/admin/accounts needs manage_users (AccountPolicy#index?).
+// GET /api/v2/admin/accounts needs manage_users (AccountPolicy#index?) and
+// admin:read:accounts, which Api::V2::Admin::AccountsController inherits
+// from the v1 controller.
 func TestAdminAccountsHandler_RouteAuthorization(t *testing.T) {
+	const (
+		adminToken    = "admin:read admin:write"
+		outsideScopes = "This action is outside the authorized scopes"
+		notAllowed    = "This action is not allowed"
+	)
+	owner := stubRoles{hasRole: true, permissions: -1}
+
 	tests := []struct {
 		name          string
 		authenticated bool
-		roles         stubRoles
-		wantStatus    int
+		// scopes is the token's scope string; noScopes leaves it out of
+		// the context.
+		scopes      string
+		noScopes    bool
+		roles       stubRoles
+		wantStatus  int
+		wantMessage string
 	}{
-		{"unauthenticated", false, stubRoles{hasRole: true, permissions: -1}, http.StatusUnauthorized},
-		{"user without a role", true, stubRoles{}, http.StatusForbidden},
-		{"Owner", true, stubRoles{hasRole: true, permissions: -1}, http.StatusInternalServerError},
-		{"Admin", true, stubRoles{hasRole: true, permissions: 2031612}, http.StatusInternalServerError},
-		{"Moderator", true, stubRoles{hasRole: true, permissions: 1049884}, http.StatusInternalServerError},
-		{"manage_users only", true, stubRoles{hasRole: true, permissions: auth.PermissionManageUsers}, http.StatusInternalServerError},
+		{"unauthenticated", false, "", true, owner, http.StatusUnauthorized, "The access token is invalid"},
+		{"app token with admin scopes", false, adminToken, false, owner, http.StatusUnauthorized, "The access token is invalid"},
+		{"user without a role", true, adminToken, false, stubRoles{}, http.StatusForbidden, notAllowed},
+		{"Owner", true, adminToken, false, owner, http.StatusInternalServerError, ""},
+		{"Admin", true, adminToken, false, stubRoles{hasRole: true, permissions: 2031612}, http.StatusInternalServerError, ""},
+		{"Moderator", true, adminToken, false, stubRoles{hasRole: true, permissions: 1049884}, http.StatusInternalServerError, ""},
+		{"manage_users only", true, adminToken, false, stubRoles{hasRole: true, permissions: auth.PermissionManageUsers}, http.StatusInternalServerError, ""},
 		{
-			"every permission but manage_users", true,
+			"every permission but manage_users", true, adminToken, false,
 			stubRoles{hasRole: true, permissions: auth.PermissionAll &^ (auth.PermissionManageUsers | auth.PermissionAdministrator)},
-			http.StatusForbidden,
+			http.StatusForbidden, notAllowed,
 		},
+
+		// Scopes, for an Owner.
+		{"Owner, admin:read", true, "admin:read", false, owner, http.StatusInternalServerError, ""},
+		{"Owner, admin:read:accounts", true, "admin:read:accounts", false, owner, http.StatusInternalServerError, ""},
+		{"Owner, read write follow push", true, "read write follow push", false, owner, http.StatusForbidden, outsideScopes},
+		{"Owner, empty scope string", true, "", false, owner, http.StatusForbidden, outsideScopes},
+		{"Owner, no scopes", true, "", true, owner, http.StatusForbidden, outsideScopes},
+		{"Owner, admin:write", true, "admin:write", false, owner, http.StatusForbidden, outsideScopes},
+		{"Owner, admin:write:accounts", true, "admin:write:accounts", false, owner, http.StatusForbidden, outsideScopes},
+		{"Owner, admin:read:reports", true, "admin:read:reports", false, owner, http.StatusForbidden, outsideScopes},
+		{"user without a role, user scopes", true, "read write", false, stubRoles{}, http.StatusForbidden, outsideScopes},
 	}
 
 	for _, tt := range tests {
@@ -118,17 +144,24 @@ func TestAdminAccountsHandler_RouteAuthorization(t *testing.T) {
 			h.RegisterRoutes(mux)
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v2/admin/accounts", nil)
+			ctx := req.Context()
 			if tt.authenticated {
-				ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(10))
+				ctx = context.WithValue(ctx, middleware.ContextKeyAccountID, int64(10))
 				ctx = context.WithValue(ctx, middleware.ContextKeyUserID, int64(20))
-				req = req.WithContext(ctx)
 			}
+			if !tt.noScopes {
+				ctx = context.WithValue(ctx, middleware.ContextKeyScopes, tt.scopes)
+			}
+			req = req.WithContext(ctx)
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, req)
 
 			// Allowed requests reach the handler, whose queries fail with 500.
 			if rec.Code != tt.wantStatus {
 				t.Fatalf("status = %d (%s), want %d", rec.Code, strings.TrimSpace(rec.Body.String()), tt.wantStatus)
+			}
+			if tt.wantMessage != "" && !strings.Contains(rec.Body.String(), tt.wantMessage) {
+				t.Fatalf("body = %s, want error %q", strings.TrimSpace(rec.Body.String()), tt.wantMessage)
 			}
 		})
 	}

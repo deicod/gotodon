@@ -11,6 +11,7 @@ import (
 	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 // DomainBlocksHandler handles admin domain block endpoints
@@ -313,14 +314,17 @@ func (h *DomainBlocksHandler) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 // RegisterRoutes registers domain block routes. Every action needs
-// manage_federation, as in Mastodon's DomainBlockPolicy.
+// manage_federation, as in Mastodon's DomainBlockPolicy. Reads need
+// admin:read:domain_blocks and writes admin:write:domain_blocks, as in
+// Api::V1::Admin::DomainBlocksController.
 func (h *DomainBlocksHandler) RegisterRoutes(mux RouteRegistrar) {
-	manageFederation := WithPermission(h.roles, auth.PermissionManageFederation)
+	read := WithAccess(h.roles, oauth.ScopeAdminReadDomainBlocks, auth.PermissionManageFederation)
+	write := WithAccess(h.roles, oauth.ScopeAdminWriteDomainBlocks, auth.PermissionManageFederation)
 
-	mux.HandleFunc("GET /api/v1/admin/domain_blocks", manageFederation(h.GetAll))
-	mux.HandleFunc("POST /api/v1/admin/domain_blocks", manageFederation(h.Create))
-	mux.HandleFunc("GET /api/v1/admin/domain_blocks/{id}", manageFederation(h.Get))
-	mux.HandleFunc("PUT /api/v1/admin/domain_blocks/{id}", manageFederation(h.Update))
-	mux.HandleFunc("PATCH /api/v1/admin/domain_blocks/{id}", manageFederation(h.Update))
-	mux.HandleFunc("DELETE /api/v1/admin/domain_blocks/{id}", manageFederation(h.Delete))
+	mux.HandleFunc("GET /api/v1/admin/domain_blocks", read(h.GetAll))
+	mux.HandleFunc("POST /api/v1/admin/domain_blocks", write(h.Create))
+	mux.HandleFunc("GET /api/v1/admin/domain_blocks/{id}", read(h.Get))
+	mux.HandleFunc("PUT /api/v1/admin/domain_blocks/{id}", write(h.Update))
+	mux.HandleFunc("PATCH /api/v1/admin/domain_blocks/{id}", write(h.Update))
+	mux.HandleFunc("DELETE /api/v1/admin/domain_blocks/{id}", write(h.Delete))
 }

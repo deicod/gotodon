@@ -13,6 +13,7 @@ import (
 	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 // DomainAllowsHandler handles admin domain allow endpoints.
@@ -168,12 +169,15 @@ func (h *DomainAllowsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 // RegisterRoutes registers domain allow routes. Every action needs
-// manage_federation, as in Mastodon's DomainAllowPolicy.
+// manage_federation, as in Mastodon's DomainAllowPolicy. Reads need
+// admin:read:domain_allows and writes admin:write:domain_allows, as in
+// Api::V1::Admin::DomainAllowsController.
 func (h *DomainAllowsHandler) RegisterRoutes(mux RouteRegistrar) {
-	manageFederation := WithPermission(h.roles, auth.PermissionManageFederation)
+	read := WithAccess(h.roles, oauth.ScopeAdminReadDomainAllows, auth.PermissionManageFederation)
+	write := WithAccess(h.roles, oauth.ScopeAdminWriteDomainAllows, auth.PermissionManageFederation)
 
-	mux.HandleFunc("GET /api/v1/admin/domain_allows", manageFederation(h.GetAll))
-	mux.HandleFunc("POST /api/v1/admin/domain_allows", manageFederation(h.Create))
-	mux.HandleFunc("GET /api/v1/admin/domain_allows/{id}", manageFederation(h.Get))
-	mux.HandleFunc("DELETE /api/v1/admin/domain_allows/{id}", manageFederation(h.Delete))
+	mux.HandleFunc("GET /api/v1/admin/domain_allows", read(h.GetAll))
+	mux.HandleFunc("POST /api/v1/admin/domain_allows", write(h.Create))
+	mux.HandleFunc("GET /api/v1/admin/domain_allows/{id}", read(h.Get))
+	mux.HandleFunc("DELETE /api/v1/admin/domain_allows/{id}", write(h.Delete))
 }

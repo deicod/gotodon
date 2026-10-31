@@ -827,3 +827,102 @@ func TestAppsHandler_VerifyCredentials_RequireAuthRevokedTokenMessage(t *testing
 		t.Fatalf("error = %v, want %q", errResp["error"], "The access token was revoked")
 	}
 }
+
+// TestAppsHandler_Create_AdminScopes checks that apps can register with the
+// admin scopes the admin API requires, and with nothing outside the list.
+func TestAppsHandler_Create_AdminScopes(t *testing.T) {
+	var allAdmin []string
+	for _, scope := range pkgoauth.SupportedScopes() {
+		if strings.HasPrefix(scope, "admin:") {
+			allAdmin = append(allAdmin, scope)
+		}
+	}
+	if len(allAdmin) != 16 {
+		t.Fatalf("SupportedScopes has %d admin scopes, want 16: %v", len(allAdmin), allAdmin)
+	}
+
+	tests := []struct {
+		name       string
+		form       bool
+		scopes     string
+		wantStatus int
+	}{
+		{"both admin scopes", false, "read write admin:read admin:write", http.StatusOK},
+		{"both admin scopes, form-encoded", true, "read write admin:read admin:write", http.StatusOK},
+		{"per-resource admin scopes", false, "admin:read:accounts admin:write:domain_blocks", http.StatusOK},
+		{"every admin scope", false, strings.Join(allAdmin, " "), http.StatusOK},
+		{"unknown admin resource", false, "read admin:read:custom_emojis", http.StatusUnprocessableEntity},
+		{"admin namespace only", false, "admin", http.StatusUnprocessableEntity},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stub := &stubAppsQueries{
+				app: db.OauthApplication{
+					ID:          105,
+					Name:        "Admin Tool",
+					Uid:         "generated-client-id",
+					Secret:      "generated-client-secret",
+					Scopes:      tt.scopes,
+					RedirectUri: "https://example.com/callback",
+				},
+			}
+			h := NewAppsHandler(stub, &config.Config{})
+
+			var req *http.Request
+			if tt.form {
+				form := url.Values{
+					"client_name":   []string{"Admin Tool"},
+					"redirect_uris": []string{"https://example.com/callback"},
+					"scopes":        []string{tt.scopes},
+				}
+				req = httptest.NewRequest(http.MethodPost, "/api/v1/apps", strings.NewReader(form.Encode()))
+				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			} else {
+				body, err := json.Marshal(map[string]string{
+					"client_name":   "Admin Tool",
+					"redirect_uris": "https://example.com/callback",
+					"scopes":        tt.scopes,
+				})
+				if err != nil {
+					t.Fatalf("marshal body: %v", err)
+				}
+				req = httptest.NewRequest(http.MethodPost, "/api/v1/apps", strings.NewReader(string(body)))
+				req.Header.Set("Content-Type", "application/json")
+			}
+			rec := httptest.NewRecorder()
+
+			h.Create(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d (%s), want %d", rec.Code, rec.Body.String(), tt.wantStatus)
+			}
+			if tt.wantStatus != http.StatusOK {
+				if stub.createArg.Name != "" {
+					t.Fatalf("app with invalid scopes was stored: %+v", stub.createArg)
+				}
+				var resp map[string]any
+				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+					t.Fatalf("unmarshal response: %v", err)
+				}
+				if resp["error"] != "Validation failed: Scopes is not included in the list" {
+					t.Fatalf("error = %v", resp["error"])
+				}
+				return
+			}
+
+			if got := stub.createArg.Scopes; got != tt.scopes {
+				t.Fatalf("stored scopes = %q, want %q", got, tt.scopes)
+			}
+			var resp struct {
+				Scopes []string `json:"scopes"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("unmarshal response: %v", err)
+			}
+			if got := strings.Join(resp.Scopes, " "); got != tt.scopes {
+				t.Fatalf("response scopes = %q, want %q", got, tt.scopes)
+			}
+		})
+	}
+}

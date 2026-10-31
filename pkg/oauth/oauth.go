@@ -32,9 +32,26 @@ const (
 	ScopeFollow = "follow"
 	ScopePush   = "push"
 
-	// Admin scopes
+	// Admin scopes. admin:read and admin:write cover their per-resource
+	// children (see HasScope).
 	ScopeAdminRead  = "admin:read"
 	ScopeAdminWrite = "admin:write"
+
+	ScopeAdminReadAccounts             = "admin:read:accounts"
+	ScopeAdminReadReports              = "admin:read:reports"
+	ScopeAdminReadDomainAllows         = "admin:read:domain_allows"
+	ScopeAdminReadDomainBlocks         = "admin:read:domain_blocks"
+	ScopeAdminReadIPBlocks             = "admin:read:ip_blocks"
+	ScopeAdminReadEmailDomainBlocks    = "admin:read:email_domain_blocks"
+	ScopeAdminReadCanonicalEmailBlocks = "admin:read:canonical_email_blocks"
+
+	ScopeAdminWriteAccounts             = "admin:write:accounts"
+	ScopeAdminWriteReports              = "admin:write:reports"
+	ScopeAdminWriteDomainAllows         = "admin:write:domain_allows"
+	ScopeAdminWriteDomainBlocks         = "admin:write:domain_blocks"
+	ScopeAdminWriteIPBlocks             = "admin:write:ip_blocks"
+	ScopeAdminWriteEmailDomainBlocks    = "admin:write:email_domain_blocks"
+	ScopeAdminWriteCanonicalEmailBlocks = "admin:write:canonical_email_blocks"
 )
 
 // ValidScopes is the list of all valid Mastodon scopes
