@@ -12,13 +12,16 @@ import (
 	_ "image/png" // decodes PNG headers for image.DecodeConfig
 	"io"
 	"log/slog"
+	"math"
 	"mime"
 	"net/http"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	_ "golang.org/x/image/webp" // decodes WebP headers for image.DecodeConfig
@@ -97,7 +100,7 @@ type customEmojiStore interface {
 	GetCustomEmojiCategoriesByIDs(ctx context.Context, ids []int64) ([]db.GetCustomEmojiCategoriesByIDsRow, error)
 	LocalCustomEmojiShortcodeTaken(ctx context.Context, shortcode string) (bool, error)
 	AdminCreateCustomEmoji(ctx context.Context, arg db.AdminCreateCustomEmojiParams) (db.CustomEmoji, error)
-	DeleteCustomEmoji(ctx context.Context, id int64) error
+	DeleteCustomEmoji(ctx context.Context, id int64) (db.CustomEmoji, error)
 }
 
 // CustomEmojisHandler handles the admin custom emoji endpoints.
@@ -139,17 +142,36 @@ func mapAdminCustomEmoji(emoji db.CustomEmoji, categoryName string) map[string]a
 	return resp
 }
 
-// List handles GET /api/v1/admin/custom_emojis
+// List handles GET /api/v1/admin/custom_emojis. It returns local and
+// remote emojis, newest first, paged as the other admin lists are: limit
+// takes 1 to 200 and defaults to 100, offset defaults to 0. Values outside
+// those ranges fall back to the defaults; an offset beyond the last emoji
+// returns an empty page.
 func (h *CustomEmojisHandler) List(w http.ResponseWriter, r *http.Request) {
-	limit := 40 // simple pagination
-	offset := 0
+	ctx := r.Context()
 
-	emojis, err := h.store.AdminListCustomEmojis(r.Context(), db.AdminListCustomEmojisParams{
+	limit := 100
+	if l := web.QueryParam(r, "limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 200 {
+			limit = parsed
+		}
+	}
+	offset := int64(0)
+	if o := web.QueryParam(r, "offset"); o != "" {
+		if parsed, err := strconv.ParseInt(o, 10, 64); err == nil && parsed >= 0 {
+			offset = min(parsed, math.MaxInt32)
+		} else if errors.Is(err, strconv.ErrRange) && !strings.HasPrefix(o, "-") {
+			offset = math.MaxInt32
+		}
+	}
+
+	emojis, err := h.store.AdminListCustomEmojis(ctx, db.AdminListCustomEmojisParams{
 		Limit:  int32(limit),
 		Offset: int32(offset),
 	})
 	if err != nil {
-		web.JSONError(w, http.StatusInternalServerError, "Failed to list emojis")
+		slog.ErrorContext(ctx, "Listing custom emojis failed", "error", err)
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
@@ -168,9 +190,10 @@ func (h *CustomEmojisHandler) List(w http.ResponseWriter, r *http.Request) {
 			categoryIDs = append(categoryIDs, emoji.CategoryID.Int64)
 		}
 		if len(categoryIDs) > 0 {
-			rows, err := h.store.GetCustomEmojiCategoriesByIDs(r.Context(), categoryIDs)
+			rows, err := h.store.GetCustomEmojiCategoriesByIDs(ctx, categoryIDs)
 			if err != nil {
-				web.JSONError(w, http.StatusInternalServerError, "Failed to load emoji categories")
+				slog.ErrorContext(ctx, "Loading custom emoji categories failed", "error", err)
+				web.JSONError(w, http.StatusInternalServerError, "Database error")
 				return
 			}
 			for _, row := range rows {
@@ -181,7 +204,6 @@ func (h *CustomEmojisHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Response format matches Admin API
 	resp := make([]map[string]any, len(emojis))
 	for i, e := range emojis {
 		categoryName := ""
@@ -435,24 +457,52 @@ func (h *CustomEmojisHandler) removeImage(ctx context.Context, path string) {
 	}
 }
 
-// Delete handles DELETE /api/v1/admin/custom_emojis/:id
+// storedCustomEmojiFiles returns the files stored for an emoji, which
+// Delete removes. Create stores the original image under
+// customEmojiImageDir; a file name outside it wasn't stored there and is
+// left alone, so a stray value can't point Delete at another file.
+func storedCustomEmojiFiles(emoji db.CustomEmoji) []string {
+	name := emoji.ImageFileName.String
+	if !emoji.ImageFileName.Valid || !strings.HasPrefix(name, customEmojiImageDir) || path.Clean(name) != name {
+		return nil
+	}
+	return []string{name}
+}
+
+// Delete handles DELETE /api/v1/admin/custom_emojis/:id. Deleting the row
+// deletes the reactions made with the emoji through their foreign key; the
+// stored files are removed afterwards, and a failure to remove them is
+// logged without failing the request.
 func (h *CustomEmojisHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	idStr := web.Param(r, "id")
-	id, err := strconv.ParseInt(idStr, 10, 64)
+	ctx := r.Context()
+
+	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
 		return
 	}
 
-	err = h.store.DeleteCustomEmoji(r.Context(), id)
+	emoji, err := h.store.DeleteCustomEmoji(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return
+	}
 	if err != nil {
-		web.JSONError(w, http.StatusInternalServerError, "Failed to delete")
+		slog.ErrorContext(ctx, "Deleting custom emoji failed", "id", id, "error", err)
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
-	web.JSON(w, http.StatusOK, map[string]any{
-		"id": idStr,
-	})
+	files := storedCustomEmojiFiles(emoji)
+	if len(files) == 0 && emoji.ImageFileName.String != "" {
+		slog.WarnContext(ctx, "Not removing custom emoji image outside the custom emoji directory",
+			"id", id, "image_file_name", emoji.ImageFileName.String)
+	}
+	for _, file := range files {
+		h.removeImage(ctx, file)
+	}
+
+	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
 // RegisterRoutes registers the custom emoji routes. Mastodon has no REST API

@@ -56,8 +56,9 @@ INSERT INTO custom_emojis (
     $1, $2, $3, $4, $5, NOW(), $6, $7, NOW(), NOW()
 ) RETURNING *;
 
--- name: DeleteCustomEmoji :exec
-DELETE FROM custom_emojis WHERE id = $1;
+-- name: DeleteCustomEmoji :one
+DELETE FROM custom_emojis WHERE id = $1
+RETURNING *;
 
 -- name: UpdateCustomEmoji :one
 UPDATE custom_emojis

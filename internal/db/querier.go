@@ -240,7 +240,7 @@ type Querier interface {
 	DeleteBookmark(ctx context.Context, arg DeleteBookmarkParams) error
 	DeleteConversation(ctx context.Context, id int64) error
 	DeleteConversationMute(ctx context.Context, arg DeleteConversationMuteParams) error
-	DeleteCustomEmoji(ctx context.Context, id int64) error
+	DeleteCustomEmoji(ctx context.Context, id int64) (CustomEmoji, error)
 	DeleteDomainAllow(ctx context.Context, id int64) error
 	DeleteDomainAllowByDomain(ctx context.Context, domain string) error
 	DeleteDomainBlock(ctx context.Context, arg DeleteDomainBlockParams) error
