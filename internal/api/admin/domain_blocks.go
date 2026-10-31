@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 )
@@ -15,12 +16,14 @@ import (
 // DomainBlocksHandler handles admin domain block endpoints
 type DomainBlocksHandler struct {
 	queries *db.Queries
+	roles   RoleLookup
 }
 
 // NewDomainBlocksHandler creates a new domain blocks handler
 func NewDomainBlocksHandler(queries *db.Queries) *DomainBlocksHandler {
 	return &DomainBlocksHandler{
 		queries: queries,
+		roles:   NewRoleLookup(queries),
 	}
 }
 
@@ -74,10 +77,6 @@ func intToSeverity(i int32) string {
 
 // GetAll handles GET /api/v1/admin/domain_blocks
 func (h *DomainBlocksHandler) GetAll(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	limit := 100
 	if l := web.QueryParam(r, "limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 200 {
@@ -120,10 +119,6 @@ func (h *DomainBlocksHandler) GetAll(w http.ResponseWriter, r *http.Request) {
 
 // Get handles GET /api/v1/admin/domain_blocks/:id
 func (h *DomainBlocksHandler) Get(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	blockID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
@@ -153,10 +148,6 @@ func (h *DomainBlocksHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 // Create handles POST /api/v1/admin/domain_blocks
 func (h *DomainBlocksHandler) Create(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	var req struct {
 		Domain         string `json:"domain" form:"domain"`
 		Severity       string `json:"severity" form:"severity"`
@@ -222,10 +213,6 @@ func (h *DomainBlocksHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 // Update handles PUT /api/v1/admin/domain_blocks/:id
 func (h *DomainBlocksHandler) Update(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	blockID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
@@ -311,10 +298,6 @@ func (h *DomainBlocksHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 // Delete handles DELETE /api/v1/admin/domain_blocks/:id
 func (h *DomainBlocksHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	blockID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
@@ -329,12 +312,15 @@ func (h *DomainBlocksHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
-// RegisterRoutes registers domain block routes
-func (h *DomainBlocksHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/admin/domain_blocks", h.GetAll)
-	mux.HandleFunc("POST /api/v1/admin/domain_blocks", h.Create)
-	mux.HandleFunc("GET /api/v1/admin/domain_blocks/{id}", h.Get)
-	mux.HandleFunc("PUT /api/v1/admin/domain_blocks/{id}", h.Update)
-	mux.HandleFunc("PATCH /api/v1/admin/domain_blocks/{id}", h.Update)
-	mux.HandleFunc("DELETE /api/v1/admin/domain_blocks/{id}", h.Delete)
+// RegisterRoutes registers domain block routes. Every action needs
+// manage_federation, as in Mastodon's DomainBlockPolicy.
+func (h *DomainBlocksHandler) RegisterRoutes(mux RouteRegistrar) {
+	manageFederation := WithPermission(h.roles, auth.PermissionManageFederation)
+
+	mux.HandleFunc("GET /api/v1/admin/domain_blocks", manageFederation(h.GetAll))
+	mux.HandleFunc("POST /api/v1/admin/domain_blocks", manageFederation(h.Create))
+	mux.HandleFunc("GET /api/v1/admin/domain_blocks/{id}", manageFederation(h.Get))
+	mux.HandleFunc("PUT /api/v1/admin/domain_blocks/{id}", manageFederation(h.Update))
+	mux.HandleFunc("PATCH /api/v1/admin/domain_blocks/{id}", manageFederation(h.Update))
+	mux.HandleFunc("DELETE /api/v1/admin/domain_blocks/{id}", manageFederation(h.Delete))
 }

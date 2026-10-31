@@ -17,6 +17,7 @@ import (
 	"golang.org/x/text/language"
 	"golang.org/x/text/language/display"
 
+	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
@@ -31,28 +32,31 @@ const (
 
 type DimensionsHandler struct {
 	queries *db.Queries
+	roles   RoleLookup
 	cfg     *config.Config
 	redis   *redis.Client
 }
 
 func NewDimensionsHandler(queries *db.Queries, cfg *config.Config, redisClient *redis.Client) *DimensionsHandler {
-	return &DimensionsHandler{queries: queries, cfg: cfg, redis: redisClient}
+	return &DimensionsHandler{queries: queries, roles: NewRoleLookup(queries), cfg: cfg, redis: redisClient}
 }
 
 type MeasuresHandler struct {
 	queries *db.Queries
+	roles   RoleLookup
 }
 
 func NewMeasuresHandler(queries *db.Queries) *MeasuresHandler {
-	return &MeasuresHandler{queries: queries}
+	return &MeasuresHandler{queries: queries, roles: NewRoleLookup(queries)}
 }
 
 type RetentionHandler struct {
 	queries *db.Queries
+	roles   RoleLookup
 }
 
 func NewRetentionHandler(queries *db.Queries) *RetentionHandler {
-	return &RetentionHandler{queries: queries}
+	return &RetentionHandler{queries: queries, roles: NewRoleLookup(queries)}
 }
 
 type metricsRequest struct {
@@ -112,9 +116,6 @@ type retentionData struct {
 }
 
 func (h *DimensionsHandler) Get(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
 	if h.queries == nil {
 		web.JSON(w, http.StatusOK, []dimensionResponse{})
 		return
@@ -259,9 +260,6 @@ func (h *DimensionsHandler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *MeasuresHandler) Get(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
 	if h.queries == nil {
 		web.JSON(w, http.StatusOK, []measureResponse{})
 		return
@@ -483,9 +481,6 @@ func (h *MeasuresHandler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RetentionHandler) Get(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
 	if h.queries == nil {
 		web.JSON(w, http.StatusOK, []retentionCohort{})
 		return
@@ -1739,17 +1734,26 @@ func stringPointer(value string) *string {
 	return &value
 }
 
-// RegisterDimensionsRoutes registers dimensions route.
-func (h *DimensionsHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/v1/admin/dimensions", h.Get)
+// RegisterRoutes registers the dimensions route. It needs view_dashboard, as
+// in Mastodon's DashboardPolicy.
+func (h *DimensionsHandler) RegisterRoutes(mux RouteRegistrar) {
+	viewDashboard := WithPermission(h.roles, auth.PermissionViewDashboard)
+
+	mux.HandleFunc("POST /api/v1/admin/dimensions", viewDashboard(h.Get))
 }
 
-// RegisterMeasuresRoutes registers measures route.
-func (h *MeasuresHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/v1/admin/measures", h.Get)
+// RegisterRoutes registers the measures route. It needs view_dashboard, as in
+// Mastodon's DashboardPolicy.
+func (h *MeasuresHandler) RegisterRoutes(mux RouteRegistrar) {
+	viewDashboard := WithPermission(h.roles, auth.PermissionViewDashboard)
+
+	mux.HandleFunc("POST /api/v1/admin/measures", viewDashboard(h.Get))
 }
 
-// RegisterRetentionRoutes registers retention route.
-func (h *RetentionHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/v1/admin/retention", h.Get)
+// RegisterRoutes registers the retention route. It needs view_dashboard, as
+// in Mastodon's DashboardPolicy.
+func (h *RetentionHandler) RegisterRoutes(mux RouteRegistrar) {
+	viewDashboard := WithPermission(h.roles, auth.PermissionViewDashboard)
+
+	mux.HandleFunc("POST /api/v1/admin/retention", viewDashboard(h.Get))
 }

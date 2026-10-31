@@ -14,6 +14,7 @@ import (
 
 	adminapi "github.com/deicod/gotodon/internal/api/admin"
 	v1 "github.com/deicod/gotodon/internal/api/v1"
+	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
@@ -24,20 +25,16 @@ const (
 	adminAccountsMaxLimit     = 200
 )
 
-const (
-	rolePermissionAdministrator int64 = 1 << 0
-	rolePermissionAll           int64 = (1 << 21) - 1
-)
-
 // AdminAccountsHandler handles v2 admin account endpoints.
 type AdminAccountsHandler struct {
 	queries *db.Queries
+	roles   adminapi.RoleLookup
 	cfg     *config.Config
 }
 
 // NewAdminAccountsHandler creates a new admin accounts handler.
 func NewAdminAccountsHandler(queries *db.Queries, cfg *config.Config) *AdminAccountsHandler {
-	return &AdminAccountsHandler{queries: queries, cfg: cfg}
+	return &AdminAccountsHandler{queries: queries, roles: adminapi.NewRoleLookup(queries), cfg: cfg}
 }
 
 // AdminIP represents an IP entry in admin account responses.
@@ -87,10 +84,6 @@ type adminAccountStats struct {
 
 // List handles GET /api/v2/admin/accounts.
 func (h *AdminAccountsHandler) List(w http.ResponseWriter, r *http.Request) {
-	if err := adminapi.RequireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	query := r.URL.Query()
 	origin := strings.TrimSpace(query.Get("origin"))
 	status := strings.TrimSpace(query.Get("status"))
@@ -316,8 +309,7 @@ func (h *AdminAccountsHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if row.RoleID.Valid {
-			rolePermissions := row.RolePermissions.Int64
-			permissionsValue := strconv.FormatInt(computedRolePermissions(rolePermissions), 10)
+			permissionsValue := strconv.FormatInt(auth.ComputedPermissions(row.RolePermissions.Int64), 10)
 			role := AdminRole{
 				ID:          strconv.FormatInt(row.RoleID.Int64, 10),
 				Name:        row.RoleName.String,
@@ -504,19 +496,15 @@ func isValidAdminAccountStatus(status string) bool {
 	}
 }
 
-func computedRolePermissions(permissions int64) int64 {
-	if permissions&rolePermissionAdministrator == rolePermissionAdministrator {
-		return rolePermissionAll
-	}
-	return permissions
-}
-
 func boolPointer(value bool) *bool {
 	v := value
 	return &v
 }
 
-// RegisterRoutes registers admin account routes.
-func (h *AdminAccountsHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v2/admin/accounts", h.List)
+// RegisterRoutes registers admin account routes. Listing accounts needs
+// manage_users, as in Mastodon's AccountPolicy#index?.
+func (h *AdminAccountsHandler) RegisterRoutes(mux adminapi.RouteRegistrar) {
+	manageUsers := adminapi.WithPermission(h.roles, auth.PermissionManageUsers)
+
+	mux.HandleFunc("GET /api/v2/admin/accounts", manageUsers(h.List))
 }

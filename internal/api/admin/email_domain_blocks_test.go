@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -12,8 +13,11 @@ func TestEmailDomainBlocksHandler_Create_InvalidDomain(t *testing.T) {
 	req, rec := mockAdminRequest(http.MethodPost, "/api/v1/admin/email_domain_blocks", `{"domain":"  "}`)
 	h.Create(rec, req)
 
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+	if !strings.Contains(rec.Body.String(), "Domain can't be blank") {
+		t.Fatalf("body = %s, want blank-domain validation error", rec.Body.String())
 	}
 }
 

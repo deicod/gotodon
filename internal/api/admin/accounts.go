@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
+	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 )
@@ -18,12 +19,14 @@ import (
 // AccountsHandler handles admin account endpoints
 type AccountsHandler struct {
 	queries *db.Queries
+	roles   RoleLookup
 }
 
 // NewAccountsHandler creates a new admin accounts handler
 func NewAccountsHandler(queries *db.Queries) *AccountsHandler {
 	return &AccountsHandler{
 		queries: queries,
+		roles:   NewRoleLookup(queries),
 	}
 }
 
@@ -164,10 +167,6 @@ func (h *AccountsHandler) logUserAction(ctx context.Context, adminID, targetAcco
 
 // GetAll handles GET /api/v1/admin/accounts
 func (h *AccountsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	// Parse query parameters
 	limit := 100
 	if l := web.QueryParam(r, "limit"); l != "" {
@@ -239,10 +238,6 @@ func (h *AccountsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
 
 // Get handles GET /api/v1/admin/accounts/:id
 func (h *AccountsHandler) Get(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
@@ -291,10 +286,6 @@ func (h *AccountsHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 // TakeAction handles POST /api/v1/admin/accounts/:id/action
 func (h *AccountsHandler) TakeAction(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
@@ -351,10 +342,6 @@ func (h *AccountsHandler) TakeAction(w http.ResponseWriter, r *http.Request) {
 
 // Approve handles POST /api/v1/admin/accounts/:id/approve
 func (h *AccountsHandler) Approve(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
@@ -376,10 +363,6 @@ func (h *AccountsHandler) Approve(w http.ResponseWriter, r *http.Request) {
 
 // Reject handles POST /api/v1/admin/accounts/:id/reject
 func (h *AccountsHandler) Reject(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
@@ -400,10 +383,6 @@ func (h *AccountsHandler) Reject(w http.ResponseWriter, r *http.Request) {
 
 // Enable handles POST /api/v1/admin/accounts/:id/enable
 func (h *AccountsHandler) Enable(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
@@ -424,10 +403,6 @@ func (h *AccountsHandler) Enable(w http.ResponseWriter, r *http.Request) {
 
 // Unsilence handles POST /api/v1/admin/accounts/:id/unsilence
 func (h *AccountsHandler) Unsilence(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
@@ -448,10 +423,6 @@ func (h *AccountsHandler) Unsilence(w http.ResponseWriter, r *http.Request) {
 
 // Unsuspend handles POST /api/v1/admin/accounts/:id/unsuspend
 func (h *AccountsHandler) Unsuspend(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
@@ -472,10 +443,6 @@ func (h *AccountsHandler) Unsuspend(w http.ResponseWriter, r *http.Request) {
 
 // Unsensitize handles POST /api/v1/admin/accounts/:id/unsensitize
 func (h *AccountsHandler) Unsensitize(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
@@ -496,10 +463,6 @@ func (h *AccountsHandler) Unsensitize(w http.ResponseWriter, r *http.Request) {
 
 // Delete handles DELETE /api/v1/admin/accounts/:id
 func (h *AccountsHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
@@ -519,16 +482,22 @@ func (h *AccountsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
-// RegisterRoutes registers admin account routes
-func (h *AccountsHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/admin/accounts", h.GetAll)
-	mux.HandleFunc("GET /api/v1/admin/accounts/{id}", h.Get)
-	mux.HandleFunc("DELETE /api/v1/admin/accounts/{id}", h.Delete)
-	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/action", h.TakeAction)
-	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/approve", h.Approve)
-	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/reject", h.Reject)
-	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/enable", h.Enable)
-	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unsilence", h.Unsilence)
-	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unsuspend", h.Unsuspend)
-	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unsensitive", h.Unsensitize)
+// RegisterRoutes registers admin account routes. Permissions follow
+// Mastodon's AccountPolicy and UserPolicy. Account actions need manage_users:
+// Api::V1::Admin::AccountActionsController authorizes show? first, which
+// covers every per-type check of Admin::AccountAction.
+func (h *AccountsHandler) RegisterRoutes(mux RouteRegistrar) {
+	manageUsers := WithPermission(h.roles, auth.PermissionManageUsers)
+	deleteUserData := WithPermission(h.roles, auth.PermissionDeleteUserData)
+
+	mux.HandleFunc("GET /api/v1/admin/accounts", manageUsers(h.GetAll))
+	mux.HandleFunc("GET /api/v1/admin/accounts/{id}", manageUsers(h.Get))
+	mux.HandleFunc("DELETE /api/v1/admin/accounts/{id}", deleteUserData(h.Delete))
+	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/action", manageUsers(h.TakeAction))
+	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/approve", manageUsers(h.Approve))
+	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/reject", manageUsers(h.Reject))
+	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/enable", manageUsers(h.Enable))
+	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unsilence", manageUsers(h.Unsilence))
+	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unsuspend", manageUsers(h.Unsuspend))
+	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unsensitive", manageUsers(h.Unsensitize))
 }

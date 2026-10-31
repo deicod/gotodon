@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 )
@@ -20,11 +21,12 @@ import (
 // CanonicalEmailBlocksHandler handles admin canonical email block endpoints.
 type CanonicalEmailBlocksHandler struct {
 	queries *db.Queries
+	roles   RoleLookup
 }
 
 // NewCanonicalEmailBlocksHandler creates a new canonical email blocks handler.
 func NewCanonicalEmailBlocksHandler(queries *db.Queries) *CanonicalEmailBlocksHandler {
-	return &CanonicalEmailBlocksHandler{queries: queries}
+	return &CanonicalEmailBlocksHandler{queries: queries, roles: NewRoleLookup(queries)}
 }
 
 // CanonicalEmailBlock represents a canonical email block entry.
@@ -63,10 +65,6 @@ func mapCanonicalEmailBlock(id int64, hash string) CanonicalEmailBlock {
 
 // GetAll handles GET /api/v1/admin/canonical_email_blocks.
 func (h *CanonicalEmailBlocksHandler) GetAll(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	limit := 100
 	if l := web.QueryParam(r, "limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 200 {
@@ -99,10 +97,6 @@ func (h *CanonicalEmailBlocksHandler) GetAll(w http.ResponseWriter, r *http.Requ
 
 // Get handles GET /api/v1/admin/canonical_email_blocks/{id}.
 func (h *CanonicalEmailBlocksHandler) Get(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	blockID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
@@ -124,10 +118,6 @@ func (h *CanonicalEmailBlocksHandler) Get(w http.ResponseWriter, r *http.Request
 
 // Test handles POST /api/v1/admin/canonical_email_blocks/test.
 func (h *CanonicalEmailBlocksHandler) Test(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	var req struct {
 		Email string `json:"email" form:"email"`
 	}
@@ -156,10 +146,6 @@ func (h *CanonicalEmailBlocksHandler) Test(w http.ResponseWriter, r *http.Reques
 
 // Create handles POST /api/v1/admin/canonical_email_blocks.
 func (h *CanonicalEmailBlocksHandler) Create(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	var req struct {
 		Email              string `json:"email" form:"email"`
 		CanonicalEmailHash string `json:"canonical_email_hash" form:"canonical_email_hash"`
@@ -208,10 +194,6 @@ func (h *CanonicalEmailBlocksHandler) Create(w http.ResponseWriter, r *http.Requ
 
 // Delete handles DELETE /api/v1/admin/canonical_email_blocks/{id}.
 func (h *CanonicalEmailBlocksHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	blockID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
@@ -235,11 +217,14 @@ func (h *CanonicalEmailBlocksHandler) Delete(w http.ResponseWriter, r *http.Requ
 	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
-// RegisterRoutes registers canonical email block routes.
-func (h *CanonicalEmailBlocksHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/admin/canonical_email_blocks", h.GetAll)
-	mux.HandleFunc("POST /api/v1/admin/canonical_email_blocks", h.Create)
-	mux.HandleFunc("GET /api/v1/admin/canonical_email_blocks/{id}", h.Get)
-	mux.HandleFunc("DELETE /api/v1/admin/canonical_email_blocks/{id}", h.Delete)
-	mux.HandleFunc("POST /api/v1/admin/canonical_email_blocks/test", h.Test)
+// RegisterRoutes registers canonical email block routes. Every action needs
+// manage_blocks, as in Mastodon's CanonicalEmailBlockPolicy.
+func (h *CanonicalEmailBlocksHandler) RegisterRoutes(mux RouteRegistrar) {
+	manageBlocks := WithPermission(h.roles, auth.PermissionManageBlocks)
+
+	mux.HandleFunc("GET /api/v1/admin/canonical_email_blocks", manageBlocks(h.GetAll))
+	mux.HandleFunc("POST /api/v1/admin/canonical_email_blocks", manageBlocks(h.Create))
+	mux.HandleFunc("GET /api/v1/admin/canonical_email_blocks/{id}", manageBlocks(h.Get))
+	mux.HandleFunc("DELETE /api/v1/admin/canonical_email_blocks/{id}", manageBlocks(h.Delete))
+	mux.HandleFunc("POST /api/v1/admin/canonical_email_blocks/test", manageBlocks(h.Test))
 }

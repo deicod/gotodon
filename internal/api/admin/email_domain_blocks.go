@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 )
@@ -23,6 +24,7 @@ const emailDomainHistoryDays = 7
 // EmailDomainBlocksHandler handles admin email domain block endpoints.
 type EmailDomainBlocksHandler struct {
 	queries *db.Queries
+	roles   RoleLookup
 	redis   *redis.Client
 }
 
@@ -46,6 +48,7 @@ type EmailDomainBlock struct {
 func NewEmailDomainBlocksHandler(queries *db.Queries, redisClient *redis.Client) *EmailDomainBlocksHandler {
 	return &EmailDomainBlocksHandler{
 		queries: queries,
+		roles:   NewRoleLookup(queries),
 		redis:   redisClient,
 	}
 }
@@ -121,10 +124,6 @@ func mapEmailDomainBlock(entry emailDomainBlockEntry, history []TagHistory) Emai
 
 // GetAll handles GET /api/v1/admin/email_domain_blocks.
 func (h *EmailDomainBlocksHandler) GetAll(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	limit := 100
 	if l := web.QueryParam(r, "limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 200 {
@@ -167,10 +166,6 @@ func (h *EmailDomainBlocksHandler) GetAll(w http.ResponseWriter, r *http.Request
 
 // Get handles GET /api/v1/admin/email_domain_blocks/{id}.
 func (h *EmailDomainBlocksHandler) Get(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	blockID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
@@ -202,10 +197,6 @@ func (h *EmailDomainBlocksHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 // Create handles POST /api/v1/admin/email_domain_blocks.
 func (h *EmailDomainBlocksHandler) Create(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	var req struct {
 		Domain            string `json:"domain" form:"domain"`
 		AllowWithApproval bool   `json:"allow_with_approval" form:"allow_with_approval"`
@@ -260,10 +251,6 @@ func (h *EmailDomainBlocksHandler) Create(w http.ResponseWriter, r *http.Request
 
 // Delete handles DELETE /api/v1/admin/email_domain_blocks/{id}.
 func (h *EmailDomainBlocksHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	blockID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
@@ -281,10 +268,13 @@ func (h *EmailDomainBlocksHandler) Delete(w http.ResponseWriter, r *http.Request
 	web.JSONError(w, http.StatusInternalServerError, "Email domain blocks unavailable")
 }
 
-// RegisterRoutes registers email domain block routes.
-func (h *EmailDomainBlocksHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/admin/email_domain_blocks", h.GetAll)
-	mux.HandleFunc("POST /api/v1/admin/email_domain_blocks", h.Create)
-	mux.HandleFunc("GET /api/v1/admin/email_domain_blocks/{id}", h.Get)
-	mux.HandleFunc("DELETE /api/v1/admin/email_domain_blocks/{id}", h.Delete)
+// RegisterRoutes registers email domain block routes. Every action needs
+// manage_blocks, as in Mastodon's EmailDomainBlockPolicy.
+func (h *EmailDomainBlocksHandler) RegisterRoutes(mux RouteRegistrar) {
+	manageBlocks := WithPermission(h.roles, auth.PermissionManageBlocks)
+
+	mux.HandleFunc("GET /api/v1/admin/email_domain_blocks", manageBlocks(h.GetAll))
+	mux.HandleFunc("POST /api/v1/admin/email_domain_blocks", manageBlocks(h.Create))
+	mux.HandleFunc("GET /api/v1/admin/email_domain_blocks/{id}", manageBlocks(h.Get))
+	mux.HandleFunc("DELETE /api/v1/admin/email_domain_blocks/{id}", manageBlocks(h.Delete))
 }
