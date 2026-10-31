@@ -8,20 +8,26 @@ import (
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	v1 "github.com/deicod/gotodon/internal/api/v1"
+	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/media"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
+// CustomEmojisHandler handles the admin custom emoji endpoints.
 type CustomEmojisHandler struct {
 	queries  *db.Queries
 	uploader *media.Uploader
+	roles    RoleLookup
 }
 
+// NewCustomEmojisHandler creates a new custom emojis handler.
 func NewCustomEmojisHandler(queries *db.Queries, uploader *media.Uploader) *CustomEmojisHandler {
 	return &CustomEmojisHandler{
 		queries:  queries,
 		uploader: uploader,
+		roles:    NewRoleLookup(queries),
 	}
 }
 
@@ -43,12 +49,6 @@ func mapAdminCustomEmoji(emoji db.CustomEmoji, categoryName string) map[string]a
 
 // List handles GET /api/v1/admin/custom_emojis
 func (h *CustomEmojisHandler) List(w http.ResponseWriter, r *http.Request) {
-	_, ok := middleware.GetAccountID(r.Context())
-	if !ok {
-		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
-		return
-	}
-
 	limit := 40 // simple pagination
 	offset := 0
 
@@ -185,8 +185,16 @@ func (h *CustomEmojisHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *CustomEmojisHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/admin/custom_emojis", h.List)
-	mux.HandleFunc("POST /api/v1/admin/custom_emojis", h.Create)
-	mux.HandleFunc("DELETE /api/v1/admin/custom_emojis/{id}", h.Delete)
+// RegisterRoutes registers the custom emoji routes. Mastodon has no REST API
+// for custom emojis; its admin UI authorizes every action through
+// CustomEmojiPolicy, which requires manage_custom_emojis. There are no
+// per-resource admin scopes for custom emojis, so reads need admin:read and
+// writes admin:write.
+func (h *CustomEmojisHandler) RegisterRoutes(mux RouteRegistrar) {
+	read := WithAccess(h.roles, oauth.ScopeAdminRead, auth.PermissionManageCustomEmojis)
+	write := WithAccess(h.roles, oauth.ScopeAdminWrite, auth.PermissionManageCustomEmojis)
+
+	mux.HandleFunc("GET /api/v1/admin/custom_emojis", read(h.List))
+	mux.HandleFunc("POST /api/v1/admin/custom_emojis", write(h.Create))
+	mux.HandleFunc("DELETE /api/v1/admin/custom_emojis/{id}", write(h.Delete))
 }
