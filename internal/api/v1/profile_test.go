@@ -3,6 +3,7 @@ package v1
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -32,6 +33,9 @@ type stubProfileQueries struct {
 	account           db.Account
 	clearAvatarCalled bool
 	clearHeaderCalled bool
+	// role is the role of the account's user, 1. nil means none.
+	role    *db.UserRole
+	roleErr error
 }
 
 func (s *stubProfileQueries) ClearAccountAvatar(ctx context.Context, id int64) (db.Account, error) {
@@ -85,22 +89,43 @@ func (s *stubProfileQueries) CountFollowRequestsForAccount(ctx context.Context, 
 }
 
 func (s *stubProfileQueries) GetUserRole(ctx context.Context, userID int64) (db.UserRole, error) {
-	return db.UserRole{}, pgx.ErrNoRows
+	if s.roleErr != nil {
+		return db.UserRole{}, s.roleErr
+	}
+	if s.role == nil || userID != 1 {
+		return db.UserRole{}, pgx.ErrNoRows
+	}
+	return *s.role, nil
 }
 
 func TestProfileHandler_DeleteAvatar(t *testing.T) {
-	stub := &stubProfileQueries{account: db.Account{ID: 12345, Username: "user"}}
-	h := NewProfileHandler(stub, &config.Config{})
-
 	tests := []struct {
 		name      string
 		accountID int64
+		role      *db.UserRole
+		roleErr   error
 		wantCode  int
+		// wantRole is the role's JSON in a 200 response.
+		wantRole string
 	}{
 		{
 			name:      "authenticated user can delete avatar",
 			accountID: 12345,
 			wantCode:  http.StatusOK,
+			wantRole:  everyoneRoleJSON,
+		},
+		{
+			name:      "the role has computed permissions",
+			accountID: 12345,
+			role:      &moderatorRole,
+			wantCode:  http.StatusOK,
+			wantRole:  moderatorRoleJSON,
+		},
+		{
+			name:      "role lookup fails after the avatar is deleted",
+			accountID: 12345,
+			roleErr:   errors.New("database unavailable"),
+			wantCode:  http.StatusInternalServerError,
 		},
 		{
 			name:      "unauthenticated user gets 401",
@@ -111,41 +136,61 @@ func TestProfileHandler_DeleteAvatar(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stub.clearAvatarCalled = false
+			stub := &stubProfileQueries{account: db.Account{ID: 12345, Username: "user"}, role: tt.role, roleErr: tt.roleErr}
+			h := NewProfileHandler(stub, &config.Config{})
 			req, rec := mockProfileRequest(http.MethodDelete, "/api/v1/profile/avatar", tt.accountID)
 
 			h.DeleteAvatar(rec, req)
 
 			if rec.Code != tt.wantCode {
-				t.Errorf("status = %d, want %d", rec.Code, tt.wantCode)
+				t.Fatalf("status = %d (%s), want %d", rec.Code, rec.Body.String(), tt.wantCode)
+			}
+			if tt.accountID != 0 && !stub.clearAvatarCalled {
+				t.Fatal("expected ClearAccountAvatar to be called")
 			}
 
-			if tt.wantCode == http.StatusOK {
-				var cred CredentialAccount
-				if err := json.Unmarshal(rec.Body.Bytes(), &cred); err != nil {
+			switch tt.wantCode {
+			case http.StatusOK:
+				var body map[string]json.RawMessage
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 					t.Fatalf("Failed to unmarshal response: %v", err)
 				}
-				if !stub.clearAvatarCalled {
-					t.Fatal("expected ClearAccountAvatar to be called")
-				}
+				assertJSONEqual(t, body["role"], tt.wantRole)
+			case http.StatusInternalServerError:
+				assertJSONEqual(t, rec.Body.Bytes(), `{"error":"Failed to fetch account"}`)
 			}
 		})
 	}
 }
 
 func TestProfileHandler_DeleteHeader(t *testing.T) {
-	stub := &stubProfileQueries{account: db.Account{ID: 12345, Username: "user"}}
-	h := NewProfileHandler(stub, &config.Config{})
-
 	tests := []struct {
 		name      string
 		accountID int64
+		role      *db.UserRole
+		roleErr   error
 		wantCode  int
+		// wantRole is the role's JSON in a 200 response.
+		wantRole string
 	}{
 		{
 			name:      "authenticated user can delete header",
 			accountID: 12345,
 			wantCode:  http.StatusOK,
+			wantRole:  everyoneRoleJSON,
+		},
+		{
+			name:      "the role has computed permissions",
+			accountID: 12345,
+			role:      &moderatorRole,
+			wantCode:  http.StatusOK,
+			wantRole:  moderatorRoleJSON,
+		},
+		{
+			name:      "role lookup fails after the header is deleted",
+			accountID: 12345,
+			roleErr:   errors.New("database unavailable"),
+			wantCode:  http.StatusInternalServerError,
 		},
 		{
 			name:      "unauthenticated user gets 401",
@@ -156,23 +201,28 @@ func TestProfileHandler_DeleteHeader(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stub.clearHeaderCalled = false
+			stub := &stubProfileQueries{account: db.Account{ID: 12345, Username: "user"}, role: tt.role, roleErr: tt.roleErr}
+			h := NewProfileHandler(stub, &config.Config{})
 			req, rec := mockProfileRequest(http.MethodDelete, "/api/v1/profile/header", tt.accountID)
 
 			h.DeleteHeader(rec, req)
 
 			if rec.Code != tt.wantCode {
-				t.Errorf("status = %d, want %d", rec.Code, tt.wantCode)
+				t.Fatalf("status = %d (%s), want %d", rec.Code, rec.Body.String(), tt.wantCode)
+			}
+			if tt.accountID != 0 && !stub.clearHeaderCalled {
+				t.Fatal("expected ClearAccountHeader to be called")
 			}
 
-			if tt.wantCode == http.StatusOK {
-				var cred CredentialAccount
-				if err := json.Unmarshal(rec.Body.Bytes(), &cred); err != nil {
+			switch tt.wantCode {
+			case http.StatusOK:
+				var body map[string]json.RawMessage
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 					t.Fatalf("Failed to unmarshal response: %v", err)
 				}
-				if !stub.clearHeaderCalled {
-					t.Fatal("expected ClearAccountHeader to be called")
-				}
+				assertJSONEqual(t, body["role"], tt.wantRole)
+			case http.StatusInternalServerError:
+				assertJSONEqual(t, rec.Body.Bytes(), `{"error":"Failed to fetch account"}`)
 			}
 		})
 	}

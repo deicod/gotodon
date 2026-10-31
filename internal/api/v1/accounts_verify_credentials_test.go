@@ -3,6 +3,7 @@ package v1
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,6 +17,12 @@ import (
 type stubVerifyCredentialsQueries struct {
 	db.Querier
 	account db.Account
+	// user is the account's user. A zero ID means the account has none.
+	user    db.User
+	userErr error
+	// role is the user's role. nil means the user has none.
+	role    *db.UserRole
+	roleErr error
 }
 
 func (s *stubVerifyCredentialsQueries) GetAccountByID(ctx context.Context, id int64) (db.Account, error) {
@@ -51,7 +58,13 @@ func (s *stubVerifyCredentialsQueries) GetAccountsByUsernamesAndDomains(ctx cont
 }
 
 func (s *stubVerifyCredentialsQueries) GetUserByAccountID(ctx context.Context, accountID int64) (db.User, error) {
-	return db.User{}, pgx.ErrNoRows
+	if s.userErr != nil {
+		return db.User{}, s.userErr
+	}
+	if s.user.ID == 0 || accountID != s.account.ID {
+		return db.User{}, pgx.ErrNoRows
+	}
+	return s.user, nil
 }
 
 func (s *stubVerifyCredentialsQueries) CountFollowRequestsForAccount(ctx context.Context, targetAccountID int64) (int64, error) {
@@ -59,7 +72,80 @@ func (s *stubVerifyCredentialsQueries) CountFollowRequestsForAccount(ctx context
 }
 
 func (s *stubVerifyCredentialsQueries) GetUserRole(ctx context.Context, userID int64) (db.UserRole, error) {
-	return db.UserRole{}, pgx.ErrNoRows
+	if s.roleErr != nil {
+		return db.UserRole{}, s.roleErr
+	}
+	if s.role == nil || userID != s.user.ID {
+		return db.UserRole{}, pgx.ErrNoRows
+	}
+	return *s.role, nil
+}
+
+// TestAccountsHandler_VerifyCredentials_Role checks the role as Mastodon's
+// CredentialAccountSerializer renders it: REST::RoleSerializer with computed
+// permissions, and the everyone role for a user without a role.
+func TestAccountsHandler_VerifyCredentials_Role(t *testing.T) {
+	alice := db.Account{ID: 12345, Username: "alice"}
+	user := db.User{ID: 20, AccountID: alice.ID}
+	errDatabase := errors.New("database unavailable")
+
+	tests := []struct {
+		name    string
+		user    db.User
+		userErr error
+		role    *db.UserRole
+		roleErr error
+		// wantRole is the role's JSON in a 200 response.
+		wantRole   string
+		wantStatus int
+	}{
+		{name: "Owner storing the administrator bit", user: user, role: &ownerRole, wantRole: ownerRoleJSON, wantStatus: http.StatusOK},
+		{name: "Owner storing every bit", user: user, role: &everyBitOwnerRole, wantRole: ownerRoleJSON, wantStatus: http.StatusOK},
+		{name: "Admin", user: user, role: &adminRole, wantRole: adminRoleJSON, wantStatus: http.StatusOK},
+		{name: "Moderator", user: user, role: &moderatorRole, wantRole: moderatorRoleJSON, wantStatus: http.StatusOK},
+		{name: "highlighted role", user: user, role: &highlightedRole, wantRole: highlightedRoleJSON, wantStatus: http.StatusOK},
+		{name: "user without a role", user: user, wantRole: everyoneRoleJSON, wantStatus: http.StatusOK},
+		{name: "account without a user", wantRole: "null", wantStatus: http.StatusOK},
+		{name: "user lookup fails", userErr: errDatabase, wantStatus: http.StatusInternalServerError},
+		{name: "role lookup fails", user: user, roleErr: errDatabase, wantStatus: http.StatusInternalServerError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stub := &stubVerifyCredentialsQueries{
+				account: alice,
+				user:    tt.user,
+				userErr: tt.userErr,
+				role:    tt.role,
+				roleErr: tt.roleErr,
+			}
+			h := NewAccountsHandler(stub, nil, nil, nil)
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/verify_credentials", nil)
+			ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, alice.ID)
+			ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "read:accounts")
+			req = req.WithContext(ctx)
+			rec := httptest.NewRecorder()
+
+			h.VerifyCredentials(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d (%s), want %d", rec.Code, rec.Body.String(), tt.wantStatus)
+			}
+			if tt.wantStatus != http.StatusOK {
+				assertJSONEqual(t, rec.Body.Bytes(), `{"error":"Failed to fetch account"}`)
+				return
+			}
+			var body map[string]json.RawMessage
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			role, ok := body["role"]
+			if !ok {
+				t.Fatalf("response has no role key: %s", rec.Body.String())
+			}
+			assertJSONEqual(t, role, tt.wantRole)
+		})
+	}
 }
 
 func TestAccountsHandler_VerifyCredentials_UnauthorizedWithoutAccountContext(t *testing.T) {

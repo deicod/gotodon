@@ -3,10 +3,13 @@ package v1
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"golang.org/x/net/idna"
 
 	"github.com/deicod/gotodon/internal/config"
@@ -489,7 +492,11 @@ func formatAccountNote(cfg *config.Config, dbAcc db.Account, author Account, men
 	return linkifyAndFormatText(cfg, note, opts)
 }
 
-func buildCredentialAccount(ctx context.Context, q accountCredentialQueries, cfg *config.Config, dbAcc db.Account) CredentialAccount {
+// buildCredentialAccount renders dbAcc as Mastodon's
+// REST::CredentialAccountSerializer does. It fails only when looking up the
+// account's user or role fails; without queries it has neither, and the role
+// is null.
+func buildCredentialAccount(ctx context.Context, q accountCredentialQueries, cfg *config.Config, dbAcc db.Account) (CredentialAccount, error) {
 	apiAcc := SerializeAccount(cfg, dbAcc)
 	if q != nil {
 		if serialized := serializeAccounts(ctx, q, cfg, []db.Account{dbAcc}, true); serialized != nil {
@@ -502,13 +509,18 @@ func buildCredentialAccount(ctx context.Context, q accountCredentialQueries, cfg
 	settings := map[string]any{}
 	locale := ""
 	var user db.User
+	hasUser := false
 	if q != nil {
-		if u, err := q.GetUserByAccountID(ctx, dbAcc.ID); err == nil {
-			user = u
+		u, err := q.GetUserByAccountID(ctx, dbAcc.ID)
+		switch {
+		case err == nil:
+			user, hasUser = u, true
 			if user.Locale.Valid {
 				locale = strings.TrimSpace(user.Locale.String)
 			}
 			settings = settingsFromText(user.Settings)
+		case !errors.Is(err, pgx.ErrNoRows):
+			return CredentialAccount{}, fmt.Errorf("look up user of account %d: %w", dbAcc.ID, err)
 		}
 	}
 
@@ -547,24 +559,28 @@ func buildCredentialAccount(ctx context.Context, q accountCredentialQueries, cfg
 		QuotePolicy:         prefs.PostingDefaultQuotePolicy,
 	}
 
+	// Mastodon's CredentialAccountSerializer#role is the user's role, which
+	// is the everyone role for a user without one (User#role).
 	var role *AccountRole
-	if q != nil && user.ID != 0 {
-		if userRole, err := q.GetUserRole(ctx, user.ID); err == nil {
-			role = &AccountRole{
-				ID:          strconv.FormatInt(userRole.ID, 10),
-				Name:        userRole.Name,
-				Color:       userRole.Color,
-				Permissions: strconv.FormatInt(userRole.Permissions, 10),
-				Highlighted: userRole.Highlighted,
-			}
+	if hasUser {
+		userRole, err := q.GetUserRole(ctx, user.ID)
+		var serialized AccountRole
+		switch {
+		case err == nil:
+			serialized = SerializeRole(userRole)
+		case errors.Is(err, pgx.ErrNoRows):
+			serialized = EveryoneRole()
+		default:
+			return CredentialAccount{}, fmt.Errorf("look up role of user %d: %w", user.ID, err)
 		}
+		role = &serialized
 	}
 
 	return CredentialAccount{
 		Account: apiAcc,
 		Source:  source,
 		Role:    role,
-	}
+	}, nil
 }
 
 func accountIsLocal(dbAcc db.Account) bool {
