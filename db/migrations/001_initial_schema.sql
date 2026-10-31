@@ -7,6 +7,7 @@
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- Snowflake ID generation function (Mastodon-compatible)
+-- +goose StatementBegin
 CREATE OR REPLACE FUNCTION timestamp_id(table_name text) RETURNS bigint AS $$
 DECLARE
     epoch bigint := 1514764800000; -- 2018-01-01 00:00:00 UTC in milliseconds
@@ -21,6 +22,7 @@ BEGIN
     RETURN result;
 END;
 $$ LANGUAGE plpgsql;
+-- +goose StatementEnd
 
 -- ============================================================================
 -- Core Tables
@@ -1003,6 +1005,8 @@ CREATE UNIQUE INDEX index_markers_on_user_timeline ON markers (user_id, timeline
 
 -- +goose Down
 DROP TABLE IF EXISTS markers CASCADE;
+DROP TABLE IF EXISTS account_pins CASCADE;
+DROP TABLE IF EXISTS featured_tags CASCADE;
 DROP TABLE IF EXISTS preferences CASCADE;
 DROP TABLE IF EXISTS settings CASCADE;
 DROP TABLE IF EXISTS reports CASCADE;

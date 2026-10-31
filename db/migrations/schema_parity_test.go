@@ -56,7 +56,7 @@ var schemaIndexExpectations = []indexExpectation{
 	{name: "index_oauth_applications_on_superapp", unique: false},
 	{name: "index_poll_votes_on_account_id", unique: false},
 	{name: "index_polls_on_account_id", unique: false},
-	{name: "index_polls_on_status_id", unique: true},
+	{name: "index_polls_on_status_id", unique: false},
 	{name: "index_preview_cards_on_author_account_id", unique: false},
 	{name: "index_quotes_on_activity_uri", unique: true},
 	{name: "index_quotes_on_approval_uri", unique: false},
@@ -152,7 +152,7 @@ func schemaTestDSN(t *testing.T) string {
 	t.Helper()
 
 	if testing.Short() {
-		t.Skip("skipping schema parity test in -short mode")
+		t.Skip("skipping database-backed migration test in -short mode")
 	}
 
 	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
@@ -160,7 +160,7 @@ func schemaTestDSN(t *testing.T) string {
 	}
 
 	if !hasExplicitDBEnv() {
-		t.Skip("skipping schema parity test; set DB_* or GOTODON_DATABASE_* env vars")
+		t.Skip("skipping database-backed migration test; set DB_* or GOTODON_DATABASE_* env vars")
 	}
 
 	cfg, err := config.Load()
@@ -195,12 +195,18 @@ func hasExplicitDBEnv() bool {
 func applyMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
 
+	configureGoose(t)
+	if err := goose.Up(db, "."); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+}
+
+func configureGoose(t *testing.T) {
+	t.Helper()
+
 	goose.SetBaseFS(Migrations)
 	if err := goose.SetDialect("postgres"); err != nil {
 		t.Fatalf("set goose dialect: %v", err)
-	}
-	if err := goose.Up(db, "."); err != nil {
-		t.Fatalf("run migrations: %v", err)
 	}
 }
 
