@@ -24,6 +24,10 @@ const (
 	ownerPermissions     int64 = -1
 	adminPermissions     int64 = 2031612
 	moderatorPermissions int64 = 1049884
+
+	ownerPosition     int32 = 1000
+	adminPosition     int32 = 100
+	moderatorPosition int32 = 10
 )
 
 // stubRoles is a RoleLookup backed by maps. A user missing from roles has no
@@ -562,6 +566,46 @@ func TestActingRoleWithoutRequireAccess(t *testing.T) {
 	req := withScopes(withIdentity(httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts", nil), int64Ptr(10), int64Ptr(20)), adminToken)
 	if role, ok := ActingRole(req.Context()); ok {
 		t.Fatalf("ActingRole() = %+v, want none", role)
+	}
+}
+
+func TestOverridesRole(t *testing.T) {
+	at := func(position int32) *int32 { return &position }
+	owner := db.UserRole{Name: "Owner", Permissions: ownerPermissions, Position: ownerPosition}
+	admin := db.UserRole{Name: "Admin", Permissions: adminPermissions, Position: adminPosition}
+	moderator := db.UserRole{Name: "Moderator", Permissions: moderatorPermissions, Position: moderatorPosition}
+
+	tests := []struct {
+		name   string
+		acting db.UserRole
+		target *int32
+		want   bool
+	}{
+		{"Owner over an account without a user", owner, nil, true},
+		{"Owner over a user without a role", owner, at(everyonePosition), true},
+		{"Owner over Moderator", owner, at(moderatorPosition), true},
+		{"Owner over Admin", owner, at(adminPosition), true},
+		{"Owner over Owner", owner, at(ownerPosition), false},
+		{"Admin over Moderator", admin, at(moderatorPosition), true},
+		{"Admin over Admin", admin, at(adminPosition), false},
+		{"Admin over Owner", admin, at(ownerPosition), false},
+		{"Moderator over an account without a user", moderator, nil, true},
+		{"Moderator over a user without a role", moderator, at(everyonePosition), true},
+		{"Moderator over Moderator", moderator, at(moderatorPosition), false},
+		{"Moderator over Admin", moderator, at(adminPosition), false},
+		{"Moderator over Owner", moderator, at(ownerPosition), false},
+		{"position 0 over a user without a role", db.UserRole{Position: 0}, at(everyonePosition), true},
+		{"everyone's position over a user without a role", db.UserRole{Position: everyonePosition}, at(everyonePosition), false},
+		{"negative position over an account without a user", db.UserRole{Position: -5}, nil, true},
+		{"negative position over a user without a role", db.UserRole{Position: -5}, at(everyonePosition), false},
+		{"permissions don't count", db.UserRole{Name: "Owner", Permissions: ownerPermissions, Position: moderatorPosition}, at(adminPosition), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := overridesRole(tt.acting, tt.target); got != tt.want {
+				t.Fatalf("overridesRole(%d, %v) = %t, want %t", tt.acting.Position, tt.target, got, tt.want)
+			}
+		})
 	}
 }
 

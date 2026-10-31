@@ -3,11 +3,14 @@ package admin
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
@@ -320,13 +323,15 @@ func (h *AccountsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, acc)
 }
 
-// TakeAction handles POST /api/v1/admin/accounts/:id/action
+// TakeAction handles POST /api/v1/admin/accounts/:id/action. Like
+// Admin::AccountAction, it refuses with 403 an action that Mastodon's
+// policies refuse for the target; see accountActionAllowed.
 func (h *AccountsHandler) TakeAction(w http.ResponseWriter, r *http.Request) {
-	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
-	if err != nil {
-		web.JSONError(w, http.StatusNotFound, "Record not found")
+	target, ok := h.actionTarget(w, r)
+	if !ok {
 		return
 	}
+	accountID := target.ID
 
 	var req struct {
 		Type                  string `json:"type" form:"type"`
@@ -342,31 +347,45 @@ func (h *AccountsHandler) TakeAction(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	adminID, _ := middleware.GetAccountID(ctx)
+	var apply func(context.Context, int64) error
 	var logFn func()
 
 	switch req.Type {
 	case "disable":
-		err = h.store.AdminDisableAccount(ctx, accountID)
+		apply = h.store.AdminDisableAccount
 		logFn = func() { h.logUserAction(ctx, adminID, accountID, "disable") }
 	case "sensitive":
-		err = h.store.AdminSensitizeAccount(ctx, accountID)
+		apply = h.store.AdminSensitizeAccount
 		logFn = func() { h.logAccountAction(ctx, adminID, accountID, "sensitive") }
 	case "silence":
-		err = h.store.AdminSilenceAccount(ctx, accountID)
+		apply = h.store.AdminSilenceAccount
 		logFn = func() { h.logAccountAction(ctx, adminID, accountID, "silence") }
 	case "suspend":
-		err = h.store.AdminSuspendAccount(ctx, accountID)
+		apply = h.store.AdminSuspendAccount
 		logFn = func() { h.logAccountAction(ctx, adminID, accountID, "suspend") }
 	case "none":
-		// Do nothing, just log action?
+		// Changes no account state.
 	default:
 		web.JSONError(w, http.StatusUnprocessableEntity, "Invalid action type")
 		return
 	}
 
-	if err != nil {
-		web.JSONError(w, http.StatusInternalServerError, "Database error")
+	acting, ok := ActingRole(ctx)
+	if !ok {
+		slog.ErrorContext(ctx, "Admin account action without an acting role", "account_id", accountID)
+		web.JSONError(w, http.StatusInternalServerError, "Admin data unavailable")
 		return
+	}
+	if !h.accountActionAllowed(acting, req.Type, target) {
+		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
+		return
+	}
+
+	if apply != nil {
+		if err := apply(ctx, accountID); err != nil {
+			web.JSONError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
 	}
 
 	if logFn != nil {
@@ -374,6 +393,74 @@ func (h *AccountsHandler) TakeAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	web.JSON(w, http.StatusOK, map[string]any{})
+}
+
+// accountActionAllowed reports whether acting may take an action of
+// actionType against target, as Admin::AccountAction authorizes it:
+//
+//   - every type, none included, needs acting to override the role of the
+//     target's user (AccountPolicy#warn?, which process_strike! checks);
+//   - disable needs a user to disable. Mastodon authorizes
+//     UserPolicy#disable? on a nil user there and fails with a 500;
+//     gotodon refuses instead;
+//   - suspend can't target the instance actor (AccountPolicy#suspend?).
+//
+// The type-specific policies, UserPolicy#disable? and AccountPolicy's
+// sensitive?, silence? and suspend?, compare the same roles as warn?.
+func (h *AccountsHandler) accountActionAllowed(acting db.UserRole, actionType string, target db.AdminGetAccountActionTargetRow) bool {
+	if !overridesRole(acting, userRolePosition(target)) {
+		return false
+	}
+	switch actionType {
+	case "disable":
+		return target.UserID.Valid
+	case "suspend":
+		return !h.isInstanceActor(target)
+	}
+	return true
+}
+
+// userRolePosition is the position of Mastodon's Account#user_role for
+// target: nil for an account without a user, and the everyone role's
+// position for a user without a role.
+func userRolePosition(target db.AdminGetAccountActionTargetRow) *int32 {
+	if !target.UserID.Valid {
+		return nil
+	}
+	position := everyonePosition
+	if target.RolePosition.Valid {
+		position = target.RolePosition.Int32
+	}
+	return &position
+}
+
+// isInstanceActor reports whether target is this server's instance actor:
+// the local account with the instance actor's URI. Mastodon recognizes it
+// by its fixed ID, -99; gotodon creates it with an ordinary one.
+func (h *AccountsHandler) isInstanceActor(target db.AdminGetAccountActionTargetRow) bool {
+	return h.instanceActorURI != "" && !target.Domain.Valid && target.Uri == h.instanceActorURI
+}
+
+// actionTarget looks up the account a write route names, as Mastodon's
+// set_account does before authorizing: an ID that isn't a number or names
+// no account gets 404 Record not found, and a failed lookup 500.
+func (h *AccountsHandler) actionTarget(w http.ResponseWriter, r *http.Request) (db.AdminGetAccountActionTargetRow, bool) {
+	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
+	if err != nil {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return db.AdminGetAccountActionTargetRow{}, false
+	}
+	target, err := h.store.AdminGetAccountActionTarget(r.Context(), accountID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		web.JSONError(w, http.StatusNotFound, "Record not found")
+		return db.AdminGetAccountActionTargetRow{}, false
+	}
+	if err != nil {
+		slog.ErrorContext(r.Context(), "Admin account lookup failed", "account_id", accountID, "error", err)
+		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return db.AdminGetAccountActionTargetRow{}, false
+	}
+	return target, true
 }
 
 // Approve handles POST /api/v1/admin/accounts/:id/approve
@@ -521,10 +608,11 @@ func (h *AccountsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 // RegisterRoutes registers admin account routes. Permissions follow
 // Mastodon's AccountPolicy and UserPolicy. Account actions need manage_users:
 // Api::V1::Admin::AccountActionsController authorizes show? first, which
-// covers every per-type check of Admin::AccountAction. Scopes follow
-// Api::V1::Admin::AccountsController and AccountActionsController: listing
-// and showing need admin:read:accounts, everything else, account actions
-// included, admin:write:accounts.
+// covers the permission of every per-type check of Admin::AccountAction.
+// The handlers check the policies' conditions on the target account. Scopes
+// follow Api::V1::Admin::AccountsController and AccountActionsController:
+// listing and showing need admin:read:accounts, everything else, account
+// actions included, admin:write:accounts.
 func (h *AccountsHandler) RegisterRoutes(mux RouteRegistrar) {
 	read := WithAccess(h.roles, oauth.ScopeAdminReadAccounts, auth.PermissionManageUsers)
 	write := WithAccess(h.roles, oauth.ScopeAdminWriteAccounts, auth.PermissionManageUsers)

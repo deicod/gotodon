@@ -127,6 +127,19 @@ func ActingRole(ctx context.Context) (db.UserRole, bool) {
 	return role, ok
 }
 
+// everyonePosition is the position of Mastodon's everyone role
+// (UserRole::NOBODY_POSITION), which User#role gives a user without a role.
+const everyonePosition int32 = -1
+
+// overridesRole is Mastodon's UserRole#overrides?: whether acting outranks a
+// target whose role is at position target. A nil target is an account
+// without a user, which every role overrides. Equal positions don't
+// override, so no role overrides itself, the Owner's included. Only
+// positions count, never role names.
+func overridesRole(acting db.UserRole, target *int32) bool {
+	return target == nil || acting.Position > *target
+}
+
 // roleLookupFailed answers a failed user or role lookup: a missing row means
 // the account has no user or the user has no role, which is a refusal, and
 // anything else is a server error.
