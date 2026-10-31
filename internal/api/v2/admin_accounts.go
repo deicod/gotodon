@@ -14,6 +14,7 @@ import (
 
 	adminapi "github.com/deicod/gotodon/internal/api/admin"
 	v1 "github.com/deicod/gotodon/internal/api/v1"
+	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
@@ -22,11 +23,6 @@ import (
 const (
 	adminAccountsDefaultLimit = 100
 	adminAccountsMaxLimit     = 200
-)
-
-const (
-	rolePermissionAdministrator int64 = 1 << 0
-	rolePermissionAll           int64 = (1 << 21) - 1
 )
 
 // AdminAccountsHandler handles v2 admin account endpoints.
@@ -316,8 +312,7 @@ func (h *AdminAccountsHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if row.RoleID.Valid {
-			rolePermissions := row.RolePermissions.Int64
-			permissionsValue := strconv.FormatInt(computedRolePermissions(rolePermissions), 10)
+			permissionsValue := strconv.FormatInt(auth.ComputedPermissions(row.RolePermissions.Int64), 10)
 			role := AdminRole{
 				ID:          strconv.FormatInt(row.RoleID.Int64, 10),
 				Name:        row.RoleName.String,
@@ -502,13 +497,6 @@ func isValidAdminAccountStatus(status string) bool {
 	default:
 		return false
 	}
-}
-
-func computedRolePermissions(permissions int64) int64 {
-	if permissions&rolePermissionAdministrator == rolePermissionAdministrator {
-		return rolePermissionAll
-	}
-	return permissions
 }
 
 func boolPointer(value bool) *bool {

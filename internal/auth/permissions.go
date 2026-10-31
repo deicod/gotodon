@@ -26,3 +26,30 @@ const (
 	PermissionInviteBypassApproval     int64 = 1 << 21
 	PermissionManageEmailSubscriptions int64 = 1 << 22
 )
+
+// PermissionAll is every permission flag, Mastodon's UserRole::Flags::ALL.
+const PermissionAll int64 = (1 << 23) - 1
+
+// ComputedPermissions returns the effective permissions of a role that stores
+// the given bits, as Mastodon's UserRole#computed_permissions does: every flag
+// when the administrator bit is set, otherwise the stored bits. gotodon has no
+// "everyone" role, so no default bits are added.
+func ComputedPermissions(stored int64) int64 {
+	if stored&PermissionAdministrator == PermissionAdministrator {
+		return PermissionAll
+	}
+	return stored
+}
+
+// HasPermission reports whether a role storing the given bits has any of the
+// given permissions, as Mastodon's UserRole#can? does. The administrator bit
+// implies every permission. With no permissions given it reports false.
+func HasPermission(stored int64, anyOf ...int64) bool {
+	computed := ComputedPermissions(stored)
+	for _, permission := range anyOf {
+		if permission != 0 && computed&permission == permission {
+			return true
+		}
+	}
+	return false
+}
