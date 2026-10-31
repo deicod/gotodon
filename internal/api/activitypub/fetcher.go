@@ -2,15 +2,14 @@ package activitypub
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/deicod/gotodon/pkg/activitypub"
+	"github.com/deicod/gotodon/pkg/safehttp"
 )
 
 type actorFetcher struct {
@@ -19,13 +18,14 @@ type actorFetcher struct {
 	httpClient  *http.Client
 }
 
+// newActorFetcher creates the fetcher used to verify inbox signatures. The
+// actor URI comes from an unauthenticated request, so remote actors are
+// fetched only from public addresses (see safehttp).
 func newActorFetcher(store Store, localDomain string) *actorFetcher {
 	return &actorFetcher{
 		store:       store,
 		localDomain: localDomain,
-		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
-		},
+		httpClient:  safehttp.NewClient(safehttp.Options{}),
 	}
 }
 
@@ -69,26 +69,9 @@ func (f *actorFetcher) isLocalActor(actorURI string) bool {
 }
 
 func (f *actorFetcher) fetchRemoteActor(ctx context.Context, actorURI string) (*activitypub.Actor, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, actorURI, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", activitypub.ActivityPubContentType+", "+activitypub.ActivityPubLDContentType)
-
-	resp, err := f.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("actor fetch failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("actor fetch returned status %d", resp.StatusCode)
-	}
-
 	var actor activitypub.Actor
-	if err := json.NewDecoder(resp.Body).Decode(&actor); err != nil {
-		return nil, fmt.Errorf("failed to decode actor: %w", err)
+	if err := activitypub.FetchDocument(ctx, f.httpClient, actorURI, &actor); err != nil {
+		return nil, fmt.Errorf("actor fetch: %w", err)
 	}
-
 	return &actor, nil
 }

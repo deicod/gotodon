@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/hibiken/asynq"
@@ -11,7 +15,9 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/federation"
 	"github.com/deicod/gotodon/pkg/activitypub"
+	"github.com/deicod/gotodon/pkg/safehttp"
 )
 
 type stubDeliveryStore struct {
@@ -165,4 +171,80 @@ func mustMarshalActivity(t *testing.T, activity *activitypub.Activity) json.RawM
 		t.Fatalf("activity marshal error = %v", err)
 	}
 	return body
+}
+
+func TestDeliveryHandlerSkipsRetryForRefusedInbox(t *testing.T) {
+	store := &stubDeliveryStore{
+		account: db.Account{
+			ID:         7,
+			Uri:        "https://local.example/users/alice",
+			PrivateKey: pgtype.Text{String: "key", Valid: true},
+		},
+	}
+	tests := []struct {
+		name      string
+		err       error
+		skipRetry bool
+	}{
+		{name: "forbidden address", err: fmt.Errorf("delivery failed: %w", safehttp.ErrForbiddenAddress), skipRetry: true},
+		{name: "unsafe url", err: fmt.Errorf("delivery failed: %w", safehttp.ErrUnsafeURL), skipRetry: true},
+		{name: "remote failure", err: errors.New("delivery returned status 503"), skipRetry: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := &DeliveryHandler{
+				store: store,
+				deliver: func(context.Context, db.Account, string, *activitypub.Activity) error {
+					return tt.err
+				},
+			}
+			task := newDeliverTask(t, DeliverActivityPayload{
+				LocalAccountID: 7,
+				Inbox:          "https://remote.example/inbox",
+				Activity:       mustMarshalActivity(t, &activitypub.Activity{Type: activitypub.TypeCreate}),
+			})
+			err := handler.ProcessTask(context.Background(), task)
+			if !errors.Is(err, tt.err) {
+				t.Fatalf("ProcessTask() error = %v, want %v", err, tt.err)
+			}
+			if got := errors.Is(err, asynq.SkipRetry); got != tt.skipRetry {
+				t.Fatalf("ProcessTask() error = %v, SkipRetry %v, want %v", err, got, tt.skipRetry)
+			}
+		})
+	}
+}
+
+func TestDeliveryHandlerRefusesPrivateInbox(t *testing.T) {
+	privateKey, _, err := activitypub.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair() error = %v", err)
+	}
+	var hits atomic.Int64
+	internal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer internal.Close()
+
+	handler := &DeliveryHandler{
+		store: &stubDeliveryStore{account: db.Account{
+			ID:         7,
+			Uri:        "https://local.example/users/alice",
+			PrivateKey: pgtype.Text{String: activitypub.EncodePrivateKey(privateKey), Valid: true},
+		}},
+		deliver: federation.NewDeliveryService().DeliverActivity,
+	}
+	task := newDeliverTask(t, DeliverActivityPayload{
+		LocalAccountID: 7,
+		Inbox:          internal.URL + "/inbox",
+		Activity:       mustMarshalActivity(t, &activitypub.Activity{Type: activitypub.TypeCreate}),
+	})
+
+	err = handler.ProcessTask(context.Background(), task)
+	if !errors.Is(err, safehttp.ErrForbiddenAddress) || !errors.Is(err, asynq.SkipRetry) {
+		t.Fatalf("ProcessTask() error = %v, want ErrForbiddenAddress and SkipRetry", err)
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("private inbox received %d requests, want 0", got)
+	}
 }

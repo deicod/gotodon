@@ -15,6 +15,7 @@ import (
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/federation"
 	"github.com/deicod/gotodon/pkg/activitypub"
+	"github.com/deicod/gotodon/pkg/safehttp"
 )
 
 const (
@@ -168,6 +169,11 @@ func (h *DeliveryHandler) ProcessTask(ctx context.Context, task *asynq.Task) err
 	}
 
 	if err := h.deliver(ctx, localActor, payload.Inbox, &activity); err != nil {
+		// An inbox refused by the address policy stays refused; retrying
+		// would only send more requests towards it.
+		if safehttp.IsRefused(err) {
+			return fmt.Errorf("inbox refused: %w: %w", err, asynq.SkipRetry)
+		}
 		return err
 	}
 	return nil

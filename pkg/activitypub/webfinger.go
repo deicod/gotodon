@@ -8,7 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
+
+	"github.com/deicod/gotodon/pkg/safehttp"
 )
 
 // WebFinger response structure
@@ -45,12 +46,11 @@ type WebFingerClient struct {
 	httpClient *http.Client
 }
 
-// NewWebFingerClient creates a new WebFinger client
+// NewWebFingerClient creates a WebFinger client whose lookups go only to
+// public addresses (see safehttp).
 func NewWebFingerClient() *WebFingerClient {
 	return &WebFingerClient{
-		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
-		},
+		httpClient: safehttp.NewClient(safehttp.Options{}),
 	}
 }
 
@@ -63,11 +63,10 @@ func (c *WebFingerClient) Lookup(ctx context.Context, acct string) (*WebFingerRe
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("invalid acct format: %s", acct)
 	}
-	domain := parts[1]
-
-	// Build WebFinger URL
-	webfingerURL := fmt.Sprintf("https://%s/.well-known/webfinger?resource=%s",
-		domain, url.QueryEscape("acct:"+acct))
+	webfingerURL, err := webFingerURL(parts[1], acct)
+	if err != nil {
+		return nil, err
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, webfingerURL, nil)
 	if err != nil {
@@ -84,13 +83,33 @@ func (c *WebFingerClient) Lookup(ctx context.Context, acct string) (*WebFingerRe
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("webfinger returned status %d", resp.StatusCode)
 	}
+	if contentType := resp.Header.Get("Content-Type"); !isJSONMediaType(parseMediaType(contentType)) {
+		return nil, fmt.Errorf("webfinger returned content type %q", contentType)
+	}
+	body, err := safehttp.ReadBody(resp, MaxDocumentBytes)
+	if err != nil {
+		return nil, fmt.Errorf("webfinger response: %w", err)
+	}
 
 	var result WebFingerResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("failed to decode webfinger response: %w", err)
 	}
 
 	return &result, nil
+}
+
+// webFingerURL builds the lookup URL for acct on domain, refusing a domain
+// that would smuggle a path, query, fragment, credentials or another host
+// into the URL.
+func webFingerURL(domain, acct string) (string, error) {
+	u, err := url.Parse("https://" + domain)
+	if err != nil || domain == "" || u.Host != domain {
+		return "", fmt.Errorf("invalid acct domain: %q", domain)
+	}
+	u.Path = "/.well-known/webfinger"
+	u.RawQuery = "resource=" + url.QueryEscape("acct:"+acct)
+	return u.String(), nil
 }
 
 // GetActorURI extracts the ActivityPub actor URI from a WebFinger response

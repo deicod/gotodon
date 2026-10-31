@@ -103,9 +103,20 @@ type OutboxHandler struct {
 	client *SignedClient
 }
 
-// NewOutboxHandler creates a new outbox handler
+// NewOutboxHandler creates an outbox handler that delivers only to inboxes on
+// public addresses (see safehttp).
 func NewOutboxHandler(keyID, privateKeyPEM string) (*OutboxHandler, error) {
 	client, err := NewSignedClient(keyID, privateKeyPEM)
+	if err != nil {
+		return nil, err
+	}
+	return &OutboxHandler{client: client}, nil
+}
+
+// NewOutboxHandlerWithHTTPClient creates an outbox handler that delivers with
+// httpClient.
+func NewOutboxHandlerWithHTTPClient(keyID, privateKeyPEM string, httpClient *http.Client) (*OutboxHandler, error) {
+	client, err := NewSignedClientWithHTTPClient(keyID, privateKeyPEM, httpClient)
 	if err != nil {
 		return nil, err
 	}

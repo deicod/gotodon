@@ -3,6 +3,7 @@ package federation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/pkg/activitypub"
+	"github.com/deicod/gotodon/pkg/safehttp"
 )
 
 func TestDeliveryQueue_RetriesThenSucceeds(t *testing.T) {
@@ -115,6 +117,59 @@ func TestDeliveryQueue_DropsAfterMaxRetries(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	if got := atomic.LoadInt32(&attempts); got != 2 {
 		t.Fatalf("attempts = %d, want 2", got)
+	}
+}
+
+func TestDeliveryQueue_DoesNotRetryRefusedInbox(t *testing.T) {
+	for _, refusal := range []error{safehttp.ErrForbiddenAddress, safehttp.ErrUnsafeURL} {
+		t.Run(refusal.Error(), func(t *testing.T) {
+			var attempts int32
+			deliver := func(ctx context.Context, localActor db.Account, inbox string, activity *activitypub.Activity) error {
+				atomic.AddInt32(&attempts, 1)
+				return fmt.Errorf("delivery failed: %w", refusal)
+			}
+
+			queue := NewDeliveryQueue(deliver, DeliveryQueueConfig{
+				WorkerCount: 1,
+				MaxRetries:  5,
+				BaseBackoff: 5 * time.Millisecond,
+				MaxBackoff:  5 * time.Millisecond,
+				QueueSize:   10,
+			})
+			queue.Start()
+			defer func() {
+				_ = queue.Stop(context.Background())
+			}()
+
+			local := db.Account{
+				Uri:        "https://local.test/users/alice",
+				PrivateKey: pgtype.Text{String: "key", Valid: true},
+			}
+			activity := &activitypub.Activity{
+				Type:           activitypub.TypeFollow,
+				Actor:          local.Uri,
+				ActivityObject: "https://remote.example/users/bob",
+			}
+			if err := queue.Enqueue(local, "http://10.0.0.1/inbox", activity); err != nil {
+				t.Fatalf("Enqueue error: %v", err)
+			}
+
+			timeout := time.After(500 * time.Millisecond)
+			for atomic.LoadInt32(&attempts) < 1 {
+				select {
+				case <-timeout:
+					t.Fatal("timeout waiting for the delivery attempt")
+				default:
+					time.Sleep(5 * time.Millisecond)
+				}
+			}
+
+			// Several backoff periods pass without another attempt.
+			time.Sleep(50 * time.Millisecond)
+			if got := atomic.LoadInt32(&attempts); got != 1 {
+				t.Fatalf("attempts = %d, want 1", got)
+			}
+		})
 	}
 }
 

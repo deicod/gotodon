@@ -2,12 +2,10 @@ package federation
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -15,6 +13,7 @@ import (
 	apihandler "github.com/deicod/gotodon/internal/api/activitypub"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/pkg/activitypub"
+	"github.com/deicod/gotodon/pkg/safehttp"
 )
 
 // AnnounceStore describes the persistence needed for incoming Announce activities.
@@ -398,33 +397,19 @@ type httpObjectFetcher struct {
 	client *http.Client
 }
 
+// newHTTPObjectFetcher creates the fetcher for objects and collections that
+// remote activities reference; they are fetched only from public addresses
+// (see safehttp).
 func newHTTPObjectFetcher() *httpObjectFetcher {
 	return &httpObjectFetcher{
-		client: &http.Client{Timeout: 10 * time.Second},
+		client: safehttp.NewClient(safehttp.Options{}),
 	}
 }
 
 func (f *httpObjectFetcher) FetchObject(ctx context.Context, objectURI string) (any, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, objectURI, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", activitypub.ActivityPubContentType+", "+activitypub.ActivityPubLDContentType)
-
-	resp, err := f.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("object fetch failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("object fetch returned status %d", resp.StatusCode)
-	}
-
 	var payload any
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("failed to decode object: %w", err)
+	if err := activitypub.FetchDocument(ctx, f.client, objectURI, &payload); err != nil {
+		return nil, fmt.Errorf("object fetch: %w", err)
 	}
-
 	return payload, nil
 }
