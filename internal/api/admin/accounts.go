@@ -463,141 +463,174 @@ func (h *AccountsHandler) actionTarget(w http.ResponseWriter, r *http.Request) (
 	return target, true
 }
 
-// Approve handles POST /api/v1/admin/accounts/:id/approve
+// Approve handles POST /api/v1/admin/accounts/:id/approve. It needs a local
+// account with a user who isn't approved yet (UserPolicy#approve?).
 func (h *AccountsHandler) Approve(w http.ResponseWriter, r *http.Request) {
-	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
-	if err != nil {
-		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
+	target, ok := h.actionTarget(w, r)
+	if !ok || !requireLocalUser(w, target) {
+		return
+	}
+	if target.UserApproved.Bool {
+		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
 		return
 	}
 
-	if err := h.store.AdminApproveAccount(r.Context(), accountID); err != nil {
+	if err := h.store.AdminApproveAccount(r.Context(), target.ID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
 	if adminID, ok := middleware.GetAccountID(r.Context()); ok {
-		h.logUserAction(r.Context(), adminID, accountID, "approve")
+		h.logUserAction(r.Context(), adminID, target.ID, "approve")
 	}
 
 	// Fetch updated
 	h.Get(w, r)
 }
 
-// Reject handles POST /api/v1/admin/accounts/:id/reject
+// Reject handles POST /api/v1/admin/accounts/:id/reject. It needs a local
+// account with a user who isn't approved yet (UserPolicy#reject?).
 func (h *AccountsHandler) Reject(w http.ResponseWriter, r *http.Request) {
-	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
-	if err != nil {
-		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
+	target, ok := h.actionTarget(w, r)
+	if !ok || !requireLocalUser(w, target) {
+		return
+	}
+	if target.UserApproved.Bool {
+		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
 		return
 	}
 
-	if err := h.store.AdminRejectAccount(r.Context(), accountID); err != nil {
+	if err := h.store.AdminRejectAccount(r.Context(), target.ID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
 	if adminID, ok := middleware.GetAccountID(r.Context()); ok {
-		h.logUserAction(r.Context(), adminID, accountID, "reject")
+		h.logUserAction(r.Context(), adminID, target.ID, "reject")
 	}
 
 	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
-// Enable handles POST /api/v1/admin/accounts/:id/enable
+// Enable handles POST /api/v1/admin/accounts/:id/enable. It needs a local
+// account with a user.
 func (h *AccountsHandler) Enable(w http.ResponseWriter, r *http.Request) {
-	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
-	if err != nil {
-		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
+	target, ok := h.actionTarget(w, r)
+	if !ok || !requireLocalUser(w, target) {
 		return
 	}
 
-	if err := h.store.AdminEnableAccount(r.Context(), accountID); err != nil {
+	if err := h.store.AdminEnableAccount(r.Context(), target.ID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
 	if adminID, ok := middleware.GetAccountID(r.Context()); ok {
-		h.logUserAction(r.Context(), adminID, accountID, "enable")
+		h.logUserAction(r.Context(), adminID, target.ID, "enable")
 	}
 
 	h.Get(w, r)
+}
+
+// requireLocalUser is Api::V1::Admin::AccountsController's
+// require_local_account!: enable, approve and reject need a local account
+// with a user. Otherwise it answers as Mastodon's forbidden does, with the
+// generic 403 body Forbidden rather than a policy's This action is not
+// allowed.
+func requireLocalUser(w http.ResponseWriter, target db.AdminGetAccountActionTargetRow) bool {
+	if target.Domain.Valid || !target.UserID.Valid {
+		web.JSONError(w, http.StatusForbidden, "Forbidden")
+		return false
+	}
+	return true
 }
 
 // Unsilence handles POST /api/v1/admin/accounts/:id/unsilence
 func (h *AccountsHandler) Unsilence(w http.ResponseWriter, r *http.Request) {
-	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
-	if err != nil {
-		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
+	target, ok := h.actionTarget(w, r)
+	if !ok {
 		return
 	}
 
-	if err := h.store.AdminUnsilenceAccount(r.Context(), accountID); err != nil {
+	if err := h.store.AdminUnsilenceAccount(r.Context(), target.ID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
 	if adminID, ok := middleware.GetAccountID(r.Context()); ok {
-		h.logAccountAction(r.Context(), adminID, accountID, "unsilence")
+		h.logAccountAction(r.Context(), adminID, target.ID, "unsilence")
 	}
 
 	h.Get(w, r)
 }
 
-// Unsuspend handles POST /api/v1/admin/accounts/:id/unsuspend
+// Unsuspend handles POST /api/v1/admin/accounts/:id/unsuspend. It only lifts
+// a suspension made on this server (AccountPolicy#unsuspend?), so an account
+// that its own server suspended, or that isn't suspended, gets 403.
 func (h *AccountsHandler) Unsuspend(w http.ResponseWriter, r *http.Request) {
-	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
-	if err != nil {
-		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
+	target, ok := h.actionTarget(w, r)
+	if !ok {
+		return
+	}
+	if !suspendedLocally(target) {
+		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
 		return
 	}
 
-	if err := h.store.AdminUnsuspendAccount(r.Context(), accountID); err != nil {
+	if err := h.store.AdminUnsuspendAccount(r.Context(), target.ID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
 	if adminID, ok := middleware.GetAccountID(r.Context()); ok {
-		h.logAccountAction(r.Context(), adminID, accountID, "unsuspend")
+		h.logAccountAction(r.Context(), adminID, target.ID, "unsuspend")
 	}
 
 	h.Get(w, r)
 }
 
-// Unsensitize handles POST /api/v1/admin/accounts/:id/unsensitize
+// suspensionOriginLocal is Mastodon's suspension_origin enum value :local.
+const suspensionOriginLocal = 0
+
+// suspendedLocally is Account#suspension_origin_local?. It reads only the
+// origin, which suspending sets and unsuspending clears.
+func suspendedLocally(target db.AdminGetAccountActionTargetRow) bool {
+	return target.SuspensionOrigin.Valid && target.SuspensionOrigin.Int32 == suspensionOriginLocal
+}
+
+// Unsensitize handles POST /api/v1/admin/accounts/:id/unsensitive
 func (h *AccountsHandler) Unsensitize(w http.ResponseWriter, r *http.Request) {
-	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
-	if err != nil {
-		web.JSONError(w, http.StatusInternalServerError, "Invalid ID")
+	target, ok := h.actionTarget(w, r)
+	if !ok {
 		return
 	}
 
-	if err := h.store.AdminUnsensitizeAccount(r.Context(), accountID); err != nil {
+	if err := h.store.AdminUnsensitizeAccount(r.Context(), target.ID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
 	if adminID, ok := middleware.GetAccountID(r.Context()); ok {
-		h.logAccountAction(r.Context(), adminID, accountID, "unsensitive")
+		h.logAccountAction(r.Context(), adminID, target.ID, "unsensitive")
 	}
 
 	h.Get(w, r)
 }
 
-// Delete handles DELETE /api/v1/admin/accounts/:id
+// Delete handles DELETE /api/v1/admin/accounts/:id. Like Mastodon's
+// AccountPolicy#destroy?, it only deletes an account that is suspended
+// temporarily: suspended, with the deletion request that suspending creates.
 func (h *AccountsHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	accountID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
-	if err != nil {
-		web.JSONError(w, http.StatusNotFound, "Record not found")
+	target, ok := h.actionTarget(w, r)
+	if !ok {
+		return
+	}
+	if !target.SuspendedAt.Valid || !target.DeletionRequested {
+		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
 		return
 	}
 
-	if _, err := h.store.AdminGetAccount(r.Context(), accountID); err != nil {
-		web.JSONError(w, http.StatusNotFound, "Record not found")
-		return
-	}
-
-	if err := h.store.AdminDeleteAccount(r.Context(), accountID); err != nil {
+	if err := h.store.AdminDeleteAccount(r.Context(), target.ID); err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
