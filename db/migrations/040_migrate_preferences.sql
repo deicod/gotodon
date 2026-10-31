@@ -3,6 +3,7 @@
 
 -- +goose Up
 
+-- +goose StatementBegin
 CREATE OR REPLACE FUNCTION safe_jsonb(value text) RETURNS jsonb AS $$
 BEGIN
     IF value IS NULL OR btrim(value) = '' THEN
@@ -13,6 +14,7 @@ EXCEPTION WHEN others THEN
     RETURN '{}'::jsonb;
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
+-- +goose StatementEnd
 
 WITH prefs AS (
     SELECT account_id,
@@ -65,6 +67,7 @@ CREATE TABLE preferences (
         REFERENCES accounts(id) ON DELETE CASCADE
 );
 
+-- +goose StatementBegin
 CREATE OR REPLACE FUNCTION safe_jsonb(value text) RETURNS jsonb AS $$
 BEGIN
     IF value IS NULL OR btrim(value) = '' THEN
@@ -75,6 +78,7 @@ EXCEPTION WHEN others THEN
     RETURN '{}'::jsonb;
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
+-- +goose StatementEnd
 
 INSERT INTO preferences (
     account_id,
