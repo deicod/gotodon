@@ -623,9 +623,6 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	adminRetentionHandler := admin.NewRetentionHandler(queries)
 	adminRetentionHandler.RegisterRoutes(mux)
 
-	adminCustomEmojisHandler := admin.NewCustomEmojisHandler(queries, mediaUploader)
-	adminCustomEmojisHandler.RegisterRoutes(mux)
-
 	// V1 Reports (User API)
 	v1ReportsHandler := v1.NewReportsHandler(queries)
 	if mailDeliverer != nil {
