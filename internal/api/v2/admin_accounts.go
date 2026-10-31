@@ -28,12 +28,13 @@ const (
 // AdminAccountsHandler handles v2 admin account endpoints.
 type AdminAccountsHandler struct {
 	queries *db.Queries
+	roles   adminapi.RoleLookup
 	cfg     *config.Config
 }
 
 // NewAdminAccountsHandler creates a new admin accounts handler.
 func NewAdminAccountsHandler(queries *db.Queries, cfg *config.Config) *AdminAccountsHandler {
-	return &AdminAccountsHandler{queries: queries, cfg: cfg}
+	return &AdminAccountsHandler{queries: queries, roles: adminapi.NewRoleLookup(queries), cfg: cfg}
 }
 
 // AdminIP represents an IP entry in admin account responses.
@@ -83,10 +84,6 @@ type adminAccountStats struct {
 
 // List handles GET /api/v2/admin/accounts.
 func (h *AdminAccountsHandler) List(w http.ResponseWriter, r *http.Request) {
-	if err := adminapi.RequireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	query := r.URL.Query()
 	origin := strings.TrimSpace(query.Get("origin"))
 	status := strings.TrimSpace(query.Get("status"))
@@ -504,7 +501,10 @@ func boolPointer(value bool) *bool {
 	return &v
 }
 
-// RegisterRoutes registers admin account routes.
-func (h *AdminAccountsHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v2/admin/accounts", h.List)
+// RegisterRoutes registers admin account routes. Listing accounts needs
+// manage_users, as in Mastodon's AccountPolicy#index?.
+func (h *AdminAccountsHandler) RegisterRoutes(mux adminapi.RouteRegistrar) {
+	manageUsers := adminapi.WithPermission(h.roles, auth.PermissionManageUsers)
+
+	mux.HandleFunc("GET /api/v2/admin/accounts", manageUsers(h.List))
 }

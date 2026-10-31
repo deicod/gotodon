@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 )
@@ -17,11 +18,12 @@ import (
 // DomainAllowsHandler handles admin domain allow endpoints.
 type DomainAllowsHandler struct {
 	queries *db.Queries
+	roles   RoleLookup
 }
 
 // NewDomainAllowsHandler creates a new domain allows handler.
 func NewDomainAllowsHandler(queries *db.Queries) *DomainAllowsHandler {
-	return &DomainAllowsHandler{queries: queries}
+	return &DomainAllowsHandler{queries: queries, roles: NewRoleLookup(queries)}
 }
 
 // DomainAllow represents a domain allow entry.
@@ -33,10 +35,6 @@ type DomainAllow struct {
 
 // GetAll handles GET /api/v1/admin/domain_allows.
 func (h *DomainAllowsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	limit := 100
 	if l := web.QueryParam(r, "limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 200 {
@@ -77,10 +75,6 @@ func (h *DomainAllowsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
 
 // Get handles GET /api/v1/admin/domain_allows/{id}.
 func (h *DomainAllowsHandler) Get(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	allowID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
@@ -107,10 +101,6 @@ func (h *DomainAllowsHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 // Create handles POST /api/v1/admin/domain_allows.
 func (h *DomainAllowsHandler) Create(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	var req struct {
 		Domain string `json:"domain" form:"domain"`
 	}
@@ -163,10 +153,6 @@ func (h *DomainAllowsHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 // Delete handles DELETE /api/v1/admin/domain_allows/{id}.
 func (h *DomainAllowsHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	allowID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
@@ -181,10 +167,13 @@ func (h *DomainAllowsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
-// RegisterRoutes registers domain allow routes.
-func (h *DomainAllowsHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/admin/domain_allows", h.GetAll)
-	mux.HandleFunc("POST /api/v1/admin/domain_allows", h.Create)
-	mux.HandleFunc("GET /api/v1/admin/domain_allows/{id}", h.Get)
-	mux.HandleFunc("DELETE /api/v1/admin/domain_allows/{id}", h.Delete)
+// RegisterRoutes registers domain allow routes. Every action needs
+// manage_federation, as in Mastodon's DomainAllowPolicy.
+func (h *DomainAllowsHandler) RegisterRoutes(mux RouteRegistrar) {
+	manageFederation := WithPermission(h.roles, auth.PermissionManageFederation)
+
+	mux.HandleFunc("GET /api/v1/admin/domain_allows", manageFederation(h.GetAll))
+	mux.HandleFunc("POST /api/v1/admin/domain_allows", manageFederation(h.Create))
+	mux.HandleFunc("GET /api/v1/admin/domain_allows/{id}", manageFederation(h.Get))
+	mux.HandleFunc("DELETE /api/v1/admin/domain_allows/{id}", manageFederation(h.Delete))
 }

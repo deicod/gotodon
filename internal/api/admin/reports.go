@@ -12,6 +12,7 @@ import (
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	v1 "github.com/deicod/gotodon/internal/api/v1"
+	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 )
@@ -19,12 +20,14 @@ import (
 // ReportsHandler handles admin report endpoints
 type ReportsHandler struct {
 	queries *db.Queries
+	roles   RoleLookup
 }
 
 // NewReportsHandler creates a new admin reports handler
 func NewReportsHandler(queries *db.Queries) *ReportsHandler {
 	return &ReportsHandler{
 		queries: queries,
+		roles:   NewRoleLookup(queries),
 	}
 }
 
@@ -124,10 +127,6 @@ func (h *ReportsHandler) useDB() bool {
 
 // GetAll handles GET /api/v1/admin/reports
 func (h *ReportsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	limit := 100
 	if l := web.QueryParam(r, "limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 200 {
@@ -252,10 +251,6 @@ func (h *ReportsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
 
 // Get handles GET /api/v1/admin/reports/:id
 func (h *ReportsHandler) Get(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Not found")
@@ -326,10 +321,6 @@ func (h *ReportsHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 // Update handles PUT /api/v1/admin/reports/:id
 func (h *ReportsHandler) Update(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Not found")
@@ -422,10 +413,6 @@ func (h *ReportsHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 // AssignToSelf handles POST /api/v1/admin/reports/:id/assign_to_self
 func (h *ReportsHandler) AssignToSelf(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	adminID, _ := middleware.GetAccountID(r.Context())
 
 	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
@@ -453,10 +440,6 @@ func (h *ReportsHandler) AssignToSelf(w http.ResponseWriter, r *http.Request) {
 
 // Unassign handles POST /api/v1/admin/reports/:id/unassign
 func (h *ReportsHandler) Unassign(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Not found")
@@ -482,10 +465,6 @@ func (h *ReportsHandler) Unassign(w http.ResponseWriter, r *http.Request) {
 
 // Reopen handles POST /api/v1/admin/reports/:id/reopen
 func (h *ReportsHandler) Reopen(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Not found")
@@ -507,10 +486,6 @@ func (h *ReportsHandler) Reopen(w http.ResponseWriter, r *http.Request) {
 
 // Resolve handles POST /api/v1/admin/reports/:id/resolve
 func (h *ReportsHandler) Resolve(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	adminID, _ := middleware.GetAccountID(r.Context())
 
 	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
@@ -536,14 +511,17 @@ func (h *ReportsHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 	h.Get(w, r)
 }
 
-// RegisterRoutes registers admin report routes
-func (h *ReportsHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/admin/reports", h.GetAll)
-	mux.HandleFunc("GET /api/v1/admin/reports/{id}", h.Get)
-	mux.HandleFunc("PUT /api/v1/admin/reports/{id}", h.Update)
-	mux.HandleFunc("PATCH /api/v1/admin/reports/{id}", h.Update)
-	mux.HandleFunc("POST /api/v1/admin/reports/{id}/resolve", h.Resolve)
-	mux.HandleFunc("POST /api/v1/admin/reports/{id}/assign_to_self", h.AssignToSelf)
-	mux.HandleFunc("POST /api/v1/admin/reports/{id}/unassign", h.Unassign)
-	mux.HandleFunc("POST /api/v1/admin/reports/{id}/reopen", h.Reopen)
+// RegisterRoutes registers admin report routes. Every action needs
+// manage_reports, as in Mastodon's ReportPolicy.
+func (h *ReportsHandler) RegisterRoutes(mux RouteRegistrar) {
+	manageReports := WithPermission(h.roles, auth.PermissionManageReports)
+
+	mux.HandleFunc("GET /api/v1/admin/reports", manageReports(h.GetAll))
+	mux.HandleFunc("GET /api/v1/admin/reports/{id}", manageReports(h.Get))
+	mux.HandleFunc("PUT /api/v1/admin/reports/{id}", manageReports(h.Update))
+	mux.HandleFunc("PATCH /api/v1/admin/reports/{id}", manageReports(h.Update))
+	mux.HandleFunc("POST /api/v1/admin/reports/{id}/resolve", manageReports(h.Resolve))
+	mux.HandleFunc("POST /api/v1/admin/reports/{id}/assign_to_self", manageReports(h.AssignToSelf))
+	mux.HandleFunc("POST /api/v1/admin/reports/{id}/unassign", manageReports(h.Unassign))
+	mux.HandleFunc("POST /api/v1/admin/reports/{id}/reopen", manageReports(h.Reopen))
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 )
@@ -18,11 +19,12 @@ import (
 // TagsHandler handles admin tag endpoints.
 type TagsHandler struct {
 	queries *db.Queries
+	roles   RoleLookup
 }
 
 // NewTagsHandler creates a new admin tags handler.
 func NewTagsHandler(queries *db.Queries) *TagsHandler {
-	return &TagsHandler{queries: queries}
+	return &TagsHandler{queries: queries, roles: NewRoleLookup(queries)}
 }
 
 // TagHistory represents usage stats for a single day.
@@ -77,10 +79,6 @@ func mapAdminTag(tag db.Tag) AdminTag {
 
 // GetAll handles GET /api/v1/admin/tags.
 func (h *TagsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	limit := 100
 	if l := web.QueryParam(r, "limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 200 {
@@ -113,10 +111,6 @@ func (h *TagsHandler) GetAll(w http.ResponseWriter, r *http.Request) {
 
 // Get handles GET /api/v1/admin/tags/{id}.
 func (h *TagsHandler) Get(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	tagID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
@@ -138,10 +132,6 @@ func (h *TagsHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 // Update handles PUT /api/v1/admin/tags/{id}.
 func (h *TagsHandler) Update(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	tagID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
@@ -212,10 +202,13 @@ func (h *TagsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, mapAdminTag(updated))
 }
 
-// RegisterRoutes registers admin tag routes.
-func (h *TagsHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/admin/tags", h.GetAll)
-	mux.HandleFunc("GET /api/v1/admin/tags/{id}", h.Get)
-	mux.HandleFunc("PUT /api/v1/admin/tags/{id}", h.Update)
-	mux.HandleFunc("PATCH /api/v1/admin/tags/{id}", h.Update)
+// RegisterRoutes registers admin tag routes. Every action needs
+// manage_taxonomies, as in Mastodon's TagPolicy.
+func (h *TagsHandler) RegisterRoutes(mux RouteRegistrar) {
+	manageTaxonomies := WithPermission(h.roles, auth.PermissionManageTaxonomies)
+
+	mux.HandleFunc("GET /api/v1/admin/tags", manageTaxonomies(h.GetAll))
+	mux.HandleFunc("GET /api/v1/admin/tags/{id}", manageTaxonomies(h.Get))
+	mux.HandleFunc("PUT /api/v1/admin/tags/{id}", manageTaxonomies(h.Update))
+	mux.HandleFunc("PATCH /api/v1/admin/tags/{id}", manageTaxonomies(h.Update))
 }

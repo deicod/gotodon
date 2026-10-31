@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	v1 "github.com/deicod/gotodon/internal/api/v1"
+	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
@@ -23,12 +24,13 @@ import (
 // InstanceHandler handles admin instance endpoints
 type InstanceHandler struct {
 	queries *db.Queries
+	roles   RoleLookup
 	cfg     *config.Config
 }
 
 // NewInstanceHandler creates a new instance handler
 func NewInstanceHandler(queries *db.Queries, cfg *config.Config) *InstanceHandler {
-	return &InstanceHandler{queries: queries, cfg: cfg}
+	return &InstanceHandler{queries: queries, roles: NewRoleLookup(queries), cfg: cfg}
 }
 
 // InstanceConfig holds instance configuration
@@ -216,18 +218,11 @@ func (h *InstanceHandler) loadInstanceConfig(ctx context.Context) InstanceConfig
 
 // Get handles GET /api/v1/admin/instance
 func (h *InstanceHandler) Get(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
 	web.JSON(w, http.StatusOK, h.loadInstanceConfig(r.Context()))
 }
 
 // Update handles PATCH /api/v1/admin/instance
 func (h *InstanceHandler) Update(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
-
 	var req struct {
 		Title            *string  `json:"title" form:"title"`
 		Description      *string  `json:"description" form:"description"`
@@ -291,6 +286,7 @@ func (h *InstanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 // TrendsHandler handles admin trends endpoints
 type TrendsHandler struct {
 	queries *db.Queries
+	roles   RoleLookup
 	cfg     *config.Config
 }
 
@@ -299,7 +295,7 @@ func NewTrendsHandler(queries *db.Queries, cfg *config.Config) *TrendsHandler {
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
-	return &TrendsHandler{queries: queries, cfg: cfg}
+	return &TrendsHandler{queries: queries, roles: NewRoleLookup(queries), cfg: cfg}
 }
 
 // AdminTrendStatus represents a status in admin trends responses.
@@ -490,9 +486,6 @@ func mapAdminTrendLinkPublisher(provider db.PreviewCardProvider) AdminTrendLinkP
 
 // GetTags handles GET /api/v1/admin/trends/tags
 func (h *TrendsHandler) GetTags(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
 	if h.queries == nil {
 		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
@@ -518,9 +511,6 @@ func (h *TrendsHandler) GetTags(w http.ResponseWriter, r *http.Request) {
 
 // GetStatuses handles GET /api/v1/admin/trends/statuses
 func (h *TrendsHandler) GetStatuses(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
 	if h.queries == nil {
 		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
@@ -572,9 +562,6 @@ func (h *TrendsHandler) GetStatuses(w http.ResponseWriter, r *http.Request) {
 
 // GetLinks handles GET /api/v1/admin/trends/links
 func (h *TrendsHandler) GetLinks(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
 	if h.queries == nil {
 		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
@@ -611,9 +598,6 @@ func (h *TrendsHandler) GetLinks(w http.ResponseWriter, r *http.Request) {
 
 // GetLinkPublishers handles GET /api/v1/admin/trends/links/publishers
 func (h *TrendsHandler) GetLinkPublishers(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
 	if h.queries == nil {
 		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
@@ -660,9 +644,6 @@ func (h *TrendsHandler) GetLinkPublishers(w http.ResponseWriter, r *http.Request
 
 // ApproveTag handles POST /api/v1/admin/trends/tags/{id}/approve.
 func (h *TrendsHandler) ApproveTag(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
 	if h.queries == nil {
 		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
@@ -692,9 +673,6 @@ func (h *TrendsHandler) ApproveTag(w http.ResponseWriter, r *http.Request) {
 
 // RejectTag handles POST /api/v1/admin/trends/tags/{id}/reject.
 func (h *TrendsHandler) RejectTag(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
 	if h.queries == nil {
 		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
@@ -724,9 +702,6 @@ func (h *TrendsHandler) RejectTag(w http.ResponseWriter, r *http.Request) {
 
 // ApproveStatus handles POST /api/v1/admin/trends/statuses/{id}/approve.
 func (h *TrendsHandler) ApproveStatus(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
 	if h.queries == nil {
 		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
@@ -757,9 +732,6 @@ func (h *TrendsHandler) ApproveStatus(w http.ResponseWriter, r *http.Request) {
 
 // RejectStatus handles POST /api/v1/admin/trends/statuses/{id}/reject.
 func (h *TrendsHandler) RejectStatus(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
 	if h.queries == nil {
 		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
@@ -790,9 +762,6 @@ func (h *TrendsHandler) RejectStatus(w http.ResponseWriter, r *http.Request) {
 
 // ApproveLink handles POST /api/v1/admin/trends/links/{id}/approve.
 func (h *TrendsHandler) ApproveLink(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
 	if h.queries == nil {
 		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
@@ -822,9 +791,6 @@ func (h *TrendsHandler) ApproveLink(w http.ResponseWriter, r *http.Request) {
 
 // RejectLink handles POST /api/v1/admin/trends/links/{id}/reject.
 func (h *TrendsHandler) RejectLink(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
 	if h.queries == nil {
 		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
@@ -854,9 +820,6 @@ func (h *TrendsHandler) RejectLink(w http.ResponseWriter, r *http.Request) {
 
 // ApproveLinkPublisher handles POST /api/v1/admin/trends/links/publishers/{id}/approve.
 func (h *TrendsHandler) ApproveLinkPublisher(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
 	if h.queries == nil {
 		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
@@ -886,9 +849,6 @@ func (h *TrendsHandler) ApproveLinkPublisher(w http.ResponseWriter, r *http.Requ
 
 // RejectLinkPublisher handles POST /api/v1/admin/trends/links/publishers/{id}/reject.
 func (h *TrendsHandler) RejectLinkPublisher(w http.ResponseWriter, r *http.Request) {
-	if err := requireAdmin(w, r, h.queries); err != nil {
-		return
-	}
 	if h.queries == nil {
 		web.JSONError(w, http.StatusInternalServerError, "Trends data unavailable")
 		return
@@ -916,24 +876,37 @@ func (h *TrendsHandler) RejectLinkPublisher(w http.ResponseWriter, r *http.Reque
 	web.JSON(w, http.StatusOK, mapAdminTrendLinkPublisher(provider))
 }
 
-// RegisterInstanceRoutes registers instance route
-func (h *InstanceHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/admin/instance", h.Get)
-	mux.HandleFunc("PATCH /api/v1/admin/instance", h.Update)
+// RegisterRoutes registers the instance settings routes, which are
+// gotodon-specific. They need manage_settings, as Mastodon's admin settings
+// do (SettingsPolicy).
+func (h *InstanceHandler) RegisterRoutes(mux RouteRegistrar) {
+	manageSettings := WithPermission(h.roles, auth.PermissionManageSettings)
+
+	mux.HandleFunc("GET /api/v1/admin/instance", manageSettings(h.Get))
+	mux.HandleFunc("PATCH /api/v1/admin/instance", manageSettings(h.Update))
 }
 
-// RegisterTrendsRoutes registers trends routes
-func (h *TrendsHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/admin/trends/tags", h.GetTags)
-	mux.HandleFunc("POST /api/v1/admin/trends/tags/{id}/approve", h.ApproveTag)
-	mux.HandleFunc("POST /api/v1/admin/trends/tags/{id}/reject", h.RejectTag)
-	mux.HandleFunc("GET /api/v1/admin/trends/statuses", h.GetStatuses)
-	mux.HandleFunc("POST /api/v1/admin/trends/statuses/{id}/approve", h.ApproveStatus)
-	mux.HandleFunc("POST /api/v1/admin/trends/statuses/{id}/reject", h.RejectStatus)
-	mux.HandleFunc("GET /api/v1/admin/trends/links", h.GetLinks)
-	mux.HandleFunc("POST /api/v1/admin/trends/links/{id}/approve", h.ApproveLink)
-	mux.HandleFunc("POST /api/v1/admin/trends/links/{id}/reject", h.RejectLink)
-	mux.HandleFunc("GET /api/v1/admin/trends/links/publishers", h.GetLinkPublishers)
-	mux.HandleFunc("POST /api/v1/admin/trends/links/publishers/{id}/approve", h.ApproveLinkPublisher)
-	mux.HandleFunc("POST /api/v1/admin/trends/links/publishers/{id}/reject", h.RejectLinkPublisher)
+// RegisterRoutes registers admin trends routes. Every action needs
+// manage_taxonomies: TagPolicy#review?, Admin::StatusPolicy#review?,
+// PreviewCardPolicy and PreviewCardProviderPolicy in Mastodon.
+//
+// Mastodon does not authorize the tag, status and link lists: callers
+// without manage_taxonomies get the public trends from /api/v1/trends/*
+// instead of the admin view. gotodon refuses them with 403, since the public
+// endpoints already serve that data.
+func (h *TrendsHandler) RegisterRoutes(mux RouteRegistrar) {
+	manageTaxonomies := WithPermission(h.roles, auth.PermissionManageTaxonomies)
+
+	mux.HandleFunc("GET /api/v1/admin/trends/tags", manageTaxonomies(h.GetTags))
+	mux.HandleFunc("POST /api/v1/admin/trends/tags/{id}/approve", manageTaxonomies(h.ApproveTag))
+	mux.HandleFunc("POST /api/v1/admin/trends/tags/{id}/reject", manageTaxonomies(h.RejectTag))
+	mux.HandleFunc("GET /api/v1/admin/trends/statuses", manageTaxonomies(h.GetStatuses))
+	mux.HandleFunc("POST /api/v1/admin/trends/statuses/{id}/approve", manageTaxonomies(h.ApproveStatus))
+	mux.HandleFunc("POST /api/v1/admin/trends/statuses/{id}/reject", manageTaxonomies(h.RejectStatus))
+	mux.HandleFunc("GET /api/v1/admin/trends/links", manageTaxonomies(h.GetLinks))
+	mux.HandleFunc("POST /api/v1/admin/trends/links/{id}/approve", manageTaxonomies(h.ApproveLink))
+	mux.HandleFunc("POST /api/v1/admin/trends/links/{id}/reject", manageTaxonomies(h.RejectLink))
+	mux.HandleFunc("GET /api/v1/admin/trends/links/publishers", manageTaxonomies(h.GetLinkPublishers))
+	mux.HandleFunc("POST /api/v1/admin/trends/links/publishers/{id}/approve", manageTaxonomies(h.ApproveLinkPublisher))
+	mux.HandleFunc("POST /api/v1/admin/trends/links/publishers/{id}/reject", manageTaxonomies(h.RejectLinkPublisher))
 }
