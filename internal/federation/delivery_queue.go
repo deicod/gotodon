@@ -10,6 +10,7 @@ import (
 
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/pkg/activitypub"
+	"github.com/deicod/gotodon/pkg/safehttp"
 )
 
 const (
@@ -215,7 +216,9 @@ func (q *DeliveryQueue) scheduler() {
 			if result.job == nil {
 				continue
 			}
-			if result.err == nil {
+			// An inbox refused by the address policy stays refused, so
+			// only other failures are retried.
+			if result.err == nil || safehttp.IsRefused(result.err) {
 				continue
 			}
 			result.job.attempts++
