@@ -240,7 +240,7 @@ type Querier interface {
 	DeleteBookmark(ctx context.Context, arg DeleteBookmarkParams) error
 	DeleteConversation(ctx context.Context, id int64) error
 	DeleteConversationMute(ctx context.Context, arg DeleteConversationMuteParams) error
-	DeleteCustomEmoji(ctx context.Context, id int64) error
+	DeleteCustomEmoji(ctx context.Context, id int64) (CustomEmoji, error)
 	DeleteDomainAllow(ctx context.Context, id int64) error
 	DeleteDomainAllowByDomain(ctx context.Context, domain string) error
 	DeleteDomainBlock(ctx context.Context, arg DeleteDomainBlockParams) error
@@ -555,6 +555,7 @@ type Querier interface {
 	// The administrator flag (bit 0) implies every permission, mirroring Mastodon's UserRole.
 	ListUsersWithPermission(ctx context.Context, permission int64) ([]User, error)
 	ListWebAuthnCredentialsByUser(ctx context.Context, userID pgtype.Int8) ([]WebauthnCredential, error)
+	LocalCustomEmojiShortcodeTaken(ctx context.Context, shortcode string) (bool, error)
 	MarkAnnualReportViewed(ctx context.Context, id int64) (GeneratedAnnualReport, error)
 	MarkConversationRead(ctx context.Context, arg MarkConversationReadParams) (int64, error)
 	MarkConversationUnread(ctx context.Context, arg MarkConversationUnreadParams) (int64, error)

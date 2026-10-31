@@ -152,13 +152,32 @@ func (q *Queries) CreateCustomEmoji(ctx context.Context, arg CreateCustomEmojiPa
 	return i, err
 }
 
-const deleteCustomEmoji = `-- name: DeleteCustomEmoji :exec
+const deleteCustomEmoji = `-- name: DeleteCustomEmoji :one
 DELETE FROM custom_emojis WHERE id = $1
+RETURNING id, shortcode, domain, image_file_name, image_content_type, image_file_size, image_updated_at, created_at, updated_at, disabled, uri, image_remote_url, visible_in_picker, category_id, image_storage_schema_version
 `
 
-func (q *Queries) DeleteCustomEmoji(ctx context.Context, id int64) error {
-	_, err := q.db.Exec(ctx, deleteCustomEmoji, id)
-	return err
+func (q *Queries) DeleteCustomEmoji(ctx context.Context, id int64) (CustomEmoji, error) {
+	row := q.db.QueryRow(ctx, deleteCustomEmoji, id)
+	var i CustomEmoji
+	err := row.Scan(
+		&i.ID,
+		&i.Shortcode,
+		&i.Domain,
+		&i.ImageFileName,
+		&i.ImageContentType,
+		&i.ImageFileSize,
+		&i.ImageUpdatedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Disabled,
+		&i.Uri,
+		&i.ImageRemoteUrl,
+		&i.VisibleInPicker,
+		&i.CategoryID,
+		&i.ImageStorageSchemaVersion,
+	)
+	return i, err
 }
 
 const getCustomEmoji = `-- name: GetCustomEmoji :one
@@ -380,6 +399,20 @@ func (q *Queries) ListCustomEmojisByShortcodesAndDomains(ctx context.Context, ar
 		return nil, err
 	}
 	return items, nil
+}
+
+const localCustomEmojiShortcodeTaken = `-- name: LocalCustomEmojiShortcodeTaken :one
+SELECT EXISTS (
+    SELECT 1 FROM custom_emojis
+    WHERE shortcode = $1 AND domain IS NULL
+)
+`
+
+func (q *Queries) LocalCustomEmojiShortcodeTaken(ctx context.Context, shortcode string) (bool, error) {
+	row := q.db.QueryRow(ctx, localCustomEmojiShortcodeTaken, shortcode)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const updateCustomEmoji = `-- name: UpdateCustomEmoji :one

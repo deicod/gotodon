@@ -43,6 +43,12 @@ SELECT * FROM custom_emojis
 ORDER BY id DESC
 LIMIT $1 OFFSET $2;
 
+-- name: LocalCustomEmojiShortcodeTaken :one
+SELECT EXISTS (
+    SELECT 1 FROM custom_emojis
+    WHERE shortcode = $1 AND domain IS NULL
+);
+
 -- name: AdminCreateCustomEmoji :one
 INSERT INTO custom_emojis (
     shortcode, domain, image_file_name, image_content_type, image_file_size, image_updated_at, category_id, visible_in_picker, created_at, updated_at
@@ -50,8 +56,9 @@ INSERT INTO custom_emojis (
     $1, $2, $3, $4, $5, NOW(), $6, $7, NOW(), NOW()
 ) RETURNING *;
 
--- name: DeleteCustomEmoji :exec
-DELETE FROM custom_emojis WHERE id = $1;
+-- name: DeleteCustomEmoji :one
+DELETE FROM custom_emojis WHERE id = $1
+RETURNING *;
 
 -- name: UpdateCustomEmoji :one
 UPDATE custom_emojis

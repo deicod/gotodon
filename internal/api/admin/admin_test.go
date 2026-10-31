@@ -100,6 +100,10 @@ func newAdminMux(roles RoleLookup) *recordingMux {
 	retention.roles = roles
 	retention.RegisterRoutes(mux)
 
+	customEmojis := NewCustomEmojisHandler(queries, newStubStorage())
+	customEmojis.roles = roles
+	customEmojis.RegisterRoutes(mux)
+
 	return mux
 }
 
@@ -200,6 +204,12 @@ var adminRoutes = []struct {
 	{"POST /api/v1/admin/dimensions", oauth.ScopeAdminRead, auth.PermissionViewDashboard, true},
 	{"POST /api/v1/admin/measures", oauth.ScopeAdminRead, auth.PermissionViewDashboard, true},
 	{"POST /api/v1/admin/retention", oauth.ScopeAdminRead, auth.PermissionViewDashboard, true},
+
+	// CustomEmojiPolicy. Mastodon has no REST API for custom emojis, so the
+	// scopes are the parent admin scopes.
+	{"GET /api/v1/admin/custom_emojis", oauth.ScopeAdminRead, auth.PermissionManageCustomEmojis, false},
+	{"POST /api/v1/admin/custom_emojis", oauth.ScopeAdminWrite, auth.PermissionManageCustomEmojis, false},
+	{"DELETE /api/v1/admin/custom_emojis/{id}", oauth.ScopeAdminWrite, auth.PermissionManageCustomEmojis, false},
 }
 
 func TestAdminRoutesAllDeclarePermissions(t *testing.T) {
@@ -436,6 +446,7 @@ func TestAdminRoutesWithoutDatabase(t *testing.T) {
 	mux := &recordingMux{ServeMux: http.NewServeMux()}
 	NewDomainBlocksHandler(nil).RegisterRoutes(mux)
 	NewReportsHandler(nil).RegisterRoutes(mux)
+	NewCustomEmojisHandler(nil, nil).RegisterRoutes(mux)
 
 	for _, pattern := range mux.patterns {
 		req := withScopes(withIdentity(adminRouteRequest(pattern), int64Ptr(10), int64Ptr(20)), adminToken)
