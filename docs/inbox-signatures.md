@@ -1,11 +1,37 @@
-# Inbox signatures: freshness and replay protection
+# Inbox signatures: body size, freshness and replay protection
 
 Every `POST` to an inbox (`/inbox`, `/users/{username}/inbox`, `/actor/inbox` and
-their `/ap/` aliases) passes two middlewares before the activity is processed:
+their `/ap/` aliases) passes three middlewares before the activity is processed:
 
-1. `middleware.VerifyHTTPSignature` checks the HTTP signature, including its age.
-2. `middleware.RejectInboxReplays` makes sure each signed request is processed at
+1. `middleware.LimitRequestBody` refuses bodies above the configured size.
+2. `middleware.VerifyHTTPSignature` checks the HTTP signature, including its age.
+3. `middleware.RejectInboxReplays` makes sure each signed request is processed at
    most once while its signature can still verify.
+
+## Body size limit
+
+Inbox requests are not authenticated until their signature verifies, and that
+requires the whole body. The body is therefore capped before any of it is read:
+
+| Setting | Environment variable | Default |
+|---|---|---|
+| `federation.inbox_max_body_bytes` | `GOTODON_FEDERATION_INBOX_MAX_BODY_BYTES` | `1048576` (1 MiB) |
+
+The default matches the limit Mastodon applies to the ActivityPub objects it
+fetches, so activities that federate with Mastodon fit. The value must be
+positive; gotodon refuses to start otherwise.
+
+A larger body is answered `413 Request Entity Too Large`. The signature is not
+parsed, the JSON is not decoded, and no actor is fetched:
+
+| Request | When it is refused |
+|---|---|
+| `Content-Length` above the limit | Before any of the body is read. |
+| No `Content-Length` (chunked) | As soon as reading passes the limit. At most one byte past the limit is read, and the connection is closed after the response. |
+
+The body is read once. `VerifyHTTPSignature` passes the verified bytes to the
+inbox handler in `SignedActivity.Body`; the handler refuses requests that did
+not go through it.
 
 ## Signature freshness
 

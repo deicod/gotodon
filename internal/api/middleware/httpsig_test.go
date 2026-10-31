@@ -423,6 +423,9 @@ func TestVerifyHTTPSignature_SignedActivity(t *testing.T) {
 	if got.ActorURI != sigActorURI {
 		t.Errorf("ActorURI = %q, want %q", got.ActorURI, sigActorURI)
 	}
+	if !bytes.Equal(got.Body, body) {
+		t.Errorf("Body = %q, want %q", got.Body, body)
+	}
 	if got.BodyDigest != sha256.Sum256(body) {
 		t.Errorf("BodyDigest does not match the body")
 	}

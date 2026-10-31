@@ -18,6 +18,7 @@ type Config struct {
 	Instance    InstanceConfig    `mapstructure:"instance"`
 	Translation TranslationConfig `mapstructure:"translation"`
 	Mail        MailConfig        `mapstructure:"mail"`
+	Federation  FederationConfig  `mapstructure:"federation"`
 }
 
 // ServerConfig holds HTTP server configuration.
@@ -132,6 +133,18 @@ func (c *MailConfig) Enabled() bool {
 	return c.SMTPServer != ""
 }
 
+// DefaultInboxMaxBodyBytes is the default for
+// FederationConfig.InboxMaxBodyBytes: 1 MiB, the limit Mastodon applies to the
+// ActivityPub objects it fetches.
+const DefaultInboxMaxBodyBytes int64 = 1 << 20
+
+// FederationConfig holds ActivityPub federation configuration.
+type FederationConfig struct {
+	// InboxMaxBodyBytes is the largest request body accepted by the inboxes.
+	// Larger deliveries are refused with 413 before they are parsed.
+	InboxMaxBodyBytes int64 `mapstructure:"inbox_max_body_bytes"`
+}
+
 // Load reads configuration from file and environment variables.
 func Load() (*Config, error) {
 	v := viper.New()
@@ -161,6 +174,7 @@ func Load() (*Config, error) {
 	v.SetDefault("mail.smtp_auth_method", "plain")
 	v.SetDefault("mail.smtp_enable_starttls", "auto")
 	v.SetDefault("mail.smtp_from_address", "notifications@localhost")
+	v.SetDefault("federation.inbox_max_body_bytes", DefaultInboxMaxBodyBytes)
 
 	// Config file settings
 	v.SetConfigName("gotodon")
@@ -222,6 +236,10 @@ func Load() (*Config, error) {
 	// Mastodon expresses TLS verification as SMTP_OPENSSL_VERIFY_MODE=none|peer.
 	if strings.EqualFold(cfg.Mail.SMTPVerifyMode, "none") {
 		cfg.Mail.SMTPNoVerify = true
+	}
+
+	if cfg.Federation.InboxMaxBodyBytes <= 0 {
+		return nil, fmt.Errorf("federation.inbox_max_body_bytes must be positive, got %d", cfg.Federation.InboxMaxBodyBytes)
 	}
 
 	return &cfg, nil

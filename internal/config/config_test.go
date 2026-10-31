@@ -99,3 +99,39 @@ func TestLoadFromEnv(t *testing.T) {
 		t.Errorf("Instance.LocalDomain = %q, want %q", cfg.Instance.LocalDomain, "example.social")
 	}
 }
+
+func TestLoadFederationInboxMaxBodyBytes(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     string
+		want    int64
+		wantErr bool
+	}{
+		{name: "default", want: DefaultInboxMaxBodyBytes},
+		{name: "from env", env: "4194304", want: 4 << 20},
+		{name: "zero", env: "0", wantErr: true},
+		{name: "negative", env: "-1", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.env != "" {
+				t.Setenv("GOTODON_FEDERATION_INBOX_MAX_BODY_BYTES", tt.env)
+			}
+
+			cfg, err := Load()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Load() error = nil, want an error for inbox_max_body_bytes %s", tt.env)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.Federation.InboxMaxBodyBytes != tt.want {
+				t.Errorf("Federation.InboxMaxBodyBytes = %d, want %d", cfg.Federation.InboxMaxBodyBytes, tt.want)
+			}
+		})
+	}
+}

@@ -22,6 +22,8 @@ const ContextKeySignedActivity ContextKey = "signed_activity"
 type SignedActivity struct {
 	// ActorURI is the activity's actor, which owns the signing key.
 	ActorURI string
+	// Body is the request body. Handlers must not modify it.
+	Body []byte
 	// BodyDigest is the SHA-256 of the request body.
 	BodyDigest [sha256.Size]byte
 	// ValidUntil is the last instant at which the signature still verifies.
@@ -39,7 +41,8 @@ func SignedActivityFromContext(ctx context.Context) (SignedActivity, bool) {
 // requests. The signature must cover (request-target), host, date (or
 // (created)) and the Digest header, the signed digest must match the body,
 // and the signing key must belong to the activity's actor. Verified requests
-// carry a SignedActivity in their context.
+// carry a SignedActivity in their context. The whole body is read before the
+// signature is checked, so it must run after LimitRequestBody.
 func VerifyHTTPSignature(fetcher activitypub.ActorFetcher) func(http.Handler) http.Handler {
 	verifier := activitypub.NewHTTPVerifier()
 
@@ -52,7 +55,7 @@ func VerifyHTTPSignature(fetcher activitypub.ActorFetcher) func(http.Handler) ht
 
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
-				web.JSONError(w, http.StatusBadRequest, "Invalid request body")
+				writeBodyReadError(w, err)
 				return
 			}
 			_ = r.Body.Close()
@@ -106,6 +109,7 @@ func VerifyHTTPSignature(fetcher activitypub.ActorFetcher) func(http.Handler) ht
 
 			ctx := context.WithValue(r.Context(), ContextKeySignedActivity, SignedActivity{
 				ActorURI:   actorURI,
+				Body:       body,
 				BodyDigest: sha256.Sum256(body),
 				ValidUntil: sig.ValidUntil(),
 			})

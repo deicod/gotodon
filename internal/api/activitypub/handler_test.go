@@ -15,12 +15,14 @@ import (
 	"net/http/httptest"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/pkg/activitypub"
 )
@@ -35,6 +37,16 @@ func (s stubActorFetcher) FetchActor(ctx context.Context, actorURI string) (*act
 		return nil, s.err
 	}
 	return s.actor, nil
+}
+
+type countingActorFetcher struct {
+	stubActorFetcher
+	calls atomic.Int64
+}
+
+func (f *countingActorFetcher) FetchActor(ctx context.Context, actorURI string) (*activitypub.Actor, error) {
+	f.calls.Add(1)
+	return f.stubActorFetcher.FetchActor(ctx, actorURI)
 }
 
 type stubActivityPubStore struct {
@@ -417,8 +429,13 @@ func (s *stubActivityPubStore) ListFeaturedTags(ctx context.Context, accountID i
 
 func signedInboxRequest(t *testing.T, body []byte, keyID, privateKeyPEM string) *http.Request {
 	t.Helper()
+	return signedInboxRequestTo(t, "https://example.com/inbox", body, keyID, privateKeyPEM)
+}
 
-	req := httptest.NewRequest(http.MethodPost, "https://example.com/inbox", bytes.NewReader(body))
+func signedInboxRequestTo(t *testing.T, url string, body []byte, keyID, privateKeyPEM string) *http.Request {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	signer, err := activitypub.NewHTTPSigner(keyID, privateKeyPEM)
 	if err != nil {
 		t.Fatalf("NewHTTPSigner() error = %v", err)
@@ -944,6 +961,302 @@ func TestFederationHandler_PostInbox_RejectsReplays(t *testing.T) {
 	}
 	if follows != 1 || undos != 1 {
 		t.Fatalf("follows = %d, undos = %d, want 1 each", follows, undos)
+	}
+}
+
+// paddedCreateActivity returns a Create activity of exactly size bytes, padded
+// out by its note's content.
+func paddedCreateActivity(t *testing.T, actorURI string, size int64) []byte {
+	t.Helper()
+
+	activity := func(content string) []byte {
+		body, err := json.Marshal(map[string]any{
+			"type":  activitypub.TypeCreate,
+			"actor": actorURI,
+			"object": map[string]any{
+				"type":    "Note",
+				"content": content,
+			},
+		})
+		if err != nil {
+			t.Fatalf("json.Marshal() error = %v", err)
+		}
+		return body
+	}
+
+	padding := size - int64(len(activity("")))
+	if padding < 0 {
+		t.Fatalf("size %d is smaller than an empty activity", size)
+	}
+	body := activity(strings.Repeat("a", int(padding)))
+	if int64(len(body)) != size {
+		t.Fatalf("activity size = %d, want %d", len(body), size)
+	}
+	return body
+}
+
+func newSigningActor(t *testing.T, actorURI string) (privateKeyPEM string, actor *activitypub.Actor) {
+	t.Helper()
+
+	priv, pub, err := activitypub.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair() error = %v", err)
+	}
+	publicKeyPEM, err := activitypub.EncodePublicKey(pub)
+	if err != nil {
+		t.Fatalf("EncodePublicKey() error = %v", err)
+	}
+	return activitypub.EncodePrivateKey(priv), &activitypub.Actor{
+		Object: activitypub.Object{ID: actorURI},
+		PublicKey: &activitypub.PublicKey{
+			ID:           actorURI + "#main-key",
+			Owner:        actorURI,
+			PublicKeyPem: publicKeyPEM,
+		},
+	}
+}
+
+func TestFederationHandler_PostInbox_BodyLimit(t *testing.T) {
+	actorURI := "https://remote.example/users/alice"
+	privateKeyPEM, actor := newSigningActor(t, actorURI)
+	body, err := json.Marshal(activitypub.Activity{
+		Type:           activitypub.TypeFollow,
+		Actor:          actorURI,
+		ActivityObject: "https://example.com/users/bob",
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	size := int64(len(body))
+
+	routes := []string{
+		"/inbox",
+		"/users/bob/inbox",
+		"/actor/inbox",
+		"/ap/inbox",
+		"/ap/users/bob/inbox",
+	}
+	tests := []struct {
+		name          string
+		limit         int64
+		unknownLength bool
+		wantStatus    int
+	}{
+		{name: "within limit", limit: size + 1, wantStatus: http.StatusAccepted},
+		{name: "at limit", limit: size, wantStatus: http.StatusAccepted},
+		{name: "over limit", limit: size - 1, wantStatus: http.StatusRequestEntityTooLarge},
+		{name: "over limit without content length", limit: size - 1, unknownLength: true, wantStatus: http.StatusRequestEntityTooLarge},
+	}
+
+	for _, route := range routes {
+		for _, tt := range tests {
+			t.Run(route+"/"+tt.name, func(t *testing.T) {
+				fetcher := &countingActorFetcher{stubActorFetcher: stubActorFetcher{actor: actor}}
+				handler := &FederationHandler{domain: "example.com", actorFetcher: fetcher}
+				handler.SetInboxMaxBodyBytes(tt.limit)
+				handled := 0
+				handler.RegisterInboxHandler(activitypub.TypeFollow, func(ctx context.Context, activity *activitypub.Activity) error {
+					handled++
+					return nil
+				})
+				mux := http.NewServeMux()
+				handler.RegisterRoutes(mux)
+
+				req := signedInboxRequestTo(t, "https://example.com"+route, body, actorURI+"#main-key", privateKeyPEM)
+				if tt.unknownLength {
+					req.ContentLength = -1
+				}
+				rec := httptest.NewRecorder()
+				mux.ServeHTTP(rec, req)
+
+				if rec.Code != tt.wantStatus {
+					t.Fatalf("status = %d, want %d (body %s)", rec.Code, tt.wantStatus, rec.Body.String())
+				}
+				want := 0
+				if tt.wantStatus == http.StatusAccepted {
+					want = 1
+				}
+				if calls := fetcher.calls.Load(); calls != int64(want) {
+					t.Fatalf("actor fetches = %d, want %d", calls, want)
+				}
+				if handled != want {
+					t.Fatalf("activities handled = %d, want %d", handled, want)
+				}
+			})
+		}
+	}
+}
+
+func TestFederationHandler_PostInbox_DefaultBodyLimit(t *testing.T) {
+	actorURI := "https://remote.example/users/alice"
+	privateKeyPEM, actor := newSigningActor(t, actorURI)
+
+	tests := []struct {
+		name       string
+		configure  func(h *FederationHandler)
+		size       int64
+		wantStatus int
+	}{
+		{name: "unset limit at default", size: config.DefaultInboxMaxBodyBytes, wantStatus: http.StatusAccepted},
+		{name: "unset limit over default", size: config.DefaultInboxMaxBodyBytes + 1, wantStatus: http.StatusRequestEntityTooLarge},
+		{
+			name:       "zero limit at default",
+			configure:  func(h *FederationHandler) { h.SetInboxMaxBodyBytes(0) },
+			size:       config.DefaultInboxMaxBodyBytes,
+			wantStatus: http.StatusAccepted,
+		},
+		{
+			name:       "negative limit over default",
+			configure:  func(h *FederationHandler) { h.SetInboxMaxBodyBytes(-1) },
+			size:       config.DefaultInboxMaxBodyBytes + 1,
+			wantStatus: http.StatusRequestEntityTooLarge,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fetcher := &countingActorFetcher{stubActorFetcher: stubActorFetcher{actor: actor}}
+			handler := &FederationHandler{domain: "example.com", actorFetcher: fetcher}
+			if tt.configure != nil {
+				tt.configure(handler)
+			}
+			var handled *activitypub.Activity
+			handler.RegisterInboxHandler(activitypub.TypeCreate, func(ctx context.Context, activity *activitypub.Activity) error {
+				handled = activity
+				return nil
+			})
+			mux := http.NewServeMux()
+			handler.RegisterRoutes(mux)
+
+			body := paddedCreateActivity(t, actorURI, tt.size)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, signedInboxRequest(t, body, actorURI+"#main-key", privateKeyPEM))
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tt.wantStatus, rec.Body.String())
+			}
+			if tt.wantStatus != http.StatusAccepted {
+				if calls := fetcher.calls.Load(); calls != 0 || handled != nil {
+					t.Fatalf("oversized activity reached actor fetch (%d) or handler (%v)", calls, handled != nil)
+				}
+				return
+			}
+			if handled == nil {
+				t.Fatal("activity at the limit was not handled")
+			}
+			var sent struct {
+				Object struct {
+					Content string `json:"content"`
+				} `json:"object"`
+			}
+			if err := json.Unmarshal(body, &sent); err != nil {
+				t.Fatalf("json.Unmarshal() error = %v", err)
+			}
+			object, ok := handled.ActivityObject.(map[string]any)
+			if !ok {
+				t.Fatalf("activity object = %T, want a note", handled.ActivityObject)
+			}
+			if content, _ := object["content"].(string); content != sent.Object.Content {
+				t.Fatalf("note content has %d bytes, want %d", len(content), len(sent.Object.Content))
+			}
+		})
+	}
+}
+
+// TestFederationHandler_PostInbox_BodyLimitOverHTTP checks the limit against a
+// real server, where an oversized body may also arrive chunked.
+func TestFederationHandler_PostInbox_BodyLimitOverHTTP(t *testing.T) {
+	const limit = 64 << 10
+	actorURI := "https://remote.example/users/alice"
+	privateKeyPEM, actor := newSigningActor(t, actorURI)
+
+	tests := []struct {
+		name       string
+		size       int64
+		chunked    bool
+		wantStatus int
+		wantCalls  int64
+	}{
+		{name: "declared length at limit", size: limit, wantStatus: http.StatusAccepted, wantCalls: 1},
+		{name: "chunked at limit", size: limit, chunked: true, wantStatus: http.StatusAccepted, wantCalls: 1},
+		{name: "declared length over limit", size: limit + 1, wantStatus: http.StatusRequestEntityTooLarge},
+		{name: "chunked over limit", size: 2 * limit, chunked: true, wantStatus: http.StatusRequestEntityTooLarge},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fetcher := &countingActorFetcher{stubActorFetcher: stubActorFetcher{actor: actor}}
+			handler := &FederationHandler{domain: "example.com", actorFetcher: fetcher}
+			handler.SetInboxMaxBodyBytes(limit)
+			var handled atomic.Int64
+			handler.RegisterInboxHandler(activitypub.TypeCreate, func(ctx context.Context, activity *activitypub.Activity) error {
+				handled.Add(1)
+				return nil
+			})
+			mux := http.NewServeMux()
+			handler.RegisterRoutes(mux)
+			var contentLength atomic.Int64
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				contentLength.Store(r.ContentLength)
+				mux.ServeHTTP(w, r)
+			}))
+			defer srv.Close()
+
+			body := paddedCreateActivity(t, actorURI, tt.size)
+			var reader io.Reader = bytes.NewReader(body)
+			if tt.chunked {
+				// A reader of unknown length is sent with chunked encoding.
+				reader = io.MultiReader(reader)
+			}
+			req, err := http.NewRequest(http.MethodPost, srv.URL+"/inbox", reader)
+			if err != nil {
+				t.Fatalf("NewRequest() error = %v", err)
+			}
+			signer, err := activitypub.NewHTTPSigner(actorURI+"#main-key", privateKeyPEM)
+			if err != nil {
+				t.Fatalf("NewHTTPSigner() error = %v", err)
+			}
+			if err := signer.Sign(req, body); err != nil {
+				t.Fatalf("Sign() error = %v", err)
+			}
+
+			resp, err := srv.Client().Do(req)
+			if err != nil {
+				t.Fatalf("Do() error = %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+
+			wantLength := tt.size
+			if tt.chunked {
+				wantLength = -1
+			}
+			if got := contentLength.Load(); got != wantLength {
+				t.Fatalf("server saw content length %d, want %d", got, wantLength)
+			}
+			if resp.StatusCode != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", resp.StatusCode, tt.wantStatus)
+			}
+			if fetches, handled := fetcher.calls.Load(), handled.Load(); fetches != tt.wantCalls || handled != tt.wantCalls {
+				t.Fatalf("actor fetches = %d, activities handled = %d, want %d each", fetches, handled, tt.wantCalls)
+			}
+		})
+	}
+}
+
+func TestFederationHandler_PostInbox_RequiresVerifiedSignature(t *testing.T) {
+	handler := &FederationHandler{domain: "example.com"}
+	handler.RegisterInboxHandler(activitypub.TypeFollow, func(ctx context.Context, activity *activitypub.Activity) error {
+		t.Fatal("unverified activity was handled")
+		return nil
+	})
+
+	body := []byte(`{"type":"Follow","actor":"https://remote.example/users/alice","object":"https://example.com/users/bob"}`)
+	req := httptest.NewRequest(http.MethodPost, "https://example.com/inbox", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.PostInbox(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
