@@ -166,20 +166,10 @@ func TestAccountsHandler_VerifyCredentials_ForbiddenWithWrongScope(t *testing.T)
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(12345))
 	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "write write:accounts")
 	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
 
-	h.VerifyCredentials(rec, req)
+	rec := serveRoutes(h.RegisterRoutes, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
-	}
-	var errResp map[string]string
-	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
-		t.Fatalf("decode error response: %v", err)
-	}
-	if got, want := errResp["error"], "This action is outside the authorized scopes"; got != want {
-		t.Fatalf("error = %q, want %q", got, want)
-	}
+	wantOutsideScopes(t, rec)
 }
 
 func TestAccountsHandler_VerifyCredentials_AllowsReadAccountsScope(t *testing.T) {
@@ -191,9 +181,8 @@ func TestAccountsHandler_VerifyCredentials_AllowsReadAccountsScope(t *testing.T)
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(12345))
 	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "read:accounts")
 	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
 
-	h.VerifyCredentials(rec, req)
+	rec := serveRoutes(h.RegisterRoutes, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -209,9 +198,8 @@ func TestAccountsHandler_VerifyCredentials_AllowsProfileScope(t *testing.T) {
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(12345))
 	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "profile")
 	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
 
-	h.VerifyCredentials(rec, req)
+	rec := serveRoutes(h.RegisterRoutes, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -227,28 +215,25 @@ func TestAccountsHandler_VerifyCredentials_AllowsReadScopeHierarchy(t *testing.T
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(12345))
 	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "read")
 	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
 
-	h.VerifyCredentials(rec, req)
+	rec := serveRoutes(h.RegisterRoutes, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
 }
 
-func TestAccountsHandler_VerifyCredentials_AllowsEmptyScopesForCompatibility(t *testing.T) {
+func TestAccountsHandler_VerifyCredentials_RefusesEmptyScopes(t *testing.T) {
 	stub := &stubVerifyCredentialsQueries{
 		account: db.Account{ID: 12345, Username: "alice"},
 	}
 	h := NewAccountsHandler(stub, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/verify_credentials", nil)
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(12345))
+	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "")
 	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
 
-	h.VerifyCredentials(rec, req)
+	rec := serveRoutes(h.RegisterRoutes, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
+	wantOutsideScopes(t, rec)
 }

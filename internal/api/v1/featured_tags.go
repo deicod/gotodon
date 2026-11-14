@@ -96,12 +96,6 @@ func (h *FeaturedTagsHandler) Suggestions(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	scopes := middleware.GetScopes(r.Context())
-	if scopes != "" && !oauth.HasScope(scopes, "read:accounts") {
-		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
-		return
-	}
-
 	if !h.useDB() {
 		web.JSONError(w, http.StatusInternalServerError, "Featured tags unavailable")
 		return
@@ -233,9 +227,15 @@ func (h *FeaturedTagsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
-func (h *FeaturedTagsHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/featured_tags", h.List)
-	mux.HandleFunc("GET /api/v1/featured_tags/suggestions", h.Suggestions)
-	mux.HandleFunc("POST /api/v1/featured_tags", h.Create)
-	mux.HandleFunc("DELETE /api/v1/featured_tags/{id}", h.Delete)
+// RegisterRoutes registers the featured tags routes with the scopes of
+// Mastodon's Api::V1::FeaturedTagsController and
+// Api::V1::FeaturedTags::SuggestionsController.
+func (h *FeaturedTagsHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	read := middleware.RequireScope(oauth.ScopeRead, oauth.ScopeReadAccounts)
+	write := middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteAccounts)
+
+	mux.HandleFunc("GET /api/v1/featured_tags", read(h.List))
+	mux.HandleFunc("GET /api/v1/featured_tags/suggestions", read(h.Suggestions))
+	mux.HandleFunc("POST /api/v1/featured_tags", write(h.Create))
+	mux.HandleFunc("DELETE /api/v1/featured_tags/{id}", write(h.Delete))
 }

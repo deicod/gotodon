@@ -63,12 +63,6 @@ func (h *PreferencesHandler) Get(w http.ResponseWriter, r *http.Request) {
 		web.JSONError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	scopes := middleware.GetScopes(r.Context())
-	if scopes != "" && !oauth.HasScope(scopes, "read:accounts") {
-		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
-		return
-	}
-
 	if h.queries == nil {
 		web.JSON(w, http.StatusOK, defaultPreferences(""))
 		return
@@ -151,30 +145,10 @@ func (h *PreferencesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, req)
 }
 
-// RegisterRoutes registers the preferences routes
-func (h *PreferencesHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/preferences", h.Get)
-	// mux handles exact method match so we can reuse /api/v1/preferences but we need distinct paths or router that supports method.
-	// Oh, standard mux 1.22 supports "METHOD /path".
-	// But duplicate path definitions might panic if same pattern... Wait.
-	// "GET /foo" and "POST /foo" are distinct patterns in Go 1.22.
-	// But Update was a custom endpoint? No, previous implementation had `g.GET("/preferences", h.Get)`.
-	// Where was Update registered?
-	// The file `preferences.go` had `func Update ...` and comments said "Update updates preferences (non-standard convenience endpoint)".
-	// But `RegisterRoutes` ONLY registered `GET`.
-	// Ah, I missed that. So `Update` was UNUSED or I should register it now or skip it?
-	// Wait, if it was unused, I should probably not register it or register it as POST/PUT if intended.
-	// Assuming it was intended to be used:
-	// I'll register it as POST /api/v1/preferences used by some clients or my web ui?
-	// Actually Mastodon uses `PATCH /api/v1/preferences` but that's for specific fields possibly?
-	// I'll register it as POST (since Update function exists).
-	// But since `RegisterRoutes` in `preferences.go` only had GET, maybe it WAS unused.
-	// I will act conservatively and ONLY register GET as before, but keep the function if I like.
-	// Wait, if I change signature I break potential future usage.
-	// I'll update signature and register it IF it makes sense.
-	// Let's register "POST /api/v1/preferences" just in case.
-	// But if the original file didn't register it, it was dead code.
-	// I'll stick to what was there: ONLY GET.
+// RegisterRoutes registers the preferences route with the scopes of
+// Mastodon's Api::V1::PreferencesController.
+func (h *PreferencesHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	mux.HandleFunc("GET /api/v1/preferences", middleware.RequireScope(oauth.ScopeRead, oauth.ScopeReadAccounts)(h.Get))
 }
 
 func defaultPreferences(locale string) Preferences {

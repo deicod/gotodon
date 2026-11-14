@@ -12,6 +12,7 @@ import (
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 // PollsHandler handles poll endpoints
@@ -224,8 +225,9 @@ func (h *PollsHandler) Vote(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, h.dbPollToAPI(ctx, dbPoll, accountID))
 }
 
-// RegisterRoutes registers poll routes
-func (h *PollsHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/polls/{id}", h.Get)
-	mux.HandleFunc("POST /api/v1/polls/{id}/votes", h.Vote)
+// RegisterRoutes registers the poll routes with the scopes of Mastodon's
+// Api::V1::PollsController and Api::V1::Polls::VotesController.
+func (h *PollsHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	mux.HandleFunc("GET /api/v1/polls/{id}", middleware.RequireScopeIfToken(oauth.ScopeRead, oauth.ScopeReadStatuses)(h.Get))
+	mux.HandleFunc("POST /api/v1/polls/{id}/votes", middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteStatuses)(h.Vote))
 }

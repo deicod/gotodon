@@ -16,6 +16,7 @@ import (
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/streaming"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 // AnnouncementsHandler handles announcement endpoints
@@ -685,11 +686,16 @@ func (h *AnnouncementsHandler) publishAnnouncementReaction(ctx context.Context, 
 	_ = h.publisher.PublishEventToRedis(ctx, streaming.EventAnnouncementReaction, payload, []string{streaming.StreamUser})
 }
 
-// RegisterRoutes registers announcement routes
-func (h *AnnouncementsHandler) RegisterRoutes(mux *http.ServeMux) {
+// RegisterRoutes registers the announcement routes with the scopes of
+// Mastodon's Api::V1::AnnouncementsController and
+// Api::V1::Announcements::ReactionsController. Listing announcements needs
+// no scope.
+func (h *AnnouncementsHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	reactions := middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteFavourites)
+
 	mux.HandleFunc("GET /api/v1/announcements", h.GetAll)
-	mux.HandleFunc("POST /api/v1/announcements/{id}/dismiss", h.Dismiss)
-	mux.HandleFunc("PUT /api/v1/announcements/{id}/reactions/{name}", h.AddReaction)
-	mux.HandleFunc("PATCH /api/v1/announcements/{id}/reactions/{name}", h.AddReaction)
-	mux.HandleFunc("DELETE /api/v1/announcements/{id}/reactions/{name}", h.RemoveReaction)
+	mux.HandleFunc("POST /api/v1/announcements/{id}/dismiss", middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteAccounts)(h.Dismiss))
+	mux.HandleFunc("PUT /api/v1/announcements/{id}/reactions/{name}", reactions(h.AddReaction))
+	mux.HandleFunc("PATCH /api/v1/announcements/{id}/reactions/{name}", reactions(h.AddReaction))
+	mux.HandleFunc("DELETE /api/v1/announcements/{id}/reactions/{name}", reactions(h.RemoveReaction))
 }

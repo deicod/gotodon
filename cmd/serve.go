@@ -647,7 +647,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	if mailDeliverer != nil {
 		v1ReportsHandler.SetMailDeliverer(cfg, mailDeliverer)
 	}
-	mux.HandleFunc("POST /api/v1/reports", v1ReportsHandler.Create)
+	v1ReportsHandler.RegisterRoutes(mux)
 
 	// Health check
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {

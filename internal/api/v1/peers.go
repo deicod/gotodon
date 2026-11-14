@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
 )
@@ -65,7 +66,8 @@ func (h *PeersHandler) Search(w http.ResponseWriter, r *http.Request) {
 
 }
 
-// RegisterRoutes registers the peers routes
-func (h *PeersHandler) RegisterRoutes(mux *http.ServeMux) {
+// RegisterRoutes registers the peers search route. It needs no scope, as
+// Mastodon's Api::V1::Peers::SearchController.
+func (h *PeersHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
 	mux.HandleFunc("GET /api/v1/peers/search", h.Search)
 }

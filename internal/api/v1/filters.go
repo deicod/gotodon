@@ -17,6 +17,7 @@ import (
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/streaming"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 const (
@@ -627,14 +628,18 @@ func (h *FiltersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	h.publishFiltersChanged(ctx, accountID)
 }
 
-// RegisterRoutes registers filter routes.
-func (h *FiltersHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/filters", h.List)
-	mux.HandleFunc("POST /api/v1/filters", h.Create)
-	mux.HandleFunc("GET /api/v1/filters/{id}", h.Get)
-	mux.HandleFunc("PUT /api/v1/filters/{id}", h.Update)
-	mux.HandleFunc("PATCH /api/v1/filters/{id}", h.Update)
-	mux.HandleFunc("DELETE /api/v1/filters/{id}", h.Delete)
+// RegisterRoutes registers the v1 filter routes with the scopes of Mastodon's
+// Api::V1::FiltersController.
+func (h *FiltersHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	read := middleware.RequireScope(oauth.ScopeRead, oauth.ScopeReadFilters)
+	write := middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteFilters)
+
+	mux.HandleFunc("GET /api/v1/filters", read(h.List))
+	mux.HandleFunc("POST /api/v1/filters", write(h.Create))
+	mux.HandleFunc("GET /api/v1/filters/{id}", read(h.Get))
+	mux.HandleFunc("PUT /api/v1/filters/{id}", write(h.Update))
+	mux.HandleFunc("PATCH /api/v1/filters/{id}", write(h.Update))
+	mux.HandleFunc("DELETE /api/v1/filters/{id}", write(h.Delete))
 }
 
 func equalStringSlices(a, b []string) bool {

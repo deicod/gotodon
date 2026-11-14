@@ -9,6 +9,7 @@ import (
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 type EndorsementsHandler struct {
@@ -166,12 +167,17 @@ func (h *EndorsementsHandler) Unpin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *EndorsementsHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/endorsements", h.List)
-	mux.HandleFunc("POST /api/v1/accounts/{id}/pin", h.Pin)
-	mux.HandleFunc("POST /api/v1/accounts/{id}/endorse", h.Pin)
-	mux.HandleFunc("POST /api/v1/accounts/{id}/unpin", h.Unpin)
-	mux.HandleFunc("POST /api/v1/accounts/{id}/unendorse", h.Unpin)
+// RegisterRoutes registers the endorsement routes with the scopes of
+// Mastodon's Api::V1::EndorsementsController and
+// Api::V1::Accounts::EndorsementsController.
+func (h *EndorsementsHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	write := middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteAccounts)
+
+	mux.HandleFunc("GET /api/v1/endorsements", middleware.RequireScope(oauth.ScopeRead, oauth.ScopeReadAccounts)(h.List))
+	mux.HandleFunc("POST /api/v1/accounts/{id}/pin", write(h.Pin))
+	mux.HandleFunc("POST /api/v1/accounts/{id}/endorse", write(h.Pin))
+	mux.HandleFunc("POST /api/v1/accounts/{id}/unpin", write(h.Unpin))
+	mux.HandleFunc("POST /api/v1/accounts/{id}/unendorse", write(h.Unpin))
 }
 
 func boolPtr(b bool) *bool {

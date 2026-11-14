@@ -15,6 +15,7 @@ import (
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/mailer"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 type reportsQuerier interface {
@@ -188,7 +189,8 @@ func (h *ReportsHandler) accountHandle(ctx context.Context, accountID int64) str
 	return handle
 }
 
-// RegisterRoutes registers report routes
-func (h *ReportsHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/v1/reports", h.Create)
+// RegisterRoutes registers the report route with the scopes of Mastodon's
+// Api::V1::ReportsController.
+func (h *ReportsHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	mux.HandleFunc("POST /api/v1/reports", middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteReports)(h.Create))
 }

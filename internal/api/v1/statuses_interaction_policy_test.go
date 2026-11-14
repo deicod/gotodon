@@ -50,19 +50,14 @@ func TestStatusesHandler_InteractionPolicy_InvalidPolicy(t *testing.T) {
 func TestStatusesHandler_InteractionPolicy_MissingScope(t *testing.T) {
 	h := NewStatusesHandler(nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/statuses/123/interaction_policy", strings.NewReader(`{"quote_approval_policy":"public"}`))
-	req.SetPathValue("id", "123")
 
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(12345))
 	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "read")
 	req = req.WithContext(ctx)
 
-	rec := httptest.NewRecorder()
+	rec := serveRoutes(h.RegisterRoutes, req)
 
-	h.InteractionPolicy(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
-	}
+	wantOutsideScopes(t, rec)
 }
 
 func TestStatusesHandler_InteractionPolicy_NoDatabase(t *testing.T) {

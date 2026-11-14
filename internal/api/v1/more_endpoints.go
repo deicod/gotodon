@@ -214,11 +214,15 @@ func relationshipAPI(id int64, following, followedBy, blocking, muting bool) map
 	}
 }
 
-// RegisterRoutes registers follow request routes
-func (h *FollowRequestsHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/follow_requests", h.List)
-	mux.HandleFunc("POST /api/v1/follow_requests/{id}/authorize", h.Authorize)
-	mux.HandleFunc("POST /api/v1/follow_requests/{id}/reject", h.Reject)
+// RegisterRoutes registers the follow request routes with the scopes of
+// Mastodon's Api::V1::FollowRequestsController.
+func (h *FollowRequestsHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	read := middleware.RequireScope(oauth.ScopeFollow, oauth.ScopeRead, oauth.ScopeReadFollows)
+	write := middleware.RequireScope(oauth.ScopeFollow, oauth.ScopeWrite, oauth.ScopeWriteFollows)
+
+	mux.HandleFunc("GET /api/v1/follow_requests", read(h.List))
+	mux.HandleFunc("POST /api/v1/follow_requests/{id}/authorize", write(h.Authorize))
+	mux.HandleFunc("POST /api/v1/follow_requests/{id}/reject", write(h.Reject))
 }
 
 // DomainBlocksHandler handles user domain blocks (not admin)
@@ -379,12 +383,18 @@ func (h *DomainBlocksHandler) Preview(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// RegisterRoutes registers domain blocks routes
-func (h *DomainBlocksHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/domain_blocks", h.List)
-	mux.HandleFunc("POST /api/v1/domain_blocks", h.Create)
-	mux.HandleFunc("DELETE /api/v1/domain_blocks", h.Delete)
-	mux.HandleFunc("GET /api/v1/domain_blocks/preview", h.Preview)
+// RegisterRoutes registers the domain blocks routes with the scopes of
+// Mastodon's Api::V1::DomainBlocksController and
+// Api::V1::DomainBlocks::PreviewsController. The preview only reads, but
+// Mastodon guards it with the write scopes, since it precedes a block.
+func (h *DomainBlocksHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	read := middleware.RequireScope(oauth.ScopeFollow, oauth.ScopeRead, oauth.ScopeReadBlocks)
+	write := middleware.RequireScope(oauth.ScopeFollow, oauth.ScopeWrite, oauth.ScopeWriteBlocks)
+
+	mux.HandleFunc("GET /api/v1/domain_blocks", read(h.List))
+	mux.HandleFunc("POST /api/v1/domain_blocks", write(h.Create))
+	mux.HandleFunc("DELETE /api/v1/domain_blocks", write(h.Delete))
+	mux.HandleFunc("GET /api/v1/domain_blocks/preview", write(h.Preview))
 }
 
 func normalizeDomainInput(raw string) (string, error) {
@@ -503,12 +513,6 @@ func (h *ScheduledStatusesHandler) List(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	scopes := middleware.GetScopes(r.Context())
-	if !oauth.HasScope(scopes, "read:statuses") {
-		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
-		return
-	}
-
 	if h.useDB() {
 		limit := parseAccountLimit(web.QueryParam(r, "limit"), defaultStatusesLimit, defaultStatusesLimit*2)
 		maxID, maxValid := parseOptionalID(web.QueryParam(r, "max_id"))
@@ -575,12 +579,6 @@ func (h *ScheduledStatusesHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scopes := middleware.GetScopes(r.Context())
-	if !oauth.HasScope(scopes, "read:statuses") {
-		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
-		return
-	}
-
 	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
@@ -608,12 +606,6 @@ func (h *ScheduledStatusesHandler) Get(w http.ResponseWriter, r *http.Request) {
 func (h *ScheduledStatusesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	accountID, ok := scheduledStatusesAccount(w, r)
 	if !ok {
-		return
-	}
-
-	scopes := middleware.GetScopes(r.Context())
-	if !oauth.HasScope(scopes, "write:statuses") {
-		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
 		return
 	}
 
@@ -696,12 +688,6 @@ func (h *ScheduledStatusesHandler) Delete(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	scopes := middleware.GetScopes(r.Context())
-	if !oauth.HasScope(scopes, "write:statuses") {
-		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
-		return
-	}
-
 	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
@@ -724,13 +710,17 @@ func (h *ScheduledStatusesHandler) Delete(w http.ResponseWriter, r *http.Request
 	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
-// RegisterRoutes registers scheduled statuses routes
-func (h *ScheduledStatusesHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/scheduled_statuses", h.List)
-	mux.HandleFunc("GET /api/v1/scheduled_statuses/{id}", h.Get)
-	mux.HandleFunc("PUT /api/v1/scheduled_statuses/{id}", h.Update)
-	mux.HandleFunc("PATCH /api/v1/scheduled_statuses/{id}", h.Update)
-	mux.HandleFunc("DELETE /api/v1/scheduled_statuses/{id}", h.Delete)
+// RegisterRoutes registers the scheduled statuses routes with the scopes of
+// Mastodon's Api::V1::ScheduledStatusesController.
+func (h *ScheduledStatusesHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	read := middleware.RequireScope(oauth.ScopeRead, oauth.ScopeReadStatuses)
+	write := middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteStatuses)
+
+	mux.HandleFunc("GET /api/v1/scheduled_statuses", read(h.List))
+	mux.HandleFunc("GET /api/v1/scheduled_statuses/{id}", read(h.Get))
+	mux.HandleFunc("PUT /api/v1/scheduled_statuses/{id}", write(h.Update))
+	mux.HandleFunc("PATCH /api/v1/scheduled_statuses/{id}", write(h.Update))
+	mux.HandleFunc("DELETE /api/v1/scheduled_statuses/{id}", write(h.Delete))
 }
 
 // PushHandler handles push subscription endpoints
@@ -1024,11 +1014,14 @@ func mergePushAlertData(existing []byte, updates map[string]bool) ([]byte, map[s
 	return data, alerts, nil
 }
 
-// RegisterRoutes registers push routes
-func (h *PushHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/push/subscription", h.Get)
-	mux.HandleFunc("POST /api/v1/push/subscription", h.Create)
-	mux.HandleFunc("PUT /api/v1/push/subscription", h.Update)
-	mux.HandleFunc("PATCH /api/v1/push/subscription", h.Update)
-	mux.HandleFunc("DELETE /api/v1/push/subscription", h.Delete)
+// RegisterRoutes registers the Web Push subscription routes with the scope of
+// Mastodon's Api::V1::Push::SubscriptionsController.
+func (h *PushHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	push := middleware.RequireScope(oauth.ScopePush)
+
+	mux.HandleFunc("GET /api/v1/push/subscription", push(h.Get))
+	mux.HandleFunc("POST /api/v1/push/subscription", push(h.Create))
+	mux.HandleFunc("PUT /api/v1/push/subscription", push(h.Update))
+	mux.HandleFunc("PATCH /api/v1/push/subscription", push(h.Update))
+	mux.HandleFunc("DELETE /api/v1/push/subscription", push(h.Delete))
 }

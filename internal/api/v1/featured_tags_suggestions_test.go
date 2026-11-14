@@ -49,11 +49,8 @@ func TestFeaturedTagsHandler_Suggestions_MissingScope(t *testing.T) {
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(12345))
 	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "write")
 	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
 
-	h.Suggestions(rec, req)
+	rec := serveRoutes(h.RegisterRoutes, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
-	}
+	wantOutsideScopes(t, rec)
 }

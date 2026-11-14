@@ -87,9 +87,10 @@ func parseBookmarksLimit(s string, defaultVal, maxVal int) int {
 	return v
 }
 
-// RegisterRoutes registers bookmarks routes
-func (h *BookmarksHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/bookmarks", h.List)
+// RegisterRoutes registers the bookmarks route with the scopes of Mastodon's
+// Api::V1::BookmarksController.
+func (h *BookmarksHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	mux.HandleFunc("GET /api/v1/bookmarks", middleware.RequireScope(oauth.ScopeRead, oauth.ScopeReadBookmarks)(h.List))
 }
 
 // FavouritesHandler handles favourites endpoints
@@ -135,9 +136,10 @@ func (h *FavouritesHandler) List(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, []Status{})
 }
 
-// RegisterRoutes registers favourites routes
-func (h *FavouritesHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/favourites", h.List)
+// RegisterRoutes registers the favourites route with the scopes of Mastodon's
+// Api::V1::FavouritesController.
+func (h *FavouritesHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	mux.HandleFunc("GET /api/v1/favourites", middleware.RequireScope(oauth.ScopeRead, oauth.ScopeReadFavourites)(h.List))
 }
 
 // MutesHandler handles mutes endpoints
@@ -187,9 +189,10 @@ func (h *MutesHandler) List(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, []Account{})
 }
 
-// RegisterRoutes registers mutes routes
-func (h *MutesHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/mutes", h.List)
+// RegisterRoutes registers the mutes route with the scopes of Mastodon's
+// Api::V1::MutesController.
+func (h *MutesHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	mux.HandleFunc("GET /api/v1/mutes", middleware.RequireScope(oauth.ScopeFollow, oauth.ScopeRead, oauth.ScopeReadMutes)(h.List))
 }
 
 // BlocksHandler handles blocks endpoints
@@ -239,9 +242,10 @@ func (h *BlocksHandler) List(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, []Account{})
 }
 
-// RegisterRoutes registers blocks routes
-func (h *BlocksHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/blocks", h.List)
+// RegisterRoutes registers the blocks route with the scopes of Mastodon's
+// Api::V1::BlocksController.
+func (h *BlocksHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	mux.HandleFunc("GET /api/v1/blocks", middleware.RequireScope(oauth.ScopeFollow, oauth.ScopeRead, oauth.ScopeReadBlocks)(h.List))
 }
 
 // CustomEmojisHandler handles custom emojis endpoints
@@ -289,8 +293,9 @@ func (h *CustomEmojisHandler) List(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, resp)
 }
 
-// RegisterRoutes registers custom emojis routes
-func (h *CustomEmojisHandler) RegisterRoutes(mux *http.ServeMux) {
+// RegisterRoutes registers the custom emojis route. It needs no scope, as
+// Mastodon's Api::V1::CustomEmojisController.
+func (h *CustomEmojisHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
 	mux.HandleFunc("GET /api/v1/custom_emojis", h.List)
 }
 
@@ -326,12 +331,6 @@ func (h *ConversationsHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	scopes := middleware.GetScopes(ctx)
-	if scopes != "" && !oauth.HasScope(scopes, "read:statuses") {
-		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
-		return
-	}
-
 	limit := parseBookmarksLimit(web.QueryParam(r, "limit"), 20, 40)
 
 	if !h.useDB() {
@@ -482,12 +481,6 @@ func (h *ConversationsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scopes := middleware.GetScopes(r.Context())
-	if !oauth.HasScope(scopes, "write:conversations") {
-		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
-		return
-	}
-
 	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusBadRequest, "Invalid ID")
@@ -517,12 +510,6 @@ func (h *ConversationsHandler) MarkRead(w http.ResponseWriter, r *http.Request) 
 	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
-		return
-	}
-
-	scopes := middleware.GetScopes(r.Context())
-	if !oauth.HasScope(scopes, "write:conversations") {
-		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
 		return
 	}
 
@@ -582,12 +569,6 @@ func (h *ConversationsHandler) MarkUnread(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	scopes := middleware.GetScopes(r.Context())
-	if !oauth.HasScope(scopes, "write:conversations") {
-		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
-		return
-	}
-
 	id, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusBadRequest, "Invalid ID")
@@ -636,12 +617,16 @@ func (h *ConversationsHandler) MarkUnread(w http.ResponseWriter, r *http.Request
 	web.JSON(w, http.StatusOK, resp)
 }
 
-// RegisterRoutes registers conversations routes
-func (h *ConversationsHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/conversations", h.List)
-	mux.HandleFunc("DELETE /api/v1/conversations/{id}", h.Delete)
-	mux.HandleFunc("POST /api/v1/conversations/{id}/read", h.MarkRead)
-	mux.HandleFunc("POST /api/v1/conversations/{id}/unread", h.MarkUnread)
+// RegisterRoutes registers the conversations routes with the scopes of
+// Mastodon's Api::V1::ConversationsController.
+func (h *ConversationsHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	read := middleware.RequireScope(oauth.ScopeRead, oauth.ScopeReadStatuses)
+	write := middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteConversations)
+
+	mux.HandleFunc("GET /api/v1/conversations", read(h.List))
+	mux.HandleFunc("DELETE /api/v1/conversations/{id}", write(h.Delete))
+	mux.HandleFunc("POST /api/v1/conversations/{id}/read", write(h.MarkRead))
+	mux.HandleFunc("POST /api/v1/conversations/{id}/unread", write(h.MarkUnread))
 }
 
 func (h *ConversationsHandler) buildConversation(ctx context.Context, accountID int64, conv db.AccountConversation) (Conversation, error) {

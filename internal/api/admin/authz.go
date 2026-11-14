@@ -59,11 +59,10 @@ var (
 //   - a role without any of the permissions: 403 This action is not allowed
 //   - a lookup fails otherwise: 500
 //
-// scope is matched with oauth.HasScope, so admin:read covers
-// admin:read:accounts but admin:read:accounts doesn't cover admin:read. A
-// token without scopes is refused: oauth.HasScope would read it as the
-// default "read", which an admin scope never matches either, but the refusal
-// shouldn't depend on that.
+// scope is matched with middleware.HasAnyScope, the check the user API's
+// routes use, so admin:read covers admin:read:accounts but
+// admin:read:accounts doesn't cover admin:read, and a token without scopes
+// is refused.
 //
 // Mastodon answers a request without a token with 403, because it skips the
 // scope check then so that its admin dashboard can call these routes with a
@@ -82,9 +81,8 @@ func RequireAccess(w http.ResponseWriter, r *http.Request, roles RoleLookup, sco
 		return nil, ErrNotAuthenticated
 	}
 
-	scopes := middleware.GetScopes(ctx)
-	if strings.TrimSpace(scopes) == "" || !oauth.HasScope(scopes, scope) {
-		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
+	if !middleware.HasAnyScope(middleware.GetScopes(ctx), scope) {
+		web.JSONError(w, http.StatusForbidden, middleware.OutsideScopesMessage)
 		return nil, ErrOutsideScopes
 	}
 
@@ -193,6 +191,4 @@ func isAdminScope(scope string) bool {
 // RouteRegistrar is the part of *http.ServeMux that the admin handlers'
 // RegisterRoutes use. Tests pass a recorder to check that every registered
 // admin route declares its scope and permission.
-type RouteRegistrar interface {
-	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
-}
+type RouteRegistrar = middleware.RouteRegistrar

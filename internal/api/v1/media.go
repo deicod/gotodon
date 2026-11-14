@@ -17,6 +17,7 @@ import (
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/media"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 	"github.com/deicod/gotodon/pkg/snowflake"
 )
 
@@ -317,15 +318,18 @@ func (h *MediaHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
-// RegisterRoutes registers the media routes
-func (h *MediaHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/v1/media", h.Create)
-	mux.HandleFunc("GET /api/v1/media/{id}", h.Get)
-	mux.HandleFunc("PUT /api/v1/media/{id}", h.Update)
-	mux.HandleFunc("PATCH /api/v1/media/{id}", h.Update)
-	mux.HandleFunc("DELETE /api/v1/media/{id}", h.Delete)
-	// V2 endpoint alias
-	mux.HandleFunc("POST /api/v2/media", h.Create)
+// RegisterRoutes registers the media routes with the scopes of Mastodon's
+// Api::V1::MediaController, which Api::V2::MediaController inherits. Reading
+// an attachment needs write:media too, since only its uploader may.
+func (h *MediaHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	media := middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteMedia)
+
+	mux.HandleFunc("POST /api/v1/media", media(h.Create))
+	mux.HandleFunc("GET /api/v1/media/{id}", media(h.Get))
+	mux.HandleFunc("PUT /api/v1/media/{id}", media(h.Update))
+	mux.HandleFunc("PATCH /api/v1/media/{id}", media(h.Update))
+	mux.HandleFunc("DELETE /api/v1/media/{id}", media(h.Delete))
+	mux.HandleFunc("POST /api/v2/media", media(h.Create))
 }
 
 func mediaTypeToInt(t media.MediaType) int32 {

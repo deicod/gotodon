@@ -217,12 +217,6 @@ func (h *AccountsHandler) VerifyCredentials(w http.ResponseWriter, r *http.Reque
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
 		return
 	}
-	scopes := middleware.GetScopes(r.Context())
-	if scopes != "" && !oauth.HasScope(scopes, "read:accounts") && !oauth.HasScope(scopes, "profile") {
-		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
-		return
-	}
-
 	if !h.useDB() {
 		web.JSONError(w, http.StatusInternalServerError, "Account data unavailable")
 		return
@@ -294,12 +288,6 @@ func (h *AccountsHandler) UpdateCredentials(w http.ResponseWriter, r *http.Reque
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
 		return
 	}
-	scopes := middleware.GetScopes(r.Context())
-	if scopes != "" && !oauth.HasScope(scopes, "write") && !oauth.HasScope(scopes, "write:accounts") {
-		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
-		return
-	}
-
 	contentType := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
 	multipartCredentials := strings.HasPrefix(contentType, "multipart/form-data")
 	if multipartCredentials {
@@ -1150,12 +1138,6 @@ func (h *AccountsHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 // Index handles GET /api/v1/accounts
 func (h *AccountsHandler) Index(w http.ResponseWriter, r *http.Request) {
-	scopes := middleware.GetScopes(r.Context())
-	if scopes != "" && !oauth.HasScope(scopes, "read:accounts") {
-		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
-		return
-	}
-
 	ids := parseAccountIDs(r)
 	if len(ids) > defaultAccountsLimit {
 		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed")
@@ -1668,12 +1650,6 @@ func (h *AccountsHandler) FeaturedTags(w http.ResponseWriter, r *http.Request) {
 
 // Endorsements handles GET /api/v1/accounts/:id/endorsements
 func (h *AccountsHandler) Endorsements(w http.ResponseWriter, r *http.Request) {
-	scopes := middleware.GetScopes(r.Context())
-	if scopes != "" && !oauth.HasScope(scopes, "read:accounts") {
-		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
-		return
-	}
-
 	targetID, err := strconv.ParseInt(web.Param(r, "id"), 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
@@ -2473,29 +2449,41 @@ func isRemoteLookup(acct string) bool {
 		strings.HasPrefix(acct, "https://")
 }
 
-// RegisterRoutes registers the accounts routes
-func (h *AccountsHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/accounts/verify_credentials", h.VerifyCredentials)
-	mux.HandleFunc("PATCH /api/v1/accounts/update_credentials", h.UpdateCredentials)
-	mux.HandleFunc("GET /api/v1/accounts/search", h.Search)
-	mux.HandleFunc("GET /api/v1/accounts/relationships", h.Relationships)
-	mux.HandleFunc("GET /api/v1/accounts/familiar_followers", h.FamiliarFollowers)
-	mux.HandleFunc("POST /api/v1/accounts", h.Register)
-	mux.HandleFunc("GET /api/v1/accounts", h.Index)
-	mux.HandleFunc("GET /api/v1/accounts/{id}", h.Get)
-	mux.HandleFunc("GET /api/v1/accounts/{id}/statuses", h.Statuses)
-	mux.HandleFunc("GET /api/v1/accounts/{id}/followers", h.Followers)
-	mux.HandleFunc("GET /api/v1/accounts/{id}/following", h.Following)
+// RegisterRoutes registers the accounts routes with the scopes of Mastodon's
+// Api::V1::AccountsController and the Api::V1::Accounts controllers. The
+// featured tags and identity proofs of an account need none.
+func (h *AccountsHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	readAccounts := middleware.RequireScopeIfToken(oauth.ScopeRead, oauth.ScopeReadAccounts)
+	readStatuses := middleware.RequireScopeIfToken(oauth.ScopeRead, oauth.ScopeReadStatuses)
+	credentials := middleware.RequireScope(oauth.ScopeProfile, oauth.ScopeRead, oauth.ScopeReadAccounts)
+	search := middleware.RequireScope(oauth.ScopeRead, oauth.ScopeReadAccounts)
+	readFollows := middleware.RequireScope(oauth.ScopeRead, oauth.ScopeReadFollows)
+	writeAccounts := middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteAccounts)
+	follows := middleware.RequireScope(oauth.ScopeFollow, oauth.ScopeWrite, oauth.ScopeWriteFollows)
+	blocks := middleware.RequireScope(oauth.ScopeFollow, oauth.ScopeWrite, oauth.ScopeWriteBlocks)
+	mutes := middleware.RequireScope(oauth.ScopeFollow, oauth.ScopeWrite, oauth.ScopeWriteMutes)
+
+	mux.HandleFunc("GET /api/v1/accounts/verify_credentials", credentials(h.VerifyCredentials))
+	mux.HandleFunc("PATCH /api/v1/accounts/update_credentials", writeAccounts(h.UpdateCredentials))
+	mux.HandleFunc("GET /api/v1/accounts/search", search(h.Search))
+	mux.HandleFunc("GET /api/v1/accounts/relationships", readFollows(h.Relationships))
+	mux.HandleFunc("GET /api/v1/accounts/familiar_followers", readFollows(h.FamiliarFollowers))
+	mux.HandleFunc("POST /api/v1/accounts", writeAccounts(h.Register))
+	mux.HandleFunc("GET /api/v1/accounts", readAccounts(h.Index))
+	mux.HandleFunc("GET /api/v1/accounts/{id}", readAccounts(h.Get))
+	mux.HandleFunc("GET /api/v1/accounts/{id}/statuses", readStatuses(h.Statuses))
+	mux.HandleFunc("GET /api/v1/accounts/{id}/followers", readAccounts(h.Followers))
+	mux.HandleFunc("GET /api/v1/accounts/{id}/following", readAccounts(h.Following))
 	mux.HandleFunc("GET /api/v1/accounts/{id}/featured_tags", h.FeaturedTags)
-	mux.HandleFunc("GET /api/v1/accounts/{id}/endorsements", h.Endorsements)
+	mux.HandleFunc("GET /api/v1/accounts/{id}/endorsements", readAccounts(h.Endorsements))
 	mux.HandleFunc("GET /api/v1/accounts/{id}/identity_proofs", h.IdentityProofs)
-	mux.HandleFunc("POST /api/v1/accounts/{id}/follow", h.Follow)
-	mux.HandleFunc("POST /api/v1/accounts/{id}/unfollow", h.Unfollow)
-	mux.HandleFunc("POST /api/v1/accounts/{id}/block", h.Block)
-	mux.HandleFunc("POST /api/v1/accounts/{id}/unblock", h.Unblock)
-	mux.HandleFunc("POST /api/v1/accounts/{id}/mute", h.Mute)
-	mux.HandleFunc("POST /api/v1/accounts/{id}/unmute", h.Unmute)
-	mux.HandleFunc("POST /api/v1/accounts/{id}/note", h.SetNote)
-	mux.HandleFunc("POST /api/v1/accounts/{id}/remove_from_followers", h.RemoveFromFollowers)
-	mux.HandleFunc("GET /api/v1/accounts/lookup", h.Lookup)
+	mux.HandleFunc("POST /api/v1/accounts/{id}/follow", follows(h.Follow))
+	mux.HandleFunc("POST /api/v1/accounts/{id}/unfollow", follows(h.Unfollow))
+	mux.HandleFunc("POST /api/v1/accounts/{id}/block", blocks(h.Block))
+	mux.HandleFunc("POST /api/v1/accounts/{id}/unblock", blocks(h.Unblock))
+	mux.HandleFunc("POST /api/v1/accounts/{id}/mute", mutes(h.Mute))
+	mux.HandleFunc("POST /api/v1/accounts/{id}/unmute", mutes(h.Unmute))
+	mux.HandleFunc("POST /api/v1/accounts/{id}/note", writeAccounts(h.SetNote))
+	mux.HandleFunc("POST /api/v1/accounts/{id}/remove_from_followers", follows(h.RemoveFromFollowers))
+	mux.HandleFunc("GET /api/v1/accounts/lookup", readAccounts(h.Lookup))
 }

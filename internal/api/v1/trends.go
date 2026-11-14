@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
@@ -275,8 +276,9 @@ func (h *TrendsHandler) previewCardAuthorAccounts(ctx context.Context, rows []db
 	return serializeAccounts(ctx, h.queries, h.cfg, dbAccounts, true)
 }
 
-// RegisterRoutes registers trends routes
-func (h *TrendsHandler) RegisterRoutes(mux *http.ServeMux) {
+// RegisterRoutes registers the trends routes. They need no scope, as
+// Mastodon's Api::V1::Trends controllers.
+func (h *TrendsHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
 	mux.HandleFunc("GET /api/v1/trends", h.Index)
 	mux.HandleFunc("GET /api/v1/trends/tags", h.Tags)
 	mux.HandleFunc("GET /api/v1/trends/statuses", h.Statuses)

@@ -128,7 +128,7 @@ func TestEndorsementsHandler_EndorseAliases(t *testing.T) {
 	accountID := int64(123)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/456/endorse", nil)
-	req = req.WithContext(context.WithValue(req.Context(), middleware.ContextKeyAccountID, accountID))
+	req = req.WithContext(context.WithValue(context.WithValue(req.Context(), middleware.ContextKeyAccountID, accountID), middleware.ContextKeyScopes, "read write"))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -136,7 +136,7 @@ func TestEndorsementsHandler_EndorseAliases(t *testing.T) {
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/endorsements", nil)
-	req = req.WithContext(context.WithValue(req.Context(), middleware.ContextKeyAccountID, accountID))
+	req = req.WithContext(context.WithValue(context.WithValue(req.Context(), middleware.ContextKeyAccountID, accountID), middleware.ContextKeyScopes, "read write"))
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -151,7 +151,7 @@ func TestEndorsementsHandler_EndorseAliases(t *testing.T) {
 	}
 
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/accounts/456/unendorse", nil)
-	req = req.WithContext(context.WithValue(req.Context(), middleware.ContextKeyAccountID, accountID))
+	req = req.WithContext(context.WithValue(context.WithValue(req.Context(), middleware.ContextKeyAccountID, accountID), middleware.ContextKeyScopes, "read write"))
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -159,7 +159,7 @@ func TestEndorsementsHandler_EndorseAliases(t *testing.T) {
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/endorsements", nil)
-	req = req.WithContext(context.WithValue(req.Context(), middleware.ContextKeyAccountID, accountID))
+	req = req.WithContext(context.WithValue(context.WithValue(req.Context(), middleware.ContextKeyAccountID, accountID), middleware.ContextKeyScopes, "read write"))
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

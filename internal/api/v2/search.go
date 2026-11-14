@@ -13,6 +13,7 @@ import (
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 // SearchHandler handles search endpoints
@@ -199,9 +200,10 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, result)
 }
 
-// RegisterRoutes registers search routes
-func (h *SearchHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v2/search", h.Search)
+// RegisterRoutes registers the search route with the scopes of Mastodon's
+// Api::V2::SearchController, which also serves anonymous clients.
+func (h *SearchHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	mux.HandleFunc("GET /api/v2/search", middleware.RequireScopeIfToken(oauth.ScopeRead, oauth.ScopeReadSearch)(h.Search))
 }
 
 func tagDisplayName(tag db.Tag) string {

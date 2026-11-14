@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
@@ -99,7 +100,8 @@ func parseDirectoryLimit(s string, defaultVal, maxVal int) int {
 	return v
 }
 
-// RegisterRoutes registers directory routes
-func (h *DirectoryHandler) RegisterRoutes(mux *http.ServeMux) {
+// RegisterRoutes registers the directory route. It needs no scope, as
+// Mastodon's Api::V1::DirectoriesController.
+func (h *DirectoryHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
 	mux.HandleFunc("GET /api/v1/directory", h.Get)
 }

@@ -1461,6 +1461,8 @@ func TestTokenHandler_AuthorizationCodeRejectsMismatchingRedirectWhenGrantNotExp
 	}
 }
 
+// TestUserinfoRequiresProfileScope routes requests through RegisterRoutes:
+// OAuth::UserinfoController accepts only the profile scope, on GET and POST.
 func TestUserinfoRequiresProfileScope(t *testing.T) {
 	store := newStubOAuthStore()
 	store.addAccount(db.Account{
@@ -1471,16 +1473,50 @@ func TestUserinfoRequiresProfileScope(t *testing.T) {
 	})
 
 	handler := NewHandler(store, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
-	req := httptest.NewRequest(http.MethodGet, "/oauth/userinfo", nil)
-	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
-	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "read:accounts")
-	req = req.WithContext(ctx)
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	tests := []struct {
+		scopes string
+		want   int
+	}{
+		{"profile", http.StatusOK},
+		{"read profile", http.StatusOK},
+		{"read:accounts", http.StatusForbidden},
+		{"read", http.StatusForbidden},
+		{"read write follow push", http.StatusForbidden},
+		{"", http.StatusForbidden},
+	}
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		for _, tt := range tests {
+			req := httptest.NewRequest(method, "/oauth/userinfo", nil)
+			ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+			ctx = context.WithValue(ctx, middleware.ContextKeyScopes, tt.scopes)
+			req = req.WithContext(ctx)
+
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code != tt.want {
+				t.Errorf("%s with scopes %q: status = %d, want %d", method, tt.scopes, rec.Code, tt.want)
+				continue
+			}
+			if tt.want == http.StatusForbidden {
+				var resp map[string]string
+				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+					t.Fatalf("decode response: %v", err)
+				}
+				if resp["error"] != middleware.OutsideScopesMessage {
+					t.Errorf("%s with scopes %q: error = %q, want %q", method, tt.scopes, resp["error"], middleware.OutsideScopesMessage)
+				}
+			}
+		}
+	}
 
 	rec := httptest.NewRecorder()
-	handler.Userinfo(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/oauth/userinfo", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("without a token: status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
 

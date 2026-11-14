@@ -14,6 +14,7 @@ import (
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 // TagsHandler handles tag-related endpoints
@@ -367,14 +368,19 @@ func (h *TagsHandler) Unfeature(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, h.dbTagToAPI(tag, following, history))
 }
 
-// RegisterRoutes registers the tags routes
-func (h *TagsHandler) RegisterRoutes(mux *http.ServeMux) {
+// RegisterRoutes registers the tags routes with the scopes of Mastodon's
+// Api::V1::TagsController and Api::V1::FollowedTagsController. Showing a
+// tag needs no scope.
+func (h *TagsHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	follows := middleware.RequireScope(oauth.ScopeFollow, oauth.ScopeWrite, oauth.ScopeWriteFollows)
+	features := middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteAccounts)
+
 	mux.HandleFunc("GET /api/v1/tags/{id}", h.Get)
-	mux.HandleFunc("POST /api/v1/tags/{id}/follow", h.Follow)
-	mux.HandleFunc("POST /api/v1/tags/{id}/unfollow", h.Unfollow)
-	mux.HandleFunc("POST /api/v1/tags/{id}/feature", h.Feature)
-	mux.HandleFunc("POST /api/v1/tags/{id}/unfeature", h.Unfeature)
-	mux.HandleFunc("GET /api/v1/followed_tags", h.ListFollowed)
+	mux.HandleFunc("POST /api/v1/tags/{id}/follow", follows(h.Follow))
+	mux.HandleFunc("POST /api/v1/tags/{id}/unfollow", follows(h.Unfollow))
+	mux.HandleFunc("POST /api/v1/tags/{id}/feature", features(h.Feature))
+	mux.HandleFunc("POST /api/v1/tags/{id}/unfeature", features(h.Unfeature))
+	mux.HandleFunc("GET /api/v1/followed_tags", middleware.RequireScope(oauth.ScopeFollow, oauth.ScopeRead, oauth.ScopeReadFollows)(h.ListFollowed))
 }
 
 type tagHistoryQuerier interface {

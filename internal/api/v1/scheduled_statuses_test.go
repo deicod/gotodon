@@ -137,14 +137,11 @@ func TestScheduledStatusesHandler_Update_Unauthorized(t *testing.T) {
 func TestScheduledStatusesHandler_Update_Forbidden(t *testing.T) {
 	h := NewScheduledStatusesHandler(nil)
 
-	req, rec := scheduledStatusRequest(http.MethodPut, "/api/v1/scheduled_statuses/1", `{"scheduled_at":"2024-01-01T00:00:00Z"}`, 10, "read")
-	req.SetPathValue("id", "1")
+	req, _ := scheduledStatusRequest(http.MethodPut, "/api/v1/scheduled_statuses/1", `{"scheduled_at":"2024-01-01T00:00:00Z"}`, 10, "read")
 
-	h.Update(rec, req)
+	rec := serveRoutes(h.RegisterRoutes, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
-	}
+	wantOutsideScopes(t, rec)
 }
 
 func TestScheduledStatusesHandler_Update_InvalidScheduledAt(t *testing.T) {
@@ -328,13 +325,11 @@ func TestScheduledStatusesHandler_List_AppToken(t *testing.T) {
 func TestScheduledStatusesHandler_List_Forbidden(t *testing.T) {
 	h := NewScheduledStatusesHandler(nil)
 
-	req, rec := scheduledStatusRequest(http.MethodGet, "/api/v1/scheduled_statuses", "", 10, "write:statuses")
+	req, _ := scheduledStatusRequest(http.MethodGet, "/api/v1/scheduled_statuses", "", 10, "write:statuses")
 
-	h.List(rec, req)
+	rec := serveRoutes(h.RegisterRoutes, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
-	}
+	wantOutsideScopes(t, rec)
 }
 
 func TestScheduledStatusesHandler_List_Success(t *testing.T) {
@@ -418,14 +413,11 @@ func TestScheduledStatusesHandler_Get_AppToken(t *testing.T) {
 func TestScheduledStatusesHandler_Get_Forbidden(t *testing.T) {
 	h := NewScheduledStatusesHandler(nil)
 
-	req, rec := scheduledStatusRequest(http.MethodGet, "/api/v1/scheduled_statuses/1", "", 5, "write:statuses")
-	req.SetPathValue("id", "1")
+	req, _ := scheduledStatusRequest(http.MethodGet, "/api/v1/scheduled_statuses/1", "", 5, "write:statuses")
 
-	h.Get(rec, req)
+	rec := serveRoutes(h.RegisterRoutes, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
-	}
+	wantOutsideScopes(t, rec)
 }
 
 func TestScheduledStatusesHandler_Delete_AppToken(t *testing.T) {
@@ -444,12 +436,9 @@ func TestScheduledStatusesHandler_Delete_AppToken(t *testing.T) {
 func TestScheduledStatusesHandler_Delete_Forbidden(t *testing.T) {
 	h := NewScheduledStatusesHandler(nil)
 
-	req, rec := scheduledStatusRequest(http.MethodDelete, "/api/v1/scheduled_statuses/1", "", 5, "read:statuses")
-	req.SetPathValue("id", "1")
+	req, _ := scheduledStatusRequest(http.MethodDelete, "/api/v1/scheduled_statuses/1", "", 5, "read:statuses")
 
-	h.Delete(rec, req)
+	rec := serveRoutes(h.RegisterRoutes, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
-	}
+	wantOutsideScopes(t, rec)
 }

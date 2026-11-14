@@ -515,16 +515,12 @@ func (h *Handler) AuthorizePost(w http.ResponseWriter, r *http.Request) {
 	redirectWithCode(w, r, redirectURI, code, state)
 }
 
-// Userinfo handles GET/POST /oauth/userinfo
+// Userinfo handles GET/POST /oauth/userinfo. RegisterRoutes requires the
+// profile scope.
 func (h *Handler) Userinfo(w http.ResponseWriter, r *http.Request) {
 	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
-		return
-	}
-	scopes := middleware.GetScopes(r.Context())
-	if scopes == "" || !oauth.HasScope(scopes, "profile") {
-		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
 		return
 	}
 
@@ -652,8 +648,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /oauth/revoke", h.Revoke)
 	mux.HandleFunc("GET /oauth/authorize", h.Authorize)
 	mux.HandleFunc("POST /oauth/authorize", h.AuthorizePost)
-	mux.HandleFunc("GET /oauth/userinfo", h.Userinfo)
-	mux.HandleFunc("POST /oauth/userinfo", h.Userinfo)
+	// OAuth::UserinfoController: doorkeeper_authorize! :profile
+	userinfo := middleware.RequireScope(oauth.ScopeProfile)
+	mux.HandleFunc("GET /oauth/userinfo", userinfo(h.Userinfo))
+	mux.HandleFunc("POST /oauth/userinfo", userinfo(h.Userinfo))
 	mux.HandleFunc("GET /.well-known/oauth-authorization-server", h.Metadata)
 	// VerifyCredentials is usually unused in standard OAuth flow but kept for API
 }

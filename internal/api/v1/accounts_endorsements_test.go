@@ -27,14 +27,10 @@ func TestAccountsHandler_Endorsements_MissingScope(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/123/endorsements", nil)
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyScopes, "write")
 	req = req.WithContext(ctx)
-	req.SetPathValue("id", "123")
-	rec := httptest.NewRecorder()
 
-	h.Endorsements(rec, req)
+	rec := serveRoutes(h.RegisterRoutes, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
-	}
+	wantOutsideScopes(t, rec)
 }
 
 func TestAccountsHandler_Endorsements_InvalidID(t *testing.T) {

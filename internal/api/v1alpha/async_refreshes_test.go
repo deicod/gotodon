@@ -46,16 +46,56 @@ func TestAsyncRefreshHandler_Show_Unauthorized(t *testing.T) {
 	}
 }
 
-func TestAsyncRefreshHandler_Show_Forbidden(t *testing.T) {
+// TestAsyncRefreshHandler_Show_Scopes routes requests through RegisterRoutes:
+// Mastodon's Api::V1Alpha::AsyncRefreshesController accepts only read itself,
+// so neither another scope, one of read's children nor a token without
+// scopes reaches the handler.
+func TestAsyncRefreshHandler_Show_Scopes(t *testing.T) {
 	handler := NewAsyncRefreshHandler(&config.Config{Secrets: config.SecretsConfig{SecretKeyBase: "secret"}}, nil)
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
 
-	req, rec := mockAsyncRefreshRequest(http.MethodGet, "/api/v1_alpha/async_refreshes/123", 123, "write")
-	req.SetPathValue("id", "123")
+	tests := []struct {
+		scopes  string
+		allowed bool
+	}{
+		{"read", true},
+		{"read write", true},
+		{"write", false},
+		{"read:statuses read:accounts", false},
+		{"follow push", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		req, _ := mockAsyncRefreshRequest(http.MethodGet, "/api/v1_alpha/async_refreshes/bad", 123, tt.scopes)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
 
-	handler.Show(rec, req)
+		if tt.allowed {
+			// The handler runs and rejects the malformed id.
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("scopes %q: status = %d, want %d", tt.scopes, rec.Code, http.StatusNotFound)
+			}
+			continue
+		}
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("scopes %q: status = %d, want %d", tt.scopes, rec.Code, http.StatusForbidden)
+			continue
+		}
+		var body map[string]string
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode error response: %v", err)
+		}
+		if body["error"] != middleware.OutsideScopesMessage {
+			t.Errorf("scopes %q: error = %q, want %q", tt.scopes, body["error"], middleware.OutsideScopesMessage)
+		}
+	}
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	req, _ := mockAsyncRefreshRequest(http.MethodGet, "/api/v1_alpha/async_refreshes/bad", 0, "")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("without a token: status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
 

@@ -37,18 +37,14 @@ func TestStatusesHandler_Mute_InvalidID(t *testing.T) {
 func TestStatusesHandler_Mute_MissingScope(t *testing.T) {
 	h := NewStatusesHandler(nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/statuses/123/mute", nil)
-	req.SetPathValue("id", "123")
 
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(12345))
 	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "read")
 	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
 
-	h.Mute(rec, req)
+	rec := serveRoutes(h.RegisterRoutes, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
-	}
+	wantOutsideScopes(t, rec)
 }
 
 func TestStatusesHandler_Mute_DBUnavailable(t *testing.T) {
@@ -91,18 +87,14 @@ func TestStatusesHandler_Unmute_InvalidID(t *testing.T) {
 func TestStatusesHandler_Unmute_MissingScope(t *testing.T) {
 	h := NewStatusesHandler(nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/statuses/123/unmute", nil)
-	req.SetPathValue("id", "123")
 
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(12345))
 	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "read")
 	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
 
-	h.Unmute(rec, req)
+	rec := serveRoutes(h.RegisterRoutes, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
-	}
+	wantOutsideScopes(t, rec)
 }
 
 func TestStatusesHandler_Unmute_DBUnavailable(t *testing.T) {
