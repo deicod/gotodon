@@ -16,10 +16,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
-	v1 "github.com/deicod/gotodon/internal/api/v1"
 	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/mailer"
+	"github.com/deicod/gotodon/internal/moderation"
 	"github.com/deicod/gotodon/internal/web"
 )
 
@@ -298,7 +298,7 @@ func (h *AccountsHandler) processAccountAction(ctx context.Context, store accoun
 			statusIDs = append(statusIDs, strconv.FormatInt(id, 10))
 		}
 	}
-	actionValue, _ := v1.AccountWarningActionValue(action.actionType)
+	actionValue, _ := moderation.StrikeActionValue(action.actionType)
 	warning, err := store.CreateAccountWarning(ctx, db.CreateAccountWarningParams{
 		AccountID:       pgtype.Int8{Int64: action.actingID, Valid: true},
 		TargetAccountID: pgtype.Int8{Int64: action.target.ID, Valid: true},
@@ -531,9 +531,9 @@ func (h *AccountsHandler) notifyWarning(ctx context.Context, target db.AdminGetA
 	notification, err := h.store.CreateNotification(ctx, db.CreateNotificationParams{
 		AccountID:     target.ID,
 		FromAccountID: target.ID,
-		ActivityType:  v1.ActivityTypeAccountWarning,
+		ActivityType:  moderation.ActivityTypeWarning,
 		ActivityID:    warning.ID,
-		Type:          pgtype.Text{String: v1.NotificationTypeModerationWarning, Valid: true},
+		Type:          pgtype.Text{String: moderation.NotificationTypeWarning, Valid: true},
 	})
 	if err != nil {
 		slog.ErrorContext(ctx, "Failed to create moderation warning notification", "account_id", target.ID, "warning_id", warning.ID, "error", err)

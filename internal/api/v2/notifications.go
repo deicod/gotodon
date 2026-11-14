@@ -18,6 +18,7 @@ import (
 	v1 "github.com/deicod/gotodon/internal/api/v1"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/moderation"
 	"github.com/deicod/gotodon/internal/web"
 )
 
@@ -346,7 +347,7 @@ func (h *NotificationsHandler) buildGroupedResponse(ctx context.Context, notific
 func (h *NotificationsHandler) attachModerationWarnings(groups []NotificationGroup, notifications []db.Notification, warnings map[int64]v1.AccountWarning) {
 	warningByGroup := map[string]int64{}
 	for _, notif := range notifications {
-		if !v1.IsModerationWarning(notif) {
+		if !moderation.IsWarningNotification(notif) {
 			continue
 		}
 		key := h.groupKeyForNotification(notif)

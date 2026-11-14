@@ -15,6 +15,7 @@ import (
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/moderation"
 	"github.com/deicod/gotodon/internal/streaming"
 	"github.com/deicod/gotodon/internal/web"
 )
@@ -166,7 +167,7 @@ func (h *NotificationsHandler) notificationsToAPI(ctx context.Context, dbNotifs 
 // attachModerationWarning sets the strike of a moderation_warning
 // notification from warnings, which may lack it.
 func attachModerationWarning(notification *Notification, dbNotif db.Notification, warnings map[int64]AccountWarning) {
-	if !IsModerationWarning(dbNotif) {
+	if !moderation.IsWarningNotification(dbNotif) {
 		return
 	}
 	if warning, ok := warnings[dbNotif.ActivityID]; ok {

@@ -7,44 +7,8 @@ import (
 
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/moderation"
 )
-
-// Notification and activity types of a strike's moderation_warning
-// notification, as Admin::BaseAction#process_notification! creates it.
-const (
-	NotificationTypeModerationWarning = "moderation_warning"
-	ActivityTypeAccountWarning        = "AccountWarning"
-)
-
-// accountWarningActions is Mastodon's AccountWarning action enum, which
-// account_warnings.action stores.
-var accountWarningActions = map[string]int32{
-	"none":                       0,
-	"disable":                    1000,
-	"mark_statuses_as_sensitive": 1250,
-	"delete_statuses":            1500,
-	"sensitive":                  2000,
-	"silence":                    3000,
-	"suspend":                    4000,
-}
-
-// AccountWarningActionValue returns the stored value of the strike action
-// name, and false for a name that isn't one.
-func AccountWarningActionValue(name string) (int32, bool) {
-	value, ok := accountWarningActions[name]
-	return value, ok
-}
-
-// AccountWarningActionName returns the name of the stored strike action
-// value, and "" for a value that isn't one.
-func AccountWarningActionName(value int32) string {
-	for name, v := range accountWarningActions {
-		if v == value {
-			return name
-		}
-	}
-	return ""
-}
 
 // AccountWarning is Mastodon's AccountWarning entity
 // (REST::AccountWarningSerializer), which moderation_warning notifications
@@ -112,7 +76,7 @@ func LoadAccountWarnings(ctx context.Context, q AccountWarningQuerier, cfg *conf
 		}
 		warning := AccountWarning{
 			ID:            strconv.FormatInt(row.ID, 10),
-			Action:        AccountWarningActionName(row.Action),
+			Action:        moderation.StrikeActionName(row.Action),
 			Text:          row.Text,
 			StatusIDs:     row.StatusIds,
 			TargetAccount: target,
@@ -138,20 +102,13 @@ func appealState(row db.GetAccountWarningsByIDsRow) string {
 	}
 }
 
-// IsModerationWarning reports whether notification is a strike's
-// moderation_warning notification, whose activity is the strike.
-func IsModerationWarning(notification db.Notification) bool {
-	return notification.Type.Valid && notification.Type.String == NotificationTypeModerationWarning &&
-		notification.ActivityType == ActivityTypeAccountWarning && notification.ActivityID > 0
-}
-
 // ModerationWarningIDs returns the strikes that the moderation_warning
 // notifications among notifications name, each once.
 func ModerationWarningIDs(notifications []db.Notification) []int64 {
 	var ids []int64
 	seen := map[int64]bool{}
 	for _, notification := range notifications {
-		if IsModerationWarning(notification) && !seen[notification.ActivityID] {
+		if moderation.IsWarningNotification(notification) && !seen[notification.ActivityID] {
 			seen[notification.ActivityID] = true
 			ids = append(ids, notification.ActivityID)
 		}

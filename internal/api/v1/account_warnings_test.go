@@ -53,26 +53,6 @@ func (s *accountWarningStub) GetAccountsByIDs(_ context.Context, ids []int64) ([
 	return accounts, nil
 }
 
-func TestAccountWarningActions(t *testing.T) {
-	for name, value := range map[string]int32{
-		"none": 0, "disable": 1000, "mark_statuses_as_sensitive": 1250, "delete_statuses": 1500,
-		"sensitive": 2000, "silence": 3000, "suspend": 4000,
-	} {
-		if got, ok := AccountWarningActionValue(name); !ok || got != value {
-			t.Errorf("AccountWarningActionValue(%q) = %d, %v, want %d", name, got, ok, value)
-		}
-		if got := AccountWarningActionName(value); got != name {
-			t.Errorf("AccountWarningActionName(%d) = %q, want %q", value, got, name)
-		}
-	}
-	if _, ok := AccountWarningActionValue("ban"); ok {
-		t.Error("AccountWarningActionValue(ban) is an action")
-	}
-	if got := AccountWarningActionName(42); got != "" {
-		t.Errorf("AccountWarningActionName(42) = %q, want none", got)
-	}
-}
-
 func TestLoadAccountWarnings(t *testing.T) {
 	created := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 	at := pgtype.Timestamptz{Time: created, Valid: true}
