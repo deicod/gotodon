@@ -821,7 +821,7 @@ func (h *StatusesHandler) createStatusTx(ctx context.Context, qtx statusCreateSt
 	// Generate and Update URI with Snowflake ID
 	// Format: https://<domain>/users/<username>/statuses/<id>
 	statusIDStr := strconv.FormatInt(dbStatus.ID, 10)
-	uri := fmt.Sprintf("https://%s/users/%s/statuses/%s", h.cfg.Instance.LocalDomain, sender.Username, statusIDStr)
+	uri := fmt.Sprintf("https://%s/users/%s/statuses/%s", h.cfg.FederationDomain(), sender.Username, statusIDStr)
 
 	if err := qtx.UpdateStatusURI(ctx, db.UpdateStatusURIParams{
 		Uri: pgtype.Text{String: uri, Valid: true},
@@ -1844,7 +1844,7 @@ func (h *StatusesHandler) Reblog(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		reblogURI := fmt.Sprintf("https://%s/users/%s/statuses/%d", h.cfg.Instance.LocalDomain, actor.Username, reblogStatus.ID)
+		reblogURI := fmt.Sprintf("https://%s/users/%s/statuses/%d", h.cfg.FederationDomain(), actor.Username, reblogStatus.ID)
 		if err := h.queries.UpdateStatusURI(ctx, db.UpdateStatusURIParams{
 			ID:  reblogStatus.ID,
 			Uri: pgtype.Text{String: reblogURI, Valid: true},

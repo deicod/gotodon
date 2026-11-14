@@ -978,6 +978,27 @@ func (q *Queries) ListLocalAccounts(ctx context.Context, arg ListLocalAccountsPa
 	return items, nil
 }
 
+const repairRegisteredAccountURIs = `-- name: RepairRegisteredAccountURIs :execrows
+UPDATE accounts
+SET uri = 'https://' || $1::text || '/users/' || username,
+    updated_at = now()
+WHERE domain IS NULL
+  AND uri = 'https://example.com/users/' || username
+  AND $1::text <> 'example.com'
+`
+
+// Registration once stored https://example.com/users/<username> as the URI of
+// every local account, whatever the instance's domain. This moves such
+// accounts to the configured federation domain. It changes nothing on an
+// instance whose domain is example.com, or once the accounts are repaired.
+func (q *Queries) RepairRegisteredAccountURIs(ctx context.Context, federationDomain string) (int64, error) {
+	result, err := q.db.Exec(ctx, repairRegisteredAccountURIs, federationDomain)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const searchAccounts = `-- name: SearchAccounts :many
 SELECT id, username, domain, private_key, public_key, created_at, updated_at, note, display_name, uri, url, avatar_file_name, avatar_content_type, avatar_file_size, avatar_updated_at, header_file_name, header_content_type, header_file_size, header_updated_at, avatar_remote_url, locked, header_remote_url, last_webfingered_at, inbox_url, outbox_url, shared_inbox_url, followers_url, following_url, protocol, memorial, moved_to_account_id, featured_collection_url, fields, actor_type, discoverable, also_known_as, silenced_at, suspended_at, hide_collections, avatar_storage_schema_version, header_storage_schema_version, suspension_origin, sensitized_at, trendable, reviewed_at, requested_review_at, indexable, attribution_domains, id_scheme FROM accounts
 WHERE suspended_at IS NULL

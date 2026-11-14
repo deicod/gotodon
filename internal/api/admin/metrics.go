@@ -607,10 +607,7 @@ func (h *DimensionsHandler) dimensionServers(ctx context.Context, rangeData metr
 		return dimensionResponse{}, err
 	}
 
-	localDomain := ""
-	if h.cfg != nil {
-		localDomain = h.cfg.Instance.LocalDomain
-	}
+	localDomain := h.cfg.FederationDomain()
 
 	data := make([]dimensionData, 0, len(rows))
 	for _, row := range rows {
@@ -640,10 +637,7 @@ func (h *DimensionsHandler) dimensionTagServers(ctx context.Context, rangeData m
 		return dimensionResponse{}, err
 	}
 
-	localDomain := ""
-	if h.cfg != nil {
-		localDomain = h.cfg.Instance.LocalDomain
-	}
+	localDomain := h.cfg.FederationDomain()
 
 	data := make([]dimensionData, 0, len(rows))
 	for _, row := range rows {

@@ -39,7 +39,7 @@ const (
 
 // NewStorage returns the storage cfg configures: the local storage path,
 // served at media.base_url or, by default, at https://<web domain>/files.
-// A nil cfg gives the development defaults.
+// A nil cfg means the default storage path and no domain.
 func NewStorage(cfg *config.Config) *LocalStorage {
 	if cfg == nil {
 		cfg = &config.Config{}
@@ -56,12 +56,10 @@ func NewStorage(cfg *config.Config) *LocalStorage {
 }
 
 // SiteURL returns the root URL of the web domain, where gotodon serves its
-// own routes.
+// own routes. There is no fallback domain: without a configured one the URL
+// has no host, and serve refuses to start.
 func SiteURL(cfg *config.Config) string {
-	if cfg == nil {
-		cfg = &config.Config{}
-	}
-	return "https://" + cfg.Instance.PublicWebDomain()
+	return "https://" + cfg.PublicWebDomain()
 }
 
 // MissingAvatarURL returns the absolute URL of the default avatar.

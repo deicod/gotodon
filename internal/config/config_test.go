@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -185,6 +186,87 @@ func TestLoadMedia(t *testing.T) {
 			}
 			if cfg.Media.BaseURL != tt.wantBaseURL {
 				t.Errorf("Media.BaseURL = %q, want %q", cfg.Media.BaseURL, tt.wantBaseURL)
+			}
+		})
+	}
+}
+
+func TestInstanceDomains(t *testing.T) {
+	tests := []struct {
+		name           string
+		instance       InstanceConfig
+		wantFederation string
+		wantPublic     string
+	}{
+		{name: "nothing configured", instance: InstanceConfig{}, wantFederation: "", wantPublic: ""},
+		{name: "local domain", instance: InstanceConfig{LocalDomain: " social.example "}, wantFederation: "social.example", wantPublic: "social.example"},
+		{name: "web domain", instance: InstanceConfig{LocalDomain: "social.example", WebDomain: "web.social.example"}, wantFederation: "social.example", wantPublic: "web.social.example"},
+		{name: "blank web domain", instance: InstanceConfig{LocalDomain: "social.example", WebDomain: "  "}, wantFederation: "social.example", wantPublic: "social.example"},
+		{name: "web domain alone is no federation domain", instance: InstanceConfig{WebDomain: "web.social.example"}, wantFederation: "", wantPublic: "web.social.example"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.instance.FederationDomain(); got != tt.wantFederation {
+				t.Errorf("FederationDomain() = %q, want %q", got, tt.wantFederation)
+			}
+			if got := tt.instance.PublicWebDomain(); got != tt.wantPublic {
+				t.Errorf("PublicWebDomain() = %q, want %q", got, tt.wantPublic)
+			}
+			cfg := &Config{Instance: tt.instance}
+			if got := cfg.FederationDomain(); got != tt.wantFederation {
+				t.Errorf("Config.FederationDomain() = %q, want %q", got, tt.wantFederation)
+			}
+			if got := cfg.PublicWebDomain(); got != tt.wantPublic {
+				t.Errorf("Config.PublicWebDomain() = %q, want %q", got, tt.wantPublic)
+			}
+		})
+	}
+
+	var nilCfg *Config
+	if got := nilCfg.FederationDomain(); got != "" {
+		t.Errorf("nil Config.FederationDomain() = %q, want empty", got)
+	}
+	if got := nilCfg.PublicWebDomain(); got != "" {
+		t.Errorf("nil Config.PublicWebDomain() = %q, want empty", got)
+	}
+}
+
+func TestInstanceConfigValidate(t *testing.T) {
+	tests := []struct {
+		name     string
+		instance InstanceConfig
+		wantErr  string
+	}{
+		{name: "local domain", instance: InstanceConfig{LocalDomain: "social.example"}},
+		{name: "local and web domain", instance: InstanceConfig{LocalDomain: "social.example", WebDomain: "web.social.example"}},
+		{name: "development port", instance: InstanceConfig{LocalDomain: "localhost:3000"}},
+		{name: "IPv6 with port", instance: InstanceConfig{LocalDomain: "[::1]:3000"}},
+		{name: "internationalized", instance: InstanceConfig{LocalDomain: "bücher.example"}},
+		{name: "surrounding space", instance: InstanceConfig{LocalDomain: " social.example "}},
+		{name: "missing", instance: InstanceConfig{}, wantErr: "instance.local_domain is required"},
+		{name: "blank", instance: InstanceConfig{LocalDomain: "  "}, wantErr: "instance.local_domain is required"},
+		{name: "only web domain", instance: InstanceConfig{WebDomain: "web.social.example"}, wantErr: "instance.local_domain is required"},
+		{name: "scheme", instance: InstanceConfig{LocalDomain: "https://social.example"}, wantErr: "instance.local_domain"},
+		{name: "path", instance: InstanceConfig{LocalDomain: "social.example/mastodon"}, wantErr: "instance.local_domain"},
+		{name: "credentials", instance: InstanceConfig{LocalDomain: "user@social.example"}, wantErr: "instance.local_domain"},
+		{name: "query", instance: InstanceConfig{LocalDomain: "social.example?x"}, wantErr: "instance.local_domain"},
+		{name: "inner space", instance: InstanceConfig{LocalDomain: "social example"}, wantErr: "instance.local_domain"},
+		{name: "empty port", instance: InstanceConfig{LocalDomain: "social.example:"}, wantErr: "instance.local_domain"},
+		{name: "port out of range", instance: InstanceConfig{LocalDomain: "social.example:70000"}, wantErr: "instance.local_domain"},
+		{name: "port only", instance: InstanceConfig{LocalDomain: ":3000"}, wantErr: "instance.local_domain"},
+		{name: "invalid web domain", instance: InstanceConfig{LocalDomain: "social.example", WebDomain: "https://web.social.example/"}, wantErr: "instance.web_domain"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.instance.Validate()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Validate() error = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Validate() error = %v, want one mentioning %q", err, tt.wantErr)
 			}
 		})
 	}

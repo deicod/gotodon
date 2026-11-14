@@ -9,10 +9,7 @@ import (
 
 // mailPublicDomain resolves the user-facing domain for links in emails.
 func mailPublicDomain(cfg *config.Config) string {
-	if cfg == nil {
-		return "localhost:3000"
-	}
-	return cfg.Instance.PublicWebDomain()
+	return cfg.PublicWebDomain()
 }
 
 // confirmationMail builds the confirmation-instructions mail for a new or

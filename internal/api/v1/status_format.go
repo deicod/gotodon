@@ -575,14 +575,11 @@ func writeMention(b *strings.Builder, screenName string, lookup map[string]menti
 }
 
 func isLocalMentionDomain(domain string, cfg *config.Config) bool {
-	if cfg == nil {
-		return false
-	}
-	localDomain := normalizeDomain(cfg.Instance.LocalDomain)
+	localDomain := normalizeDomain(cfg.FederationDomain())
 	if localDomain != "" && strings.EqualFold(domain, localDomain) {
 		return true
 	}
-	webDomain := normalizeDomain(cfg.Instance.WebDomain)
+	webDomain := normalizeDomain(cfg.PublicWebDomain())
 	return webDomain != "" && strings.EqualFold(domain, webDomain)
 }
 

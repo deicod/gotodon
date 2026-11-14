@@ -73,7 +73,7 @@ func NewAccountsHandler(queries db.Querier, pool *pgxpool.Pool, cfg *config.Conf
 	}
 	var resolver *federation.RemoteActorResolver
 	if queries != nil {
-		resolver = federation.NewRemoteActorResolver(queries, cfg.Instance.LocalDomain)
+		resolver = federation.NewRemoteActorResolver(queries, cfg.FederationDomain())
 	}
 	return &AccountsHandler{queries: queries, pool: pool, cfg: cfg, outgoing: outgoing, resolver: resolver}
 }
@@ -1224,6 +1224,13 @@ func (h *AccountsHandler) Register(w http.ResponseWriter, r *http.Request) {
 			web.JSONError(w, http.StatusInternalServerError, "Registration unavailable")
 			return
 		}
+		// The account's ActivityPub ID lives on the federation domain.
+		// Without one the account could not federate under any real ID.
+		federationDomain := h.cfg.FederationDomain()
+		if federationDomain == "" {
+			web.JSONError(w, http.StatusInternalServerError, "Registration unavailable")
+			return
+		}
 		// Start transaction
 		tx, err := h.pool.Begin(ctx)
 		if err != nil {
@@ -1238,7 +1245,7 @@ func (h *AccountsHandler) Register(w http.ResponseWriter, r *http.Request) {
 			Username:     req.Username,
 			DisplayName:  req.Username,
 			Note:         "",
-			Uri:          "https://example.com/users/" + req.Username,
+			Uri:          "https://" + federationDomain + "/users/" + req.Username,
 			PublicKey:    "",
 			Discoverable: pgtype.Bool{Bool: true, Valid: true},
 			Indexable:    true,
@@ -1534,10 +1541,7 @@ func accountSearchTerms(query string, cfg *config.Config) string {
 }
 
 func accountSearchDomainIsLocal(domain string, cfg *config.Config) bool {
-	if cfg == nil {
-		return false
-	}
-	localDomain := strings.TrimSpace(cfg.Instance.LocalDomain)
+	localDomain := cfg.FederationDomain()
 	if localDomain == "" {
 		return false
 	}

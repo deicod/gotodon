@@ -209,16 +209,10 @@ func (h *Handler) openRegistrations(registrationsSetting *bool) bool {
 }
 
 func (h *Handler) publicDomain() string {
-	if h == nil || h.cfg == nil {
-		return "example.com"
+	if h == nil {
+		return ""
 	}
-	if domain := strings.TrimSpace(h.cfg.Instance.WebDomain); domain != "" {
-		return domain
-	}
-	if domain := strings.TrimSpace(h.cfg.Instance.LocalDomain); domain != "" {
-		return domain
-	}
-	return "example.com"
+	return h.cfg.PublicWebDomain()
 }
 
 type nodeInfoCache struct {

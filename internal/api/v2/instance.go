@@ -19,7 +19,6 @@ const (
 	defaultInstanceDescription            = "A Mastodon-compatible server"
 	defaultInstanceVersion                = "4.5.3"
 	defaultInstanceSourceURL              = "https://github.com/deicod/gotodon"
-	defaultInstanceDomainFallback         = "example.com"
 	defaultInstanceMaxImageSize           = int64(16777216)
 	defaultInstanceMaxVideoSize           = int64(103809024)
 	defaultInstanceMaxMediaPerPost        = 4
@@ -149,9 +148,6 @@ func (h *InstanceHandler) Get(w http.ResponseWriter, r *http.Request) {
 	settings := h.loadInstanceSettings(ctx)
 
 	domain := instancePublicDomain(h.cfg)
-	if domain == "" {
-		domain = defaultInstanceDomainFallback
-	}
 	baseURL := ""
 	if domain != "" {
 		baseURL = "https://" + domain
@@ -407,10 +403,8 @@ func (h *InstanceHandler) contactAccount(ctx context.Context, username string) *
 		acc, err = h.queries.GetAccountByUsername(ctx, user)
 	} else {
 		domain := strings.TrimSpace(parts[1])
-		if h.cfg != nil {
-			if strings.EqualFold(domain, h.cfg.Instance.LocalDomain) || strings.EqualFold(domain, h.cfg.Instance.WebDomain) {
-				domain = ""
-			}
+		if strings.EqualFold(domain, h.cfg.FederationDomain()) || strings.EqualFold(domain, h.cfg.PublicWebDomain()) {
+			domain = ""
 		}
 		if domain == "" {
 			acc, err = h.queries.GetAccountByUsername(ctx, user)
@@ -439,13 +433,7 @@ func (h *InstanceHandler) contactAccount(ctx context.Context, username string) *
 var androidIconSizes = []int{36, 48, 72, 96, 144, 192, 256, 384, 512}
 
 func instancePublicDomain(cfg *config.Config) string {
-	if cfg == nil {
-		return ""
-	}
-	if strings.TrimSpace(cfg.Instance.WebDomain) != "" {
-		return cfg.Instance.WebDomain
-	}
-	return cfg.Instance.LocalDomain
+	return cfg.PublicWebDomain()
 }
 
 func defaultRegistrations(cfg *config.Config) (bool, bool) {

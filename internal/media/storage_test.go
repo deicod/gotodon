@@ -232,12 +232,21 @@ func TestNewStorage(t *testing.T) {
 		wantImage string
 	}{
 		{
+			// No domain is invented; serve refuses to start without one.
 			name:      "nil config",
 			cfg:       nil,
 			wantRoot:  config.DefaultMediaStoragePath,
-			wantURL:   "https://localhost:3000/files/a.png",
-			wantSite:  "https://localhost:3000",
-			wantImage: "https://localhost:3000/avatars/original/missing.png",
+			wantURL:   "https:///files/a.png",
+			wantSite:  "https://",
+			wantImage: "https:///avatars/original/missing.png",
+		},
+		{
+			name:      "no domain",
+			cfg:       &config.Config{Media: config.MediaConfig{StoragePath: "/srv/uploads"}},
+			wantRoot:  "/srv/uploads",
+			wantURL:   "https:///files/a.png",
+			wantSite:  "https://",
+			wantImage: "https:///avatars/original/missing.png",
 		},
 		{
 			name:      "local domain",

@@ -291,7 +291,7 @@ func serializeAccount(cfg *config.Config, dbAcc db.Account, opts accountSerializ
 
 	isLocal := accountIsLocal(dbAcc)
 	publicDomain := accountPublicDomain(cfg)
-	federationDomain := accountFederationDomain(cfg, publicDomain)
+	federationDomain := accountFederationDomain(cfg)
 
 	acct := dbAcc.Username
 	if !isLocal {
@@ -584,19 +584,11 @@ func accountIsLocal(dbAcc db.Account) bool {
 }
 
 func accountPublicDomain(cfg *config.Config) string {
-	publicDomain := instancePublicDomain(cfg)
-	if publicDomain != "" {
-		return publicDomain
-	}
-	return "localhost:3000"
+	return cfg.PublicWebDomain()
 }
 
-func accountFederationDomain(cfg *config.Config, publicDomain string) string {
-	federationDomain := instanceFederationDomain(cfg)
-	if federationDomain != "" {
-		return federationDomain
-	}
-	return publicDomain
+func accountFederationDomain(cfg *config.Config) string {
+	return cfg.FederationDomain()
 }
 
 // accountImageURL returns the URL of an account's avatar or header: the

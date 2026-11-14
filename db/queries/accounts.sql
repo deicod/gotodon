@@ -172,3 +172,15 @@ UPDATE accounts SET
     updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: RepairRegisteredAccountURIs :execrows
+-- Registration once stored https://example.com/users/<username> as the URI of
+-- every local account, whatever the instance's domain. This moves such
+-- accounts to the configured federation domain. It changes nothing on an
+-- instance whose domain is example.com, or once the accounts are repaired.
+UPDATE accounts
+SET uri = 'https://' || sqlc.arg(federation_domain)::text || '/users/' || username,
+    updated_at = now()
+WHERE domain IS NULL
+  AND uri = 'https://example.com/users/' || username
+  AND sqlc.arg(federation_domain)::text <> 'example.com';

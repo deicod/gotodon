@@ -214,13 +214,7 @@ func tagDisplayName(tag db.Tag) string {
 }
 
 func tagURL(name string, cfg *config.Config) string {
-	domain := ""
-	if cfg != nil {
-		domain = strings.TrimSpace(cfg.Instance.WebDomain)
-		if domain == "" {
-			domain = cfg.Instance.LocalDomain
-		}
-	}
+	domain := cfg.PublicWebDomain()
 	if domain == "" {
 		return "/tags/" + name
 	}

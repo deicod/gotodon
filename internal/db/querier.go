@@ -600,6 +600,11 @@ type Querier interface {
 	RemoveAnnouncementReaction(ctx context.Context, arg RemoveAnnouncementReactionParams) error
 	RemoveMentions(ctx context.Context, arg RemoveMentionsParams) error
 	RemoveStatusTags(ctx context.Context, arg RemoveStatusTagsParams) error
+	// Registration once stored https://example.com/users/<username> as the URI of
+	// every local account, whatever the instance's domain. This moves such
+	// accounts to the configured federation domain. It changes nothing on an
+	// instance whose domain is example.com, or once the accounts are repaired.
+	RepairRegisteredAccountURIs(ctx context.Context, federationDomain string) (int64, error)
 	RevokeOAuthAccessGrant(ctx context.Context, token string) error
 	RevokeOAuthAccessToken(ctx context.Context, token string) error
 	RevokeOAuthAccessTokenByRefresh(ctx context.Context, refreshToken pgtype.Text) error

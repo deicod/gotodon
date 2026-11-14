@@ -392,10 +392,7 @@ func (h *InstanceInfoHandler) termsOfService(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *InstanceInfoHandler) serializeTermsOfService(ctx context.Context, tos db.TermsOfService) TermsOfService {
-	domain := ""
-	if h.cfg != nil {
-		domain = h.cfg.Instance.LocalDomain
-	}
+	domain := h.cfg.FederationDomain()
 
 	effectiveDate := ""
 	if tos.EffectiveDate.Valid {

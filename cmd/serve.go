@@ -77,6 +77,12 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
+	// Every URL and ActivityPub ID gotodon hands out is built from the
+	// configured domains; there is no fallback domain.
+	if err := cfg.Instance.Validate(); err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
+	}
+
 	// Override port if specified
 	if port, _ := cmd.Flags().GetInt("port"); port != 0 {
 		cfg.Server.Port = port
@@ -106,6 +112,16 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	queries := db.New(pool)
 	logger.Info("Connected to PostgreSQL database")
+
+	// Accounts registered before registration used the configured domain
+	// carry a placeholder domain in their ActivityPub ID.
+	repaired, err := queries.RepairRegisteredAccountURIs(ctx, cfg.FederationDomain())
+	if err != nil {
+		return fmt.Errorf("repairing account URIs: %w", err)
+	}
+	if repaired > 0 {
+		logger.Warn("Repaired the URIs of accounts registered under a placeholder domain", "accounts", repaired, "domain", cfg.FederationDomain())
+	}
 
 	// Connect to Redis (required for streaming)
 	rdb := redis.NewClient(&redis.Options{
@@ -255,7 +271,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	mediaStorage := media.NewStorage(cfg)
 	logger.Info("Serving uploaded files", "storage_path", mediaStorage.BasePath, "base_url", mediaStorage.BaseURL)
 
-	outgoingService := federation.NewOutgoingService(queries, cfg.Instance.LocalDomain, deliveryEnqueuer)
+	outgoingService := federation.NewOutgoingService(queries, cfg.FederationDomain(), deliveryEnqueuer)
 	outgoingService.SetMediaStorage(mediaStorage)
 
 	var pubSubHandler http.Handler
@@ -481,11 +497,11 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	wellKnownHandler := wellknownapi.NewHandler()
 	wellKnownHandler.RegisterRoutes(mux)
 
-	remoteActorResolver := federation.NewRemoteActorResolver(queries, cfg.Instance.LocalDomain)
+	remoteActorResolver := federation.NewRemoteActorResolver(queries, cfg.FederationDomain())
 	var authorizeInteractionHandler *authorizeinteractionapi.Handler
 
 	// ActivityPub Federation
-	federationHandler := activitypubapi.NewFederationHandler(queries, cfg.Instance.LocalDomain)
+	federationHandler := activitypubapi.NewFederationHandler(queries, cfg.FederationDomain())
 	federationHandler.SetInboxMaxBodyBytes(cfg.Federation.InboxMaxBodyBytes)
 	federationHandler.SetMediaStorage(mediaStorage)
 	if rdb != nil {
@@ -493,11 +509,11 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	} else {
 		logger.Warn("Redis unavailable, inbox replay protection is limited to this instance")
 	}
-	followService := federation.NewFollowService(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher(), nil)
-	followResponseService := federation.NewFollowResponseService(queries, cfg.Instance.LocalDomain)
-	undoService := federation.NewUndoService(queries, cfg.Instance.LocalDomain)
-	createService := federation.NewCreateService(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher())
-	remoteStatusFetcher := federation.NewRemoteStatusFetcher(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher())
+	followService := federation.NewFollowService(queries, cfg.FederationDomain(), federationHandler.ActorFetcher(), nil)
+	followResponseService := federation.NewFollowResponseService(queries, cfg.FederationDomain())
+	undoService := federation.NewUndoService(queries, cfg.FederationDomain())
+	createService := federation.NewCreateService(queries, cfg.FederationDomain(), federationHandler.ActorFetcher())
+	remoteStatusFetcher := federation.NewRemoteStatusFetcher(queries, cfg.FederationDomain(), federationHandler.ActorFetcher())
 	authorizeInteractionHandler = authorizeinteractionapi.NewHandler(queries, cfg, remoteActorResolver, remoteStatusFetcher)
 	authorizeInteractionHandler.RegisterRoutes(mux)
 	createService.SetStatusFetcher(remoteStatusFetcher)
@@ -506,11 +522,11 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	} else {
 		statusesHandler.SetThreadFetcher(remoteStatusFetcher)
 	}
-	announceService := federation.NewAnnounceService(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher(), nil)
-	likeService := federation.NewLikeService(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher())
-	blockService := federation.NewBlockService(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher())
-	updateService := federation.NewUpdateService(queries, cfg.Instance.LocalDomain, federationHandler.ActorFetcher())
-	deleteService := federation.NewDeleteService(queries, cfg.Instance.LocalDomain)
+	announceService := federation.NewAnnounceService(queries, cfg.FederationDomain(), federationHandler.ActorFetcher(), nil)
+	likeService := federation.NewLikeService(queries, cfg.FederationDomain(), federationHandler.ActorFetcher())
+	blockService := federation.NewBlockService(queries, cfg.FederationDomain(), federationHandler.ActorFetcher())
+	updateService := federation.NewUpdateService(queries, cfg.FederationDomain(), federationHandler.ActorFetcher())
+	deleteService := federation.NewDeleteService(queries, cfg.FederationDomain())
 	if pushPublisher != nil {
 		statusesHandler.SetPushPublisher(pushPublisher)
 		createService.SetPushPublisher(pushPublisher)
@@ -534,7 +550,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	compatHandler.RegisterRoutes(mux)
 
 	if workerManager != nil {
-		remoteAccountResolver := federation.NewRemoteActorResolver(queries, cfg.Instance.LocalDomain)
+		remoteAccountResolver := federation.NewRemoteActorResolver(queries, cfg.FederationDomain())
 		registrars := []workers.Registrar{
 			&workers.DeliveryRegistrar{Store: queries, Deliver: deliveryService.DeliverActivity},
 			&workers.RemoteAccountRegistrar{Resolver: remoteAccountResolver},
@@ -675,7 +691,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	// Start server
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
-	logger.Info("Starting Gotodon server", "addr", addr, "domain", cfg.Instance.LocalDomain)
+	logger.Info("Starting Gotodon server", "addr", addr, "domain", cfg.FederationDomain())
 
 	srv := web.NewServer(addr, handler)
 

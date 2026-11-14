@@ -607,7 +607,7 @@ func TestAvatarURLIsAbsolute(t *testing.T) {
 		{name: "remote avatar", cfg: testConfig(), account: db.Account{AvatarRemoteUrl: pgtype.Text{String: "https://remote.example/a.png", Valid: true}}, want: "https://remote.example/a.png"},
 		{name: "no avatar", cfg: testConfig(), account: db.Account{}, want: "https://example.com/avatars/original/missing.png"},
 		{name: "relative remote avatar", cfg: testConfig(), account: db.Account{AvatarRemoteUrl: pgtype.Text{String: "/a.png", Valid: true}}, want: "https://example.com/avatars/original/missing.png"},
-		{name: "no configuration", cfg: nil, account: db.Account{}, want: "https://localhost:3000/avatars/original/missing.png"},
+		{name: "no configuration invents no domain", cfg: nil, account: db.Account{}, want: "https:///avatars/original/missing.png"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

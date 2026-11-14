@@ -312,29 +312,17 @@ func (h *Handler) isAcceptedDomain(domain string) bool {
 }
 
 func (h *Handler) publicDomain() string {
-	if h == nil || h.cfg == nil {
-		return "example.com"
+	if h == nil {
+		return ""
 	}
-	if domain := strings.TrimSpace(h.cfg.Instance.WebDomain); domain != "" {
-		return domain
-	}
-	if domain := strings.TrimSpace(h.cfg.Instance.LocalDomain); domain != "" {
-		return domain
-	}
-	return "example.com"
+	return h.cfg.PublicWebDomain()
 }
 
 func (h *Handler) federationDomain() string {
-	if h == nil || h.cfg == nil {
-		return "example.com"
+	if h == nil {
+		return ""
 	}
-	if domain := strings.TrimSpace(h.cfg.Instance.LocalDomain); domain != "" {
-		return domain
-	}
-	if domain := strings.TrimSpace(h.cfg.Instance.WebDomain); domain != "" {
-		return domain
-	}
-	return "example.com"
+	return h.cfg.FederationDomain()
 }
 
 func (h *Handler) instanceActorUsername() string {

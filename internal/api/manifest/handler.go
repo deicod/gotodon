@@ -18,11 +18,10 @@ import (
 )
 
 const (
-	manifestJSONType              = "application/json"
-	manifestCacheControl          = "public, max-age=180" // 3 minutes
-	defaultManifestTitle          = "Gotodon"
-	defaultManifestDomainFallback = "example.com"
-	settingSiteTitle              = "site_title"
+	manifestJSONType     = "application/json"
+	manifestCacheControl = "public, max-age=180" // 3 minutes
+	defaultManifestTitle = "Gotodon"
+	settingSiteTitle     = "site_title"
 )
 
 var manifestAndroidIconSizes = []int{36, 48, 72, 96, 144, 192, 256, 384, 512}
@@ -55,11 +54,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 func (h *Handler) Show(w http.ResponseWriter, r *http.Request) {
 	title := h.loadSiteTitle(r.Context())
-	domain := manifestPublicDomain(h.cfg)
-	if domain == "" {
-		domain = defaultManifestDomainFallback
-	}
-	baseURL := "https://" + domain
+	baseURL := "https://" + h.cfg.PublicWebDomain()
 
 	icons := make([]map[string]string, 0, len(manifestAndroidIconSizes))
 	for _, size := range manifestAndroidIconSizes {
@@ -153,16 +148,6 @@ func (h *Handler) loadSiteTitle(ctx context.Context) string {
 	}
 
 	return title
-}
-
-func manifestPublicDomain(cfg *config.Config) string {
-	if cfg == nil {
-		return ""
-	}
-	if strings.TrimSpace(cfg.Instance.WebDomain) != "" {
-		return cfg.Instance.WebDomain
-	}
-	return cfg.Instance.LocalDomain
 }
 
 func (h *Handler) ShowHome(w http.ResponseWriter, r *http.Request) {
