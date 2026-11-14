@@ -6,12 +6,14 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/media"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/oauth"
 )
@@ -251,11 +253,12 @@ func (h *BlocksHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
 // CustomEmojisHandler handles custom emojis endpoints
 type CustomEmojisHandler struct {
 	queries db.Querier
+	cfg     *config.Config
 }
 
 // NewCustomEmojisHandler creates a new custom emojis handler
-func NewCustomEmojisHandler(queries db.Querier) *CustomEmojisHandler {
-	return &CustomEmojisHandler{queries: queries}
+func NewCustomEmojisHandler(queries db.Querier, cfg *config.Config) *CustomEmojisHandler {
+	return &CustomEmojisHandler{queries: queries, cfg: cfg}
 }
 
 // CustomEmoji represents a custom emoji
@@ -280,12 +283,14 @@ func (h *CustomEmojisHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	files := media.NewStorage(h.cfg)
 	resp := make([]CustomEmoji, len(emojis))
 	for i, e := range emojis {
+		url := GetEmojiURL(files, e)
 		resp[i] = CustomEmoji{
 			Shortcode:       e.Shortcode,
-			URL:             GetEmojiURL(e),
-			StaticURL:       GetEmojiURL(e),
+			URL:             url,
+			StaticURL:       url,
 			VisibleInPicker: e.VisibleInPicker,
 		}
 	}
@@ -695,11 +700,11 @@ func (h *ConversationsHandler) buildConversation(ctx context.Context, accountID 
 	}, nil
 }
 
-// GetEmojiURL returns the URL for a custom emoji
-func GetEmojiURL(emoji db.CustomEmoji) string {
-	if emoji.ImageRemoteUrl.Valid {
-		return emoji.ImageRemoteUrl.String
+// GetEmojiURL returns the absolute URL of a custom emoji's image: the remote
+// image of an emoji from another server, otherwise the stored image in files.
+func GetEmojiURL(files media.Storage, emoji db.CustomEmoji) string {
+	if emoji.ImageRemoteUrl.Valid && media.IsAbsoluteURL(strings.TrimSpace(emoji.ImageRemoteUrl.String)) {
+		return strings.TrimSpace(emoji.ImageRemoteUrl.String)
 	}
-	// Assuming local storage URL construction
-	return "/files/" + emoji.ImageFileName.String
+	return media.FileURL(files, emoji.ImageFileName.String)
 }

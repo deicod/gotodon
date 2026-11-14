@@ -249,7 +249,14 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		logger.Warn("VAPID keys not configured; Web Push notifications are disabled")
 	}
 
+	// Uploads live in the configured storage path. Every URL to a stored
+	// file is built from this storage, at media.base_url or, by default,
+	// https://<web domain>/files, where gotodon serves the storage root.
+	mediaStorage := media.NewStorage(cfg)
+	logger.Info("Serving uploaded files", "storage_path", mediaStorage.BasePath, "base_url", mediaStorage.BaseURL)
+
 	outgoingService := federation.NewOutgoingService(queries, cfg.Instance.LocalDomain, deliveryEnqueuer)
+	outgoingService.SetMediaStorage(mediaStorage)
 
 	var pubSubHandler http.Handler
 	if streamingHub != nil {
@@ -306,7 +313,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	}
 	filtersHandler.RegisterRoutes(mux)
 
-	mediaStorage := media.NewLocalStorage("./uploads", fmt.Sprintf("https://%s/files", cfg.Instance.LocalDomain))
+	media.NewFileServer(mediaStorage.BasePath).RegisterRoutes(mux)
 	mediaUploader := media.NewUploader(mediaStorage)
 	accountsHandler.SetProfileMediaUploader(mediaUploader)
 	mediaHandler := v1.NewMediaHandler(queries, mediaUploader)
@@ -363,7 +370,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	blocksHandler := v1.NewBlocksHandler(queries, cfg)
 	blocksHandler.RegisterRoutes(mux)
 
-	customEmojisHandler := v1.NewCustomEmojisHandler(queries)
+	customEmojisHandler := v1.NewCustomEmojisHandler(queries, cfg)
 	customEmojisHandler.RegisterRoutes(mux)
 
 	conversationsHandler := v1.NewConversationsHandler(queries, cfg)
@@ -375,7 +382,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	domainBlocksHandler := v1.NewDomainBlocksHandler(queries, cfg)
 	domainBlocksHandler.RegisterRoutes(mux)
 
-	scheduledStatusesHandler := v1.NewScheduledStatusesHandler(queries)
+	scheduledStatusesHandler := v1.NewScheduledStatusesHandler(queries, cfg)
 	scheduledStatusesHandler.RegisterRoutes(mux)
 
 	v1PushHandler := v1.NewPushHandler(queries, cfg)
@@ -480,6 +487,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	// ActivityPub Federation
 	federationHandler := activitypubapi.NewFederationHandler(queries, cfg.Instance.LocalDomain)
 	federationHandler.SetInboxMaxBodyBytes(cfg.Federation.InboxMaxBodyBytes)
+	federationHandler.SetMediaStorage(mediaStorage)
 	if rdb != nil {
 		federationHandler.SetReplayStore(middleware.NewRedisInboxReplayStore(rdb, ""))
 	} else {

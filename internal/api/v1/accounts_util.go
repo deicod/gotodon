@@ -14,6 +14,7 @@ import (
 
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/media"
 )
 
 type accountSerializeOptions struct {
@@ -147,6 +148,7 @@ func serializeAccounts(ctx context.Context, q AccountDataQuerier, cfg *config.Co
 
 	emojisByDomain := make(map[string]map[string]CustomEmoji)
 	if q != nil {
+		files := media.NewStorage(cfg)
 		for domain, shortcodes := range domainShortcodes {
 			if len(shortcodes) == 0 {
 				continue
@@ -167,10 +169,11 @@ func serializeAccounts(ctx context.Context, q AccountDataQuerier, cfg *config.Co
 
 			emojiMap := make(map[string]CustomEmoji, len(rows))
 			for _, emoji := range rows {
+				url := GetEmojiURL(files, emoji)
 				emojiMap[emoji.Shortcode] = CustomEmoji{
 					Shortcode:       emoji.Shortcode,
-					URL:             GetEmojiURL(emoji),
-					StaticURL:       GetEmojiURL(emoji),
+					URL:             url,
+					StaticURL:       url,
 					VisibleInPicker: emoji.VisibleInPicker,
 				}
 			}
@@ -349,22 +352,15 @@ func serializeAccount(cfg *config.Config, dbAcc db.Account, opts accountSerializ
 		note = formatAccountNote(cfg, dbAcc, author, opts.Mentions)
 	}
 
-	avatar := accountImageURL(publicDomain, "", "/avatars/original/missing.png")
-	header := accountImageURL(publicDomain, "", "/headers/original/missing.png")
+	avatar := media.MissingAvatarURL(cfg)
+	header := media.MissingHeaderURL(cfg)
 	if !suspended {
-		avatarRemote := ""
-		if dbAcc.AvatarRemoteUrl.Valid {
-			avatarRemote = strings.TrimSpace(dbAcc.AvatarRemoteUrl.String)
+		files := media.NewStorage(cfg)
+		if image := accountImageURL(files, dbAcc.AvatarRemoteUrl.String, dbAcc.AvatarFileName.String); image != "" {
+			avatar = image
 		}
-		avatar = accountImageURL(publicDomain, avatarRemote, "")
-		if avatar == "" {
-			avatar = accountImageURL(publicDomain, strings.TrimSpace(dbAcc.AvatarFileName.String), "/avatars/original/missing.png")
-		}
-
-		headerRemote := strings.TrimSpace(dbAcc.HeaderRemoteUrl)
-		header = accountImageURL(publicDomain, headerRemote, "")
-		if header == "" {
-			header = accountImageURL(publicDomain, strings.TrimSpace(dbAcc.HeaderFileName.String), "/headers/original/missing.png")
+		if image := accountImageURL(files, dbAcc.HeaderRemoteUrl, dbAcc.HeaderFileName.String); image != "" {
+			header = image
 		}
 	}
 
@@ -603,28 +599,14 @@ func accountFederationDomain(cfg *config.Config, publicDomain string) string {
 	return publicDomain
 }
 
-func accountImageURL(domain, value, fallback string) string {
-	if strings.TrimSpace(value) != "" {
-		value = strings.TrimSpace(value)
-		if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
-			return value
-		}
-		if !strings.HasPrefix(value, "/") {
-			value = "/files/" + value
-		}
-		if domain == "" {
-			return value
-		}
-		return "https://" + domain + value
+// accountImageURL returns the URL of an account's avatar or header: the
+// remote URL of a remote account's image, otherwise the stored file. It is
+// empty for accounts without that image, which show the default instead.
+func accountImageURL(files media.Storage, remoteURL, fileName string) string {
+	if remote := strings.TrimSpace(remoteURL); media.IsAbsoluteURL(remote) {
+		return remote
 	}
-
-	if fallback == "" {
-		return ""
-	}
-	if domain == "" {
-		return fallback
-	}
-	return "https://" + domain + fallback
+	return media.FileURL(files, fileName)
 }
 
 func accountEmojiDomain(dbAcc db.Account) string {

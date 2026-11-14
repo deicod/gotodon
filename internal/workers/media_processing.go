@@ -160,29 +160,30 @@ func (h *MediaProcessingHandler) ProcessTask(ctx context.Context, task *asynq.Ta
 		return fmt.Errorf("mark in progress: %w", err)
 	}
 
-	storagePath := media.MediaStoragePath(attachment.AccountID.Int64, attachment.CreatedAt.Time, attachment.FileFileName.String)
-	if storagePath == "" {
+	// Uploads are dated in UTC; earlier ones may sit under the local date.
+	candidates := media.MediaStoragePaths(attachment.AccountID.Int64, attachment.CreatedAt.Time, attachment.FileFileName.String)
+	if len(candidates) == 0 {
 		return h.markProcessingFailed(ctx, attachment.ID, "storage path missing")
 	}
 
-	data, err := h.storage.Load(ctx, storagePath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			altPath := media.MediaStoragePath(attachment.AccountID.Int64, attachment.CreatedAt.Time.In(time.Local), attachment.FileFileName.String)
-			if altPath != "" && altPath != storagePath {
-				if altData, altErr := h.storage.Load(ctx, altPath); altErr == nil {
-					data = altData
-					storagePath = altPath
-				} else if !errors.Is(altErr, os.ErrNotExist) {
-					return fmt.Errorf("load media file: %w", altErr)
-				}
+	var (
+		data        []byte
+		storagePath string
+	)
+	for _, candidate := range candidates {
+		loaded, err := h.storage.Load(ctx, candidate)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
 			}
-			if data == nil {
-				return h.markProcessingFailed(ctx, attachment.ID, "media file missing")
-			}
-		} else {
 			return fmt.Errorf("load media file: %w", err)
 		}
+		data = loaded
+		storagePath = candidate
+		break
+	}
+	if storagePath == "" {
+		return h.markProcessingFailed(ctx, attachment.ID, "media file missing")
 	}
 
 	if contentType == "" {
@@ -212,7 +213,9 @@ func (h *MediaProcessingHandler) ProcessTask(ctx context.Context, task *asynq.Ta
 		meta.Small.Aspect = meta.Original.Aspect
 	}
 
-	thumbPath := media.GenerateThumbnailPath(storagePath)
+	// The thumbnail goes under the canonical path, where URLs look for it,
+	// even when the original sits under a legacy one.
+	thumbPath := media.GenerateThumbnailPath(candidates[0])
 	if err := h.storage.Save(ctx, thumbPath, thumb.Data); err != nil {
 		return fmt.Errorf("save thumbnail: %w", err)
 	}

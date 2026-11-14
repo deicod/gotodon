@@ -14,6 +14,7 @@ import (
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/media"
 	"github.com/deicod/gotodon/internal/streaming"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/oauth"
@@ -374,6 +375,7 @@ func buildAnnouncements(ctx context.Context, q announcementQueries, cfg *config.
 		}
 	}
 
+	files := media.NewStorage(cfg)
 	result := make([]Announcement, len(anns))
 	for i, ann := range anns {
 		var startsAt *time.Time
@@ -402,10 +404,10 @@ func buildAnnouncements(ctx context.Context, q announcementQueries, cfg *config.
 			UpdatedAt:   ann.UpdatedAt.Time,
 			StartsAt:    startsAt,
 			EndsAt:      endsAt,
-			Reactions:   buildAnnouncementReactions(reactionRows[ann.ID], accountID, reactionEmojiByID),
+			Reactions:   buildAnnouncementReactions(files, reactionRows[ann.ID], accountID, reactionEmojiByID),
 			Statuses:    buildAnnouncementStatuses(cfg, parsedAnn.statusIDs, statusesByID, statusAccounts),
 			Tags:        buildAnnouncementTags(parsedAnn.tags, publicDomain),
-			Emojis:      buildAnnouncementEmojis(parsedAnn.shortcodes, emojiByShortcode),
+			Emojis:      buildAnnouncementEmojis(files, parsedAnn.shortcodes, emojiByShortcode),
 			Mentions:    buildAnnouncementMentions(parsedAnn.mentions, mentionAccounts),
 		}
 	}
@@ -522,7 +524,7 @@ func buildAnnouncementTags(tags []string, publicDomain string) []Tag {
 	return out
 }
 
-func buildAnnouncementEmojis(shortcodes []string, emojiByShortcode map[string]db.CustomEmoji) []CustomEmoji {
+func buildAnnouncementEmojis(files media.Storage, shortcodes []string, emojiByShortcode map[string]db.CustomEmoji) []CustomEmoji {
 	if len(shortcodes) == 0 || len(emojiByShortcode) == 0 {
 		return []CustomEmoji{}
 	}
@@ -533,10 +535,11 @@ func buildAnnouncementEmojis(shortcodes []string, emojiByShortcode map[string]db
 		if !ok {
 			continue
 		}
+		url := GetEmojiURL(files, emoji)
 		out = append(out, CustomEmoji{
 			Shortcode:       emoji.Shortcode,
-			URL:             GetEmojiURL(emoji),
-			StaticURL:       GetEmojiURL(emoji),
+			URL:             url,
+			StaticURL:       url,
 			VisibleInPicker: emoji.VisibleInPicker,
 		})
 	}
@@ -584,7 +587,7 @@ func announcementStatusURL(cfg *config.Config, status db.Status, account db.Acco
 	return ""
 }
 
-func buildAnnouncementReactions(reactions []db.AnnouncementReaction, accountID int64, emojiByID map[int64]db.CustomEmoji) []AnnouncementReaction {
+func buildAnnouncementReactions(files media.Storage, reactions []db.AnnouncementReaction, accountID int64, emojiByID map[int64]db.CustomEmoji) []AnnouncementReaction {
 	if len(reactions) == 0 {
 		return []AnnouncementReaction{}
 	}
@@ -628,8 +631,8 @@ func buildAnnouncementReactions(reactions []db.AnnouncementReaction, accountID i
 		}
 		if state.customEmojiID != nil {
 			if emoji, ok := emojiByID[*state.customEmojiID]; ok {
-				apiReaction.URL = GetEmojiURL(emoji)
-				apiReaction.StaticURL = GetEmojiURL(emoji)
+				apiReaction.URL = GetEmojiURL(files, emoji)
+				apiReaction.StaticURL = apiReaction.URL
 			}
 		}
 		out = append(out, apiReaction)
@@ -677,7 +680,7 @@ func (h *AnnouncementsHandler) publishAnnouncementReaction(ctx context.Context, 
 
 	if emojiID != nil {
 		if emojis, err := h.queries.ListCustomEmojisByIDs(ctx, []int64{*emojiID}); err == nil && len(emojis) > 0 {
-			url := GetEmojiURL(emojis[0])
+			url := GetEmojiURL(media.NewStorage(h.cfg), emojis[0])
 			payload["url"] = url
 			payload["static_url"] = url
 		}

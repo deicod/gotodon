@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -106,9 +108,11 @@ func (h *MediaHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Upload and process
+	// Upload and process. The file's storage path is dated by createdAt,
+	// which the record stores, so URLs derived from the record find it.
+	createdAt := time.Now().UTC().Truncate(time.Microsecond)
 	skipProcessing := h.processingEnqueuer != nil
-	result, err := h.uploader.UploadWithOptions(r.Context(), accountID, header.Filename, data, media.UploadOptions{SkipProcessing: skipProcessing})
+	result, err := h.uploader.UploadWithOptions(r.Context(), accountID, header.Filename, data, media.UploadOptions{SkipProcessing: skipProcessing, At: createdAt})
 	if err != nil {
 		switch err {
 		case media.ErrUnsupportedType:
@@ -155,6 +159,7 @@ func (h *MediaHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Processing:      pgtype.Int4{Int32: processingState, Valid: true},
 		Shortcode:       pgtype.Text{String: shortcode, Valid: true},
 		FileMeta:        fileMeta,
+		CreatedAt:       pgtype.Timestamptz{Time: createdAt, Valid: true},
 	})
 	if err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Failed to save media record")
@@ -172,12 +177,7 @@ func (h *MediaHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	resp := dbMediaToAPI(dbMedia)
-	if resp.URL == "" {
-		resp.URL = result.URL
-		resp.PreviewURL = result.URL
-	}
-	web.JSON(w, http.StatusOK, resp)
+	web.JSON(w, http.StatusOK, dbMediaToAPI(h.uploader.Storage(), dbMedia))
 }
 
 // Get handles GET /api/v1/media/:id
@@ -195,7 +195,7 @@ func (h *MediaHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	web.JSON(w, http.StatusOK, dbMediaToAPI(dbMedia))
+	web.JSON(w, http.StatusOK, dbMediaToAPI(h.uploader.Storage(), dbMedia))
 }
 
 // Update handles PUT /api/v1/media/:id
@@ -256,7 +256,7 @@ func (h *MediaHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	web.JSON(w, http.StatusOK, dbMediaToAPI(updated))
+	web.JSON(w, http.StatusOK, dbMediaToAPI(h.uploader.Storage(), updated))
 }
 
 // Delete handles DELETE /api/v1/media/:id
@@ -352,21 +352,76 @@ func generateShortcode() string {
 	return strconv.FormatInt(time.Now().UnixNano(), 36)
 }
 
-func dbMediaToAPI(m db.MediaAttachment) MediaAttachment {
+func dbMediaToAPI(files media.Storage, m db.MediaAttachment) MediaAttachment {
 	var meta *media.FileMeta
 	if len(m.FileMeta) > 0 {
 		_ = json.Unmarshal(m.FileMeta, &meta)
 	}
 
+	fileURL, previewURL := mediaAttachmentURLs(files, m)
+	var remoteURL *string
+	if remote := strings.TrimSpace(m.RemoteUrl); remote != "" {
+		remoteURL = &remote
+	}
+
 	return MediaAttachment{
 		ID:          strconv.FormatInt(m.ID, 10),
 		Type:        mapMediaType(m.Type),
-		URL:         m.RemoteUrl, // If remote
-		PreviewURL:  m.RemoteUrl,
+		URL:         fileURL,
+		PreviewURL:  previewURL,
+		RemoteURL:   remoteURL,
 		Description: &m.Description.String,
 		Meta:        meta,
 		Blurhash:    &m.Blurhash.String,
 	}
+}
+
+// serializeMediaAttach converts an attachment for statuses and scheduled
+// statuses.
+func serializeMediaAttach(files media.Storage, m db.MediaAttachment) MediaAttach {
+	mediaType := "image"
+	if m.Type == MediaTypeVideo {
+		mediaType = "video"
+	}
+
+	var remoteURL *string
+	if remote := strings.TrimSpace(m.RemoteUrl); remote != "" {
+		remoteURL = &remote
+	}
+
+	var description *string
+	if m.Description.Valid {
+		s := m.Description.String
+		description = &s
+	}
+
+	var blurhash *string
+	if m.Blurhash.Valid {
+		s := m.Blurhash.String
+		blurhash = &s
+	}
+
+	fileURL, previewURL := mediaAttachmentURLs(files, m)
+	return MediaAttach{
+		ID:          strconv.FormatInt(m.ID, 10),
+		Type:        mediaType,
+		URL:         fileURL,
+		PreviewURL:  previewURL,
+		RemoteURL:   remoteURL,
+		Description: description,
+		Blurhash:    blurhash,
+	}
+}
+
+// mediaAttachmentURLs returns an attachment's url and preview_url.
+// preview_url is the thumbnail when there is one, otherwise url.
+func mediaAttachmentURLs(files media.Storage, m db.MediaAttachment) (string, string) {
+	fileURL := media.AttachmentFileURL(files, m)
+	previewURL := media.AttachmentThumbnailURL(files, m)
+	if previewURL == "" {
+		previewURL = fileURL
+	}
+	return fileURL, previewURL
 }
 
 func mapMediaType(t int32) string {
@@ -389,30 +444,16 @@ func mediaAttachmentStoragePaths(attachment db.MediaAttachment) []string {
 		return nil
 	}
 
-	accountID := attachment.AccountID.Int64
-	createdAt := attachment.CreatedAt.Time
 	paths := []string{}
-
-	addPath := func(filename pgtype.Text, ts time.Time) {
+	for _, filename := range []pgtype.Text{attachment.FileFileName, attachment.ThumbnailFileName} {
 		if !filename.Valid || filename.String == "" {
-			return
+			continue
 		}
-		path := media.MediaStoragePath(accountID, ts, filename.String)
-		if path == "" {
-			return
-		}
-		for _, existing := range paths {
-			if existing == path {
-				return
+		for _, path := range media.MediaStoragePaths(attachment.AccountID.Int64, attachment.CreatedAt.Time, filename.String) {
+			if !slices.Contains(paths, path) {
+				paths = append(paths, path)
 			}
 		}
-		paths = append(paths, path)
 	}
-
-	addPath(attachment.FileFileName, createdAt)
-	addPath(attachment.FileFileName, createdAt.In(time.Local))
-	addPath(attachment.ThumbnailFileName, createdAt)
-	addPath(attachment.ThumbnailFileName, createdAt.In(time.Local))
-
 	return paths
 }

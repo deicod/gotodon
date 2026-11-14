@@ -212,28 +212,38 @@ func ValidateImageDimensions(width, height int) error {
 	return nil
 }
 
-// GetExtensionFromMIME returns the file extension for a MIME type
+// mediaExtensions maps the content types uploads hold to the extension their
+// stored files get, independent of the system's MIME tables.
+var mediaExtensions = map[string]string{
+	"image/jpeg":      ".jpg",
+	"image/png":       ".png",
+	"image/gif":       ".gif",
+	"image/webp":      ".webp",
+	"video/mp4":       ".mp4",
+	"video/webm":      ".webm",
+	"video/quicktime": ".mov",
+	"video/ogg":       ".ogv",
+	"audio/mpeg":      ".mp3",
+	"audio/ogg":       ".ogg",
+	"audio/flac":      ".flac",
+	"audio/wav":       ".wav",
+	"audio/wave":      ".wav",
+	"audio/x-wav":     ".wav",
+	"audio/mp4":       ".m4a",
+	"audio/aac":       ".aac",
+	"application/ogg": ".ogg",
+}
+
+// GetExtensionFromMIME returns the file extension for a MIME type: the fixed
+// one for media types, otherwise the first the system knows, otherwise ".bin".
 func GetExtensionFromMIME(contentType string) string {
-	extensions, err := mime.ExtensionsByType(contentType)
+	normalized := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	if ext, ok := mediaExtensions[normalized]; ok {
+		return ext
+	}
+	extensions, err := mime.ExtensionsByType(normalized)
 	if err != nil || len(extensions) == 0 {
-		switch contentType {
-		case "image/jpeg":
-			return ".jpg"
-		case "image/png":
-			return ".png"
-		case "image/gif":
-			return ".gif"
-		case "image/webp":
-			return ".webp"
-		case "video/mp4":
-			return ".mp4"
-		case "video/webm":
-			return ".webm"
-		case "audio/mpeg":
-			return ".mp3"
-		default:
-			return ".bin"
-		}
+		return ".bin"
 	}
 	return extensions[0]
 }

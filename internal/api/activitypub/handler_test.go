@@ -24,6 +24,7 @@ import (
 
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/media"
 	"github.com/deicod/gotodon/pkg/activitypub"
 )
 
@@ -2296,5 +2297,41 @@ func TestFederationHandler_ApAliasRoutes(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestBuildAttachmentsURLs(t *testing.T) {
+	h := NewFederationHandler(nil, "social.example")
+	createdAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	attachments := []db.MediaAttachment{
+		{
+			AccountID:         pgtype.Int8{Int64: 7, Valid: true},
+			CreatedAt:         pgtype.Timestamptz{Time: createdAt, Valid: true},
+			FileFileName:      pgtype.Text{String: "a.png", Valid: true},
+			ThumbnailFileName: pgtype.Text{String: "a_thumb.png", Valid: true},
+		},
+		{RemoteUrl: "https://remote.example/v.mp4"},
+		{RemoteUrl: "relative.png"},
+	}
+
+	items := buildAttachments(h.files, attachments)
+	if len(items) != 2 {
+		t.Fatalf("attachments = %d, want 2: %#v", len(items), items)
+	}
+	local := items[0].(map[string]any)
+	if local["url"] != "https://social.example/files/media_attachments/files/7/7/2026/01/02/a.png" || local["previewUrl"] != "https://social.example/files/media_attachments/files/7/7/2026/01/02/a_thumb.png" {
+		t.Errorf("default local url = %v, previewUrl = %v", local["url"], local["previewUrl"])
+	}
+	if remote := items[1].(map[string]any); remote["url"] != "https://remote.example/v.mp4" {
+		t.Errorf("remote url = %v", remote["url"])
+	}
+	if _, ok := items[1].(map[string]any)["previewUrl"]; ok {
+		t.Errorf("remote attachment without a thumbnail has a previewUrl")
+	}
+
+	h.SetMediaStorage(media.NewLocalStorage("", "https://cdn.example.net/media"))
+	items = buildAttachments(h.files, attachments[:1])
+	if got := items[0].(map[string]any)["url"]; got != "https://cdn.example.net/media/media_attachments/files/7/7/2026/01/02/a.png" {
+		t.Errorf("configured url = %v", got)
 	}
 }

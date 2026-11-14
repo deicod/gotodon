@@ -6,6 +6,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/media"
 )
 
 func TestPreviewCardType(t *testing.T) {
@@ -29,27 +30,33 @@ func TestPreviewCardType(t *testing.T) {
 }
 
 func TestPreviewCardImageURL(t *testing.T) {
-	card := db.PreviewCard{}
-	if got := previewCardImageURL(card); got != nil {
-		t.Fatalf("expected nil image URL, got %q", *got)
+	files := media.NewLocalStorage("", "https://social.example/files")
+	tests := []struct {
+		name  string
+		image pgtype.Text
+		want  *string
+	}{
+		{name: "no image", image: pgtype.Text{}, want: nil},
+		{name: "blank image", image: pgtype.Text{String: "  ", Valid: true}, want: nil},
+		{name: "remote image", image: pgtype.Text{String: "https://example.com/image.png", Valid: true}, want: ptr("https://example.com/image.png")},
+		{name: "stored image", image: pgtype.Text{String: "preview_cards/images/image.png", Valid: true}, want: ptr("https://social.example/files/preview_cards/images/image.png")},
 	}
-
-	card.ImageFileName = pgtype.Text{String: "https://example.com/image.png", Valid: true}
-	if got := previewCardImageURL(card); got == nil || *got != "https://example.com/image.png" {
-		if got == nil {
-			t.Fatalf("expected image URL, got nil")
-		}
-		t.Fatalf("image URL = %q, want %q", *got, "https://example.com/image.png")
-	}
-
-	card.ImageFileName = pgtype.Text{String: "image.png", Valid: true}
-	if got := previewCardImageURL(card); got == nil || *got != "/files/image.png" {
-		if got == nil {
-			t.Fatalf("expected image URL, got nil")
-		}
-		t.Fatalf("image URL = %q, want %q", *got, "/files/image.png")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := previewCardImageURL(files, db.PreviewCard{ImageFileName: tt.image})
+			switch {
+			case tt.want == nil && got != nil:
+				t.Fatalf("image URL = %q, want nil", *got)
+			case tt.want != nil && got == nil:
+				t.Fatalf("image URL = nil, want %q", *tt.want)
+			case tt.want != nil && *got != *tt.want:
+				t.Fatalf("image URL = %q, want %q", *got, *tt.want)
+			}
+		})
 	}
 }
+
+func ptr(value string) *string { return &value }
 
 func TestPreviewCardDomain(t *testing.T) {
 	if got := previewCardDomain("https://example.com/path"); got != "example.com" {

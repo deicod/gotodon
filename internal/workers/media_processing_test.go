@@ -203,3 +203,54 @@ func TestMediaProcessingHandlerSkipsRemote(t *testing.T) {
 		t.Fatalf("processing = %#v, want complete", last.Processing)
 	}
 }
+
+// TestMediaProcessingHandlerFindsLegacyLocalPath processes an upload stored
+// under its local-time date, as uploads were before paths were dated in UTC,
+// and puts the thumbnail under the canonical path that URLs point to.
+func TestMediaProcessingHandlerFindsLegacyLocalPath(t *testing.T) {
+	previous := time.Local
+	time.Local = time.FixedZone("UTC+9", 9*60*60)
+	t.Cleanup(func() { time.Local = previous })
+
+	// 20:00 UTC on the 2nd is already the 3rd in UTC+9.
+	createdAt := time.Date(2024, 1, 2, 20, 0, 0, 0, time.UTC)
+	attachment := db.MediaAttachment{
+		ID:              12,
+		AccountID:       pgtype.Int8{Int64: 42, Valid: true},
+		CreatedAt:       pgtype.Timestamptz{Time: createdAt, Valid: true},
+		FileFileName:    pgtype.Text{String: "image.png", Valid: true},
+		FileContentType: pgtype.Text{String: "image/png", Valid: true},
+	}
+	paths := media.MediaStoragePaths(42, createdAt, "image.png")
+	if len(paths) != 2 {
+		t.Fatalf("MediaStoragePaths = %v, want canonical and legacy paths", paths)
+	}
+	canonical, legacy := paths[0], paths[1]
+
+	store := &stubMediaProcessingStore{attachment: attachment}
+	storage := &memStorage{}
+	if err := storage.Save(context.Background(), legacy, createTestImage(40, 30)); err != nil {
+		t.Fatalf("Save error = %v", err)
+	}
+
+	handler := &MediaProcessingHandler{store: store, storage: storage}
+	task, err := NewMediaProcessingTask(attachment.ID)
+	if err != nil {
+		t.Fatalf("NewMediaProcessingTask error = %v", err)
+	}
+	if err := handler.ProcessTask(context.Background(), task); err != nil {
+		t.Fatalf("ProcessTask error = %v", err)
+	}
+
+	last := store.updates[len(store.updates)-1]
+	if !last.Processing.Valid || last.Processing.Int32 != media.ProcessingComplete {
+		t.Fatalf("processing = %#v, want complete", last.Processing)
+	}
+	thumbPath := media.GenerateThumbnailPath(canonical)
+	if exists, _ := storage.Exists(context.Background(), thumbPath); !exists {
+		t.Fatalf("thumbnail not saved at the canonical %s", thumbPath)
+	}
+	if last.ThumbnailFileName.String != "image_thumb.png" {
+		t.Fatalf("ThumbnailFileName = %q, want image_thumb.png", last.ThumbnailFileName.String)
+	}
+}

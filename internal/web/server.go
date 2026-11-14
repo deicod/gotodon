@@ -8,7 +8,8 @@ import (
 // Connection limits applied by NewServer. Ordinary API requests are small and
 // answered quickly, so the whole-request budgets stay tight. Handlers that
 // legitimately need longer lift them for their own request: media uploads
-// through ExtendUploadDeadlines, streaming responses through
+// through ExtendUploadDeadlines, file downloads through
+// ExtendDownloadDeadline, streaming responses through
 // http.ResponseController (WebSocket upgrades drop them when hijacking).
 const (
 	// serverReadHeaderTimeout bounds how long a client may take to send the
@@ -29,6 +30,11 @@ const (
 	// uploadTimeout replaces the read and write budgets of an authenticated
 	// upload: a maximum-size video (~99 MB) still arrives at ~1 Mbit/s.
 	uploadTimeout = 15 * time.Minute
+	// downloadMinRate is the slowest transfer, in bytes per second, a file
+	// download is given time for: 1 Mbit/s.
+	downloadMinRate = 128 << 10
+	// downloadTimeout caps the write budget of a file download.
+	downloadTimeout = 15 * time.Minute
 )
 
 // NewServer returns an http.Server for addr with defensive connection limits,
@@ -55,4 +61,27 @@ func ExtendUploadDeadlines(w http.ResponseWriter) {
 	rc := http.NewResponseController(w)
 	_ = rc.SetReadDeadline(deadline)
 	_ = rc.SetWriteDeadline(deadline)
+}
+
+// ExtendDownloadDeadline gives a response of size bytes the time to send them
+// at downloadMinRate on top of the ordinary write timeout, capped at
+// downloadTimeout. Responses small enough for the ordinary write timeout keep
+// it. Writers without deadlines, such as test recorders, are left unchanged.
+func ExtendDownloadDeadline(w http.ResponseWriter, size int64) {
+	budget := downloadBudget(size)
+	if budget <= serverWriteTimeout {
+		return
+	}
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(budget))
+}
+
+func downloadBudget(size int64) time.Duration {
+	if size <= 0 {
+		return serverWriteTimeout
+	}
+	transfer := time.Duration(size/downloadMinRate) * time.Second
+	if transfer >= downloadTimeout-serverWriteTimeout {
+		return downloadTimeout
+	}
+	return serverWriteTimeout + transfer
 }

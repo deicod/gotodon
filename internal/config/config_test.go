@@ -135,3 +135,57 @@ func TestLoadFederationInboxMaxBodyBytes(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadMedia(t *testing.T) {
+	tests := []struct {
+		name        string
+		storagePath string
+		baseURL     string
+		wantPath    string
+		wantBaseURL string
+		wantErr     bool
+	}{
+		{name: "defaults", wantPath: DefaultMediaStoragePath},
+		{name: "storage path", storagePath: "/var/lib/gotodon/uploads", wantPath: "/var/lib/gotodon/uploads"},
+		{name: "blank storage path", storagePath: "   ", wantErr: true},
+		{name: "cdn", baseURL: "https://cdn.example.com/files/", wantPath: DefaultMediaStoragePath, wantBaseURL: "https://cdn.example.com/files"},
+		{name: "object storage alias", baseURL: " https://files.example.com ", wantPath: DefaultMediaStoragePath, wantBaseURL: "https://files.example.com"},
+		{name: "http for development", baseURL: "http://localhost:3000/files", wantPath: DefaultMediaStoragePath, wantBaseURL: "http://localhost:3000/files"},
+		{name: "relative", baseURL: "/files", wantErr: true},
+		{name: "no scheme", baseURL: "cdn.example.com/files", wantErr: true},
+		{name: "other scheme", baseURL: "ftp://cdn.example.com/files", wantErr: true},
+		{name: "no host", baseURL: "https:///files", wantErr: true},
+		{name: "credentials", baseURL: "https://user:pass@cdn.example.com", wantErr: true},
+		{name: "query", baseURL: "https://cdn.example.com/files?v=1", wantErr: true},
+		{name: "empty query", baseURL: "https://cdn.example.com/files?", wantErr: true},
+		{name: "fragment", baseURL: "https://cdn.example.com/files#top", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.storagePath != "" {
+				t.Setenv("GOTODON_MEDIA_STORAGE_PATH", tt.storagePath)
+			}
+			if tt.baseURL != "" {
+				t.Setenv("GOTODON_MEDIA_BASE_URL", tt.baseURL)
+			}
+
+			cfg, err := Load()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Load() error = nil, want an error for storage_path %q, base_url %q", tt.storagePath, tt.baseURL)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.Media.StoragePath != tt.wantPath {
+				t.Errorf("Media.StoragePath = %q, want %q", cfg.Media.StoragePath, tt.wantPath)
+			}
+			if cfg.Media.BaseURL != tt.wantBaseURL {
+				t.Errorf("Media.BaseURL = %q, want %q", cfg.Media.BaseURL, tt.wantBaseURL)
+			}
+		})
+	}
+}

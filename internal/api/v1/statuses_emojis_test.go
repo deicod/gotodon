@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/media"
 )
 
 type statusEmojiStub struct {
@@ -95,7 +96,7 @@ func TestBuildStatusEmojis(t *testing.T) {
 		20: {ID: "20", Username: "bob", Acct: "bob@remote.test"},
 	}
 
-	emojisByStatus := buildStatusEmojis(context.Background(), queries, statuses, accounts)
+	emojisByStatus := buildStatusEmojis(context.Background(), queries, media.NewLocalStorage("", "https://local.test/files"), statuses, accounts)
 
 	localEmojis := emojisByStatus[1]
 	if len(localEmojis) != 2 {
@@ -128,7 +129,7 @@ func TestBuildStatusEmojis(t *testing.T) {
 
 func TestBuildStatusEmojis_Optimization(t *testing.T) {
 	// Case 1: No statuses
-	res := buildStatusEmojis(context.Background(), nil, nil, nil)
+	res := buildStatusEmojis(context.Background(), nil, nil, nil, nil)
 	if res != nil {
 		t.Errorf("Expected nil map for no statuses, got non-nil")
 	}
@@ -143,7 +144,7 @@ func TestBuildStatusEmojis_Optimization(t *testing.T) {
 		emojisByDomain: map[string]map[string]db.CustomEmoji{},
 	}
 
-	res = buildStatusEmojis(context.Background(), q, statuses, nil)
+	res = buildStatusEmojis(context.Background(), q, nil, statuses, nil)
 
 	if res != nil {
 		t.Errorf("Expected nil map when no emojis found, got non-nil map of size %d", len(res))

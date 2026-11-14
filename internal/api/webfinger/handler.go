@@ -13,6 +13,7 @@ import (
 	activitypubapi "github.com/deicod/gotodon/internal/api/activitypub"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/media"
 )
 
 const (
@@ -287,9 +288,9 @@ func (h *Handler) avatarLink(account db.Account) *link {
 		return nil
 	}
 
-	avatarURL := imageURL(h.publicDomain(), strings.TrimSpace(account.AvatarRemoteUrl.String), "")
-	if avatarURL == "" {
-		avatarURL = imageURL(h.publicDomain(), strings.TrimSpace(account.AvatarFileName.String), "")
+	avatarURL := strings.TrimSpace(account.AvatarRemoteUrl.String)
+	if !media.IsAbsoluteURL(avatarURL) {
+		avatarURL = media.FileURL(media.NewStorage(h.cfg), account.AvatarFileName.String)
 	}
 	if avatarURL == "" {
 		return nil
@@ -300,30 +301,6 @@ func (h *Handler) avatarLink(account db.Account) *link {
 		Type: contentType,
 		Href: avatarURL,
 	}
-}
-
-func imageURL(domain, value, fallback string) string {
-	if strings.TrimSpace(value) != "" {
-		value = strings.TrimSpace(value)
-		if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
-			return value
-		}
-		if !strings.HasPrefix(value, "/") {
-			value = "/files/" + value
-		}
-		if domain == "" {
-			return value
-		}
-		return "https://" + domain + value
-	}
-
-	if fallback == "" {
-		return ""
-	}
-	if domain == "" {
-		return fallback
-	}
-	return "https://" + domain + fallback
 }
 
 func (h *Handler) isAcceptedDomain(domain string) bool {

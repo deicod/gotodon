@@ -8,6 +8,7 @@ import (
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/media"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/oauth"
 )
@@ -77,7 +78,7 @@ func (h *EndorsementsHandler) List(w http.ResponseWriter, r *http.Request) {
 			resp = append(resp, apiAcc)
 			continue
 		}
-		resp = append(resp, accountFromPinRow(pin))
+		resp = append(resp, accountFromPinRow(h.cfg, pin))
 	}
 
 	web.JSON(w, http.StatusOK, resp)
@@ -184,7 +185,16 @@ func boolPtr(b bool) *bool {
 	return &b
 }
 
-func accountFromPinRow(pin db.ListAccountPinsRow) Account {
+func accountFromPinRow(cfg *config.Config, pin db.ListAccountPinsRow) Account {
+	files := media.NewStorage(cfg)
+	avatar := accountImageURL(files, pin.AvatarRemoteUrl.String, pin.AvatarFileName.String)
+	if avatar == "" {
+		avatar = media.MissingAvatarURL(cfg)
+	}
+	header := accountImageURL(files, pin.HeaderRemoteUrl, pin.HeaderFileName.String)
+	if header == "" {
+		header = media.MissingHeaderURL(cfg)
+	}
 	acc := Account{
 		ID:           strconv.FormatInt(pin.TargetAccountID, 10),
 		Username:     pin.Username,
@@ -193,10 +203,10 @@ func accountFromPinRow(pin db.ListAccountPinsRow) Account {
 		Note:         pin.Note,
 		URL:          pin.Url.String,
 		URI:          pin.Uri,
-		Avatar:       pin.AvatarRemoteUrl.String,
-		AvatarStatic: pin.AvatarRemoteUrl.String,
-		Header:       pin.HeaderRemoteUrl,
-		HeaderStatic: pin.HeaderRemoteUrl,
+		Avatar:       avatar,
+		AvatarStatic: avatar,
+		Header:       header,
+		HeaderStatic: header,
 		Locked:       false,
 		Emojis:       []CustomEmoji{},
 		Fields:       []Field{},
@@ -206,14 +216,6 @@ func accountFromPinRow(pin db.ListAccountPinsRow) Account {
 	}
 	if pin.Domain.Valid && pin.Domain.String != "" {
 		acc.Acct = pin.Username + "@" + pin.Domain.String
-	}
-	if pin.AvatarFileName.Valid {
-		acc.Avatar = "/files/" + pin.AvatarFileName.String
-		acc.AvatarStatic = "/files/" + pin.AvatarFileName.String
-	}
-	if pin.HeaderFileName.Valid {
-		acc.Header = "/files/" + pin.HeaderFileName.String
-		acc.HeaderStatic = "/files/" + pin.HeaderFileName.String
 	}
 	return acc
 }

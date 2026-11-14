@@ -141,23 +141,28 @@ func TestValidateImageDimensions(t *testing.T) {
 }
 
 func TestGetExtensionFromMIME(t *testing.T) {
-	// Test that extensions are returned (not specific values since they're system-dependent)
 	tests := []struct {
-		mime    string
-		wantExt bool
+		mime string
+		want string
 	}{
-		{"image/jpeg", true},
-		{"image/png", true},
-		{"image/gif", true},
-		{"image/webp", true},
-		{"video/mp4", true},
-		{"audio/mpeg", true},
+		{"image/jpeg", ".jpg"},
+		{"image/png", ".png"},
+		{"image/gif", ".gif"},
+		{"image/webp", ".webp"},
+		{"video/mp4", ".mp4"},
+		{"video/webm", ".webm"},
+		{"video/quicktime", ".mov"},
+		{"audio/mpeg", ".mp3"},
+		{"audio/wave", ".wav"},
+		{"application/ogg", ".ogg"},
+		{"Image/JPEG; charset=binary", ".jpg"},
+		{"application/x-gotodon-unknown", ".bin"},
+		{"", ".bin"},
 	}
 
 	for _, tt := range tests {
-		got := GetExtensionFromMIME(tt.mime)
-		if tt.wantExt && (got == "" || got[0] != '.') {
-			t.Errorf("GetExtensionFromMIME(%q) = %q, want a valid extension", tt.mime, got)
+		if got := GetExtensionFromMIME(tt.mime); got != tt.want {
+			t.Errorf("GetExtensionFromMIME(%q) = %q, want %q", tt.mime, got, tt.want)
 		}
 	}
 }

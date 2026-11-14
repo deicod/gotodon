@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/media"
 	"github.com/deicod/gotodon/pkg/activitypub"
 )
 
@@ -408,4 +409,59 @@ func remoteAccount(id int64, domain, username, inbox, sharedInbox string) db.Acc
 		SharedInboxUrl: sharedInbox,
 	}
 	return account
+}
+
+func TestBuildAttachmentsURLs(t *testing.T) {
+	files := media.NewLocalStorage(t.TempDir(), "https://cdn.example.net/media")
+	createdAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	attachments := []db.MediaAttachment{
+		{
+			Type:              0,
+			AccountID:         pgtype.Int8{Int64: 7, Valid: true},
+			CreatedAt:         pgtype.Timestamptz{Time: createdAt, Valid: true},
+			FileFileName:      pgtype.Text{String: "a.png", Valid: true},
+			FileContentType:   pgtype.Text{String: "image/png", Valid: true},
+			ThumbnailFileName: pgtype.Text{String: "a_thumb.png", Valid: true},
+		},
+		{
+			Type:               2,
+			RemoteUrl:          "https://remote.example/v.mp4",
+			ThumbnailRemoteUrl: pgtype.Text{String: "https://remote.example/v.jpg", Valid: true},
+		},
+		{Type: 0, RemoteUrl: "/relative.png"},
+		{Type: 0, AccountID: pgtype.Int8{Int64: 7, Valid: true}},
+	}
+
+	items := buildAttachments(files, attachments)
+	if len(items) != 2 {
+		t.Fatalf("attachments = %d, want 2 (unresolvable ones dropped): %#v", len(items), items)
+	}
+	local := items[0].(map[string]any)
+	if local["url"] != "https://cdn.example.net/media/media_attachments/files/7/7/2026/01/02/a.png" {
+		t.Errorf("local url = %v", local["url"])
+	}
+	if local["previewUrl"] != "https://cdn.example.net/media/media_attachments/files/7/7/2026/01/02/a_thumb.png" {
+		t.Errorf("local previewUrl = %v", local["previewUrl"])
+	}
+	remote := items[1].(map[string]any)
+	if remote["url"] != "https://remote.example/v.mp4" || remote["previewUrl"] != "https://remote.example/v.jpg" {
+		t.Errorf("remote url = %v, previewUrl = %v", remote["url"], remote["previewUrl"])
+	}
+}
+
+func TestOutgoingServiceMediaStorage(t *testing.T) {
+	svc := NewOutgoingService(nil, "social.example", nil)
+	attachment := db.MediaAttachment{
+		AccountID:    pgtype.Int8{Int64: 7, Valid: true},
+		CreatedAt:    pgtype.Timestamptz{Time: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), Valid: true},
+		FileFileName: pgtype.Text{String: "a.png", Valid: true},
+	}
+	if got := buildAttachments(svc.files, []db.MediaAttachment{attachment})[0].(map[string]any)["url"]; got != "https://social.example/files/media_attachments/files/7/7/2026/01/02/a.png" {
+		t.Fatalf("default url = %v", got)
+	}
+	svc.SetMediaStorage(media.NewLocalStorage("", "https://cdn.example.net/media"))
+	svc.SetMediaStorage(nil)
+	if got := buildAttachments(svc.files, []db.MediaAttachment{attachment})[0].(map[string]any)["url"]; got != "https://cdn.example.net/media/media_attachments/files/7/7/2026/01/02/a.png" {
+		t.Fatalf("configured url = %v", got)
+	}
 }

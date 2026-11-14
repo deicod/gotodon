@@ -10,6 +10,7 @@ import (
 
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/media"
 )
 
 func TestTrendsHandler_Links_DBUnavailable(t *testing.T) {
@@ -77,15 +78,15 @@ func TestSerializePreviewCard_Metadata(t *testing.T) {
 		PublishedAt:      pgtype.Timestamptz{Time: publishedAt, Valid: true},
 	}
 
-	preview := serializePreviewCard(card, nil)
+	preview := serializePreviewCard(media.NewLocalStorage("", "https://example.com/files"), card, nil)
 	if preview == nil {
 		t.Fatal("expected preview card, got nil")
 	}
 	if preview.Language == nil || *preview.Language != "en" {
 		t.Fatalf("language = %v, want en", preview.Language)
 	}
-	if preview.Image == nil || *preview.Image != "/files/cards/image.png" {
-		t.Fatalf("image = %v, want /files/cards/image.png", preview.Image)
+	if preview.Image == nil || *preview.Image != "https://example.com/files/cards/image.png" {
+		t.Fatalf("image = %v, want https://example.com/files/cards/image.png", preview.Image)
 	}
 	if preview.Blurhash == nil || *preview.Blurhash != "abcd1234" {
 		t.Fatalf("blurhash = %v, want abcd1234", preview.Blurhash)
@@ -111,7 +112,7 @@ func TestSerializePreviewCard_Authors(t *testing.T) {
 		Title: "Card",
 	}
 
-	preview := serializePreviewCard(card, nil)
+	preview := serializePreviewCard(nil, card, nil)
 	if preview == nil {
 		t.Fatal("expected preview card, got nil")
 	}
@@ -130,7 +131,7 @@ func TestSerializePreviewCard_Authors(t *testing.T) {
 		},
 	}
 
-	preview = serializePreviewCard(card, authorAccounts)
+	preview = serializePreviewCard(nil, card, authorAccounts)
 	if len(preview.Authors) != 1 {
 		t.Fatalf("authors length = %d, want 1", len(preview.Authors))
 	}

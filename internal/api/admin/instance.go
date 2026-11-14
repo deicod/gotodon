@@ -18,6 +18,7 @@ import (
 	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/media"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/oauth"
 )
@@ -411,16 +412,15 @@ func previewCardType(card db.PreviewCard) string {
 	}
 }
 
-func previewCardImageURL(card db.PreviewCard) *string {
-	if !card.ImageFileName.Valid || strings.TrimSpace(card.ImageFileName.String) == "" {
+func previewCardImageURL(files media.Storage, card db.PreviewCard) *string {
+	if !card.ImageFileName.Valid {
 		return nil
 	}
-	image := card.ImageFileName.String
-	if strings.HasPrefix(image, "http://") || strings.HasPrefix(image, "https://") {
-		return &image
+	image := media.FileURL(files, card.ImageFileName.String)
+	if image == "" {
+		return nil
 	}
-	url := "/files/" + image
-	return &url
+	return &image
 }
 
 func previewCardDomain(rawURL string) string {
@@ -448,7 +448,7 @@ func statusRequiresReview(status db.Status, account db.Account) bool {
 	return !account.ReviewedAt.Valid
 }
 
-func mapAdminTrendLink(card db.PreviewCard, requiresReview bool) AdminTrendLink {
+func mapAdminTrendLink(files media.Storage, card db.PreviewCard, requiresReview bool) AdminTrendLink {
 	var blurhash *string
 	if card.Blurhash.Valid {
 		value := card.Blurhash.String
@@ -467,7 +467,7 @@ func mapAdminTrendLink(card db.PreviewCard, requiresReview bool) AdminTrendLink 
 		HTML:           card.Html,
 		Width:          int(card.Width),
 		Height:         int(card.Height),
-		Image:          previewCardImageURL(card),
+		Image:          previewCardImageURL(files, card),
 		Blurhash:       blurhash,
 		History:        []TagHistory{},
 		RequiresReview: requiresReview,
@@ -591,7 +591,7 @@ func (h *TrendsHandler) GetLinks(w http.ResponseWriter, r *http.Request) {
 				provider = &record
 			}
 		}
-		resp = append(resp, mapAdminTrendLink(link, previewCardRequiresReview(link, provider)))
+		resp = append(resp, mapAdminTrendLink(media.NewStorage(h.cfg), link, previewCardRequiresReview(link, provider)))
 	}
 
 	web.JSON(w, http.StatusOK, resp)
@@ -787,7 +787,7 @@ func (h *TrendsHandler) ApproveLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	web.JSON(w, http.StatusOK, mapAdminTrendLink(link, false))
+	web.JSON(w, http.StatusOK, mapAdminTrendLink(media.NewStorage(h.cfg), link, false))
 }
 
 // RejectLink handles POST /api/v1/admin/trends/links/{id}/reject.
@@ -816,7 +816,7 @@ func (h *TrendsHandler) RejectLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	web.JSON(w, http.StatusOK, mapAdminTrendLink(link, false))
+	web.JSON(w, http.StatusOK, mapAdminTrendLink(media.NewStorage(h.cfg), link, false))
 }
 
 // ApproveLinkPublisher handles POST /api/v1/admin/trends/links/publishers/{id}/approve.

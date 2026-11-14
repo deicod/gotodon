@@ -28,6 +28,7 @@ their own request only:
 |---|---|---|
 | Media uploads: `POST /api/v1/media`, `POST /api/v2/media` | 15 min to receive the body and write the response | `web.ExtendUploadDeadlines` |
 | Profile updates with avatar or header images: multipart `PATCH /api/v1/accounts/update_credentials` | 15 min to receive the body and write the response | `web.ExtendUploadDeadlines` |
+| Uploaded files: `GET /files/...` | 60 s plus one second per 128 KiB of the file, at most 15 min, to write the response | `web.ExtendDownloadDeadline` |
 | Server-Sent Events: `GET /api/v1/streaming/...` | open until the client disconnects; each write must finish within 10 s | `internal/streaming` (`SSEHandler`) |
 | WebSocket: `GET /api/v1/streaming` with `Upgrade: websocket` | open until either side closes; each write must finish within 10 s and the client must answer pings within 60 s | `internal/streaming` (`WSHandler`) |
 
@@ -35,6 +36,11 @@ Uploads get the longer budget only after the request is authenticated, so
 anonymous clients keep the ordinary limits. Fifteen minutes is enough for a
 maximum-size video (about 99 MB) at about 1 Mbit/s. The size limits on upload
 bodies still apply.
+
+File downloads are anonymous, so their budget grows with the file instead:
+enough to send it at 1 Mbit/s. Files up to about 128 KiB keep the ordinary
+60 s. A maximum-size video gets about 14 minutes. See
+[Uploaded files](media-files.md) for how files are served.
 
 A Server-Sent Events stream sends a heartbeat comment every 15 s. A client that
 stops reading is dropped once a write stalls for 10 s. A WebSocket upgrade

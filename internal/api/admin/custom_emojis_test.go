@@ -514,8 +514,8 @@ func TestCustomEmojisCreate(t *testing.T) {
 			want := map[string]any{
 				"id":                "101",
 				"shortcode":         tt.wantShortcode,
-				"url":               "/files/" + path,
-				"static_url":        "/files/" + path,
+				"url":               "https://example.com/files/" + path,
+				"static_url":        "https://example.com/files/" + path,
 				"visible_in_picker": true,
 				"disabled":          false,
 				"domain":            "",
@@ -1282,8 +1282,8 @@ func TestCustomEmojisListResponse(t *testing.T) {
 	want := []map[string]any{
 		{
 			"id": "3", "shortcode": "uncategorized",
-			"url":               "/files/custom_emojis/images/original/fedcba9876543210.gif",
-			"static_url":        "/files/custom_emojis/images/original/fedcba9876543210.gif",
+			"url":               "https://example.com/files/custom_emojis/images/original/fedcba9876543210.gif",
+			"static_url":        "https://example.com/files/custom_emojis/images/original/fedcba9876543210.gif",
 			"visible_in_picker": true, "disabled": false, "domain": "",
 		},
 		{
@@ -1457,12 +1457,15 @@ func TestMapAdminCustomEmoji_Category(t *testing.T) {
 		ImageFileName:   pgtype.Text{String: "custom/party.png", Valid: true},
 	}
 
-	resp := mapAdminCustomEmoji(emoji, "Fun")
+	resp := mapAdminCustomEmoji(newStubStorage(), emoji, "Fun")
 	if resp["category"] != "Fun" {
 		t.Fatalf("category = %#v, want %q", resp["category"], "Fun")
 	}
+	if want := "https://example.com/files/custom/party.png"; resp["url"] != want || resp["static_url"] != want {
+		t.Fatalf("url = %#v, static_url = %#v, want %q", resp["url"], resp["static_url"], want)
+	}
 
-	resp = mapAdminCustomEmoji(emoji, "")
+	resp = mapAdminCustomEmoji(newStubStorage(), emoji, "")
 	if _, ok := resp["category"]; ok {
 		t.Fatalf("category present for empty name")
 	}
