@@ -12,11 +12,13 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/mailer"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/activitypub"
 	"github.com/deicod/gotodon/pkg/oauth"
@@ -42,17 +44,31 @@ type accountsStore interface {
 	GetAccountByIDAllowSuspended(ctx context.Context, id int64) (db.Account, error)
 	GetUserByAccountID(ctx context.Context, accountID int64) (db.User, error)
 	CreateAdminActionLog(ctx context.Context, arg db.CreateAdminActionLogParams) error
+	// What an account action reads and writes after its transaction.
+	CreateNotification(ctx context.Context, arg db.CreateNotificationParams) (db.Notification, error)
+	AdminListCitedStatuses(ctx context.Context, ids []int64) ([]db.AdminListCitedStatusesRow, error)
 }
 
 // AccountsHandler handles admin account endpoints
 type AccountsHandler struct {
 	store accountsStore
-	roles RoleLookup
-	cfg   *config.Config
+	// actions runs the database work of an account action in one
+	// transaction. It is nil without a connection pool, and then account
+	// actions answer 500.
+	actions accountActionTransactor
+	roles   RoleLookup
+	cfg     *config.Config
 	// instanceActorURI identifies the instance actor, which can't be
 	// suspended. It is "" without a local domain, and then matches no
 	// account.
 	instanceActorURI string
+
+	// mail sends the warning e-mail of account actions, and streamer and
+	// pusher deliver their moderation_warning notifications. Each may be
+	// nil, which skips that delivery.
+	mail     mailer.Deliverer
+	streamer NotificationStreamer
+	pusher   NotificationPusher
 }
 
 // v1AccountsLinkParams are the query parameters that the v1 list's Link
@@ -63,10 +79,10 @@ var v1AccountsLinkParams = []string{
 	"email", "ip", "staff",
 }
 
-// NewAccountsHandler creates a new admin accounts handler. cfg names the
-// server's local domain, whose instance actor the handler recognizes, and
-// may be nil.
-func NewAccountsHandler(queries *db.Queries, cfg *config.Config) *AccountsHandler {
+// NewAccountsHandler creates a new admin accounts handler. pool runs the
+// transactions of account actions. cfg names the server's local domain,
+// whose instance actor the handler recognizes, and may be nil.
+func NewAccountsHandler(queries *db.Queries, pool *pgxpool.Pool, cfg *config.Config) *AccountsHandler {
 	localDomain := ""
 	if cfg != nil {
 		localDomain = cfg.Instance.LocalDomain
@@ -81,8 +97,24 @@ func NewAccountsHandler(queries *db.Queries, cfg *config.Config) *AccountsHandle
 	// role lookup, WithAccess answers 500.
 	if queries != nil {
 		h.store = queries
+		if pool != nil {
+			h.actions = poolTransactor{pool: pool, queries: queries}
+		}
 	}
 	return h
+}
+
+// SetMailDeliverer enables the warning e-mail of account actions
+// (UserMailer.warning).
+func (h *AccountsHandler) SetMailDeliverer(deliverer mailer.Deliverer) {
+	h.mail = deliverer
+}
+
+// SetNotificationPublishers enables streaming and Web Push for the
+// moderation_warning notifications of account actions. Either may be nil.
+func (h *AccountsHandler) SetNotificationPublishers(streamer NotificationStreamer, pusher NotificationPusher) {
+	h.streamer = streamer
+	h.pusher = pusher
 }
 
 // AccountAction represents an action taken on an account.
@@ -115,7 +147,18 @@ func (h *AccountsHandler) accountIdentifier(ctx context.Context, accountID int64
 	if h.store == nil {
 		return strconv.FormatInt(accountID, 10)
 	}
-	account, err := h.store.GetAccountByIDAllowSuspended(ctx, accountID)
+	return accountIdentifierFrom(ctx, h.store, accountID)
+}
+
+// accountLookup finds an account whether or not it is suspended.
+type accountLookup interface {
+	GetAccountByIDAllowSuspended(ctx context.Context, id int64) (db.Account, error)
+}
+
+// accountIdentifierFrom is Account#to_log_human_identifier, the acct of
+// accountID, or the ID when the account can't be found.
+func accountIdentifierFrom(ctx context.Context, accounts accountLookup, accountID int64) string {
+	account, err := accounts.GetAccountByIDAllowSuspended(ctx, accountID)
 	if err != nil {
 		return strconv.FormatInt(accountID, 10)
 	}
@@ -239,78 +282,6 @@ func (h *AccountsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	web.JSON(w, http.StatusOK, accounts[0])
-}
-
-// TakeAction handles POST /api/v1/admin/accounts/:id/action. Like
-// Admin::AccountAction, it refuses with 403 an action that Mastodon's
-// policies refuse for the target; see accountActionAllowed.
-func (h *AccountsHandler) TakeAction(w http.ResponseWriter, r *http.Request) {
-	target, ok := h.actionTarget(w, r)
-	if !ok {
-		return
-	}
-	accountID := target.ID
-
-	var req struct {
-		Type                  string `json:"type" form:"type"`
-		Text                  string `json:"text" form:"text"`
-		ReportID              string `json:"report_id" form:"report_id"`
-		WarningPresetID       string `json:"warning_preset_id" form:"warning_preset_id"`
-		SendEmailNotification bool   `json:"send_email_notification" form:"send_email_notification"`
-	}
-	if err := web.Bind(r, &req); err != nil {
-		web.JSONError(w, http.StatusBadRequest, "Invalid request body")
-		return
-	}
-
-	ctx := r.Context()
-	adminID, _ := middleware.GetAccountID(ctx)
-	var apply func(context.Context, int64) error
-	var logFn func()
-
-	switch req.Type {
-	case "disable":
-		apply = h.store.AdminDisableAccount
-		logFn = func() { h.logUserAction(ctx, adminID, accountID, "disable") }
-	case "sensitive":
-		apply = h.store.AdminSensitizeAccount
-		logFn = func() { h.logAccountAction(ctx, adminID, accountID, "sensitive") }
-	case "silence":
-		apply = h.store.AdminSilenceAccount
-		logFn = func() { h.logAccountAction(ctx, adminID, accountID, "silence") }
-	case "suspend":
-		apply = h.store.AdminSuspendAccount
-		logFn = func() { h.logAccountAction(ctx, adminID, accountID, "suspend") }
-	case "none":
-		// Changes no account state.
-	default:
-		web.JSONError(w, http.StatusUnprocessableEntity, "Invalid action type")
-		return
-	}
-
-	acting, ok := ActingRole(ctx)
-	if !ok {
-		slog.ErrorContext(ctx, "Admin account action without an acting role", "account_id", accountID)
-		web.JSONError(w, http.StatusInternalServerError, "Admin data unavailable")
-		return
-	}
-	if !h.accountActionAllowed(acting, req.Type, target) {
-		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
-		return
-	}
-
-	if apply != nil {
-		if err := apply(ctx, accountID); err != nil {
-			web.JSONError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-	}
-
-	if logFn != nil {
-		logFn()
-	}
-
-	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
 // accountActionAllowed reports whether acting may take an action of
@@ -562,7 +533,9 @@ func (h *AccountsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 // Mastodon's AccountPolicy and UserPolicy. Account actions need manage_users:
 // Api::V1::Admin::AccountActionsController authorizes show? first, which
 // covers the permission of every per-type check of Admin::AccountAction.
-// The handlers check the policies' conditions on the target account. Scopes
+// Resolving reports also needs manage_reports (ReportPolicy#update?), which
+// TakeAction checks only when there are reports to resolve. The handlers
+// check the policies' conditions on the target account. Scopes
 // follow Api::V1::Admin::AccountsController and AccountActionsController:
 // listing and showing need admin:read:accounts, everything else, account
 // actions included, admin:write:accounts.

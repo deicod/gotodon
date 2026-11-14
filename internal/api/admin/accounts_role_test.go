@@ -88,7 +88,7 @@ func getRow(id int64, role *db.UserRole) db.AdminGetAccountRow {
 // serveAccountReads serves the admin account routes for an Owner, with
 // WithAccess in front as in production, and sends GET path.
 func serveAccountReads(store *stubAccountsStore, path string) *httptest.ResponseRecorder {
-	h := NewAccountsHandler(nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: localDomain}})
+	h := NewAccountsHandler(nil, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: localDomain}})
 	h.store = store
 	h.roles = &stubRoles{
 		usersByAccount: map[int64]db.User{actingAccount: {ID: 20, AccountID: actingAccount}},

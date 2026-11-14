@@ -79,13 +79,15 @@ func (h *NotificationsHandler) notificationRequestFromDB(ctx context.Context, db
 	return req
 }
 
-// Notification represents a Mastodon notification
+// Notification represents a Mastodon notification. ModerationWarning is the
+// strike of a moderation_warning notification.
 type Notification struct {
-	ID        string    `json:"id"`
-	Type      string    `json:"type"`
-	CreatedAt time.Time `json:"created_at"`
-	Account   Account   `json:"account"`
-	Status    *Status   `json:"status,omitempty"`
+	ID                string          `json:"id"`
+	Type              string          `json:"type"`
+	CreatedAt         time.Time       `json:"created_at"`
+	Account           Account         `json:"account"`
+	Status            *Status         `json:"status,omitempty"`
+	ModerationWarning *AccountWarning `json:"moderation_warning,omitempty"`
 }
 
 func (h *NotificationsHandler) dbNotificationToAPI(ctx context.Context, dbNotif db.Notification) Notification {
@@ -145,11 +147,42 @@ func (h *NotificationsHandler) notificationsToAPI(ctx context.Context, dbNotifs 
 		}
 	}
 
+	warningsByID := map[int64]AccountWarning{}
+	if warningIDs := ModerationWarningIDs(dbNotifs); h.useDB() && len(warningIDs) > 0 {
+		if warnings, err := LoadAccountWarnings(ctx, h.queries, h.cfg, warningIDs); err == nil {
+			warningsByID = warnings
+		}
+	}
+
 	notifications := make([]Notification, 0, len(dbNotifs))
 	for _, notif := range dbNotifs {
-		notifications = append(notifications, notificationFromMaps(notif, accountsByID, statusesByID))
+		notification := notificationFromMaps(notif, accountsByID, statusesByID)
+		attachModerationWarning(&notification, notif, warningsByID)
+		notifications = append(notifications, notification)
 	}
 	return notifications
+}
+
+// attachModerationWarning sets the strike of a moderation_warning
+// notification from warnings, which may lack it.
+func attachModerationWarning(notification *Notification, dbNotif db.Notification, warnings map[int64]AccountWarning) {
+	if !IsModerationWarning(dbNotif) {
+		return
+	}
+	if warning, ok := warnings[dbNotif.ActivityID]; ok {
+		notification.ModerationWarning = &warning
+	}
+}
+
+// StreamNotification publishes notification, rendered as
+// GET /api/v1/notifications/:id renders it, to its recipient's notification
+// stream, as NotifyService#push_to_streaming_api! does. Without a publisher
+// it does nothing.
+func (h *NotificationsHandler) StreamNotification(ctx context.Context, notification db.Notification) error {
+	if h == nil || h.publisher == nil {
+		return nil
+	}
+	return h.publisher.PublishNotificationToRedis(ctx, notification.AccountID, h.dbNotificationToAPI(ctx, notification))
 }
 
 func notificationFromMaps(dbNotif db.Notification, accountsByID map[int64]Account, statusesByID map[int64]Status) Notification {

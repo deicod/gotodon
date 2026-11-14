@@ -65,6 +65,10 @@ func TestRenderAllKinds(t *testing.T) {
 		"Target":    "@bob@remote.example",
 		"Username":  "carol",
 		"Email":     "carol@example.org",
+		"Action":    "silence",
+		"Acct":      "@carol@social.example.com",
+		"Text":      "Spam",
+		"Statuses":  "=> https://social.example.com/@carol/1",
 	}
 	for _, kind := range Kinds() {
 		mail := Mail{Kind: kind, To: "user@example.org", Params: params}
@@ -81,6 +85,89 @@ func TestRenderAllKinds(t *testing.T) {
 		}
 		if strings.Contains(subject+body, "<no value>") {
 			t.Errorf("Render(%s) has unresolved template values:\nsubject: %s\nbody: %s", kind, subject, body)
+		}
+	}
+}
+
+func TestRenderWarning(t *testing.T) {
+	tests := []struct {
+		action      string
+		subject     string
+		title       string
+		explanation string
+	}{
+		{"none", "Warning for @carol@social.example.com", "Warning", ""},
+		{"disable", "Your account @carol@social.example.com has been frozen", "Account frozen", "You can no longer use your account, but your profile"},
+		{"mark_statuses_as_sensitive", "Your posts on @carol@social.example.com have been marked as sensitive", "Posts marked as sensitive", "marked as sensitive by the moderators of social.example.com."},
+		{"delete_statuses", "Your posts on @carol@social.example.com have been removed", "Posts removed", "removed by the moderators of social.example.com."},
+		{"sensitive", "Your posts on @carol@social.example.com will be marked as sensitive from now on", "Account marked as sensitive", "From now on, all your uploaded media files"},
+		{"silence", "Your account @carol@social.example.com has been limited", "Account limited", "only people who are already following you"},
+		{"suspend", "Your account @carol@social.example.com has been suspended", "Account suspended", "You can no longer use your account, and your profile"},
+		// An action the template doesn't know reads as none.
+		{"unknown", "Warning for @carol@social.example.com", "Warning", ""},
+	}
+	explanations := []string{}
+	for _, tt := range tests {
+		if tt.explanation != "" {
+			explanations = append(explanations, tt.explanation)
+		}
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.action, func(t *testing.T) {
+			mail := Mail{Kind: KindWarning, To: "carol@example.org", Params: map[string]string{
+				"Action":   tt.action,
+				"Acct":     "@carol@social.example.com",
+				"Text":     "Please stop posting spam.",
+				"Statuses": "=> https://social.example.com/@carol/1\n=> https://social.example.com/@carol/2",
+			}}
+			subject, body, err := Render(mail, testInstance)
+			if err != nil {
+				t.Fatalf("Render() error = %v", err)
+			}
+			if subject != tt.subject {
+				t.Errorf("subject = %q, want %q", subject, tt.subject)
+			}
+			if !strings.HasPrefix(body, tt.title+"\n\n===\n") {
+				t.Errorf("body doesn't start with the title %q:\n%s", tt.title, body)
+			}
+			for _, explanation := range explanations {
+				if got, want := strings.Contains(body, explanation), explanation == tt.explanation; got != want {
+					t.Errorf("body contains %q = %v, want %v:\n%s", explanation, got, want, body)
+				}
+			}
+			for _, part := range []string{
+				"Reason:\n\nPlease stop posting spam.\n",
+				"Posts cited:\n\n=> https://social.example.com/@carol/1\n=> https://social.example.com/@carol/2\n",
+			} {
+				if !strings.Contains(body, part) {
+					t.Errorf("body missing %q:\n%s", part, body)
+				}
+			}
+			if strings.Contains(subject+body, "<no value>") {
+				t.Errorf("unresolved template values:\nsubject: %s\nbody: %s", subject, body)
+			}
+		})
+	}
+}
+
+// TestRenderWarningWithoutTextOrStatuses checks that a warning without text
+// or cited posts leaves out their sections, and that a mail without an
+// action reads as a plain warning.
+func TestRenderWarningWithoutTextOrStatuses(t *testing.T) {
+	for _, params := range []map[string]string{
+		{"Action": "none", "Acct": "@carol@social.example.com", "Text": "", "Statuses": ""},
+		{"Acct": "@carol@social.example.com"},
+	} {
+		subject, body, err := Render(Mail{Kind: KindWarning, To: "carol@example.org", Params: params}, testInstance)
+		if err != nil {
+			t.Fatalf("Render(%v) error = %v", params, err)
+		}
+		if subject != "Warning for @carol@social.example.com" {
+			t.Errorf("Render(%v) subject = %q", params, subject)
+		}
+		if body != "Warning\n\n===\n" {
+			t.Errorf("Render(%v) body = %q, want only the title", params, body)
 		}
 	}
 }

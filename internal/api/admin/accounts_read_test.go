@@ -475,7 +475,7 @@ func TestAccountsGetAllPagination(t *testing.T) {
 // TestAccountsGetAllWithoutStore checks that the list fails closed without
 // a database.
 func TestAccountsGetAllWithoutStore(t *testing.T) {
-	h := NewAccountsHandler(nil, nil)
+	h := NewAccountsHandler(nil, nil, nil)
 	req := withIdentity(httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts", nil), int64Ptr(actingAccount), int64Ptr(20))
 	rec := httptest.NewRecorder()
 	h.GetAll(rec, req)

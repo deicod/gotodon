@@ -584,7 +584,23 @@ func runServer(cmd *cobra.Command, _ []string) error {
 
 	// Admin API
 	// Admin Handlers
-	adminAccountsHandler := admin.NewAccountsHandler(queries, cfg)
+	adminAccountsHandler := admin.NewAccountsHandler(queries, pool, cfg)
+	if mailDeliverer != nil {
+		adminAccountsHandler.SetMailDeliverer(mailDeliverer)
+	}
+	{
+		// Without Redis there is no streaming hub, and the notifications
+		// handler holds a nil one.
+		var streamer admin.NotificationStreamer
+		if streamingHub != nil {
+			streamer = notificationsHandler
+		}
+		var pusher admin.NotificationPusher
+		if pushPublisher != nil {
+			pusher = pushPublisher
+		}
+		adminAccountsHandler.SetNotificationPublishers(streamer, pusher)
+	}
 	adminAccountsHandler.RegisterRoutes(mux)
 
 	adminDomainAllowsHandler := admin.NewDomainAllowsHandler(queries)

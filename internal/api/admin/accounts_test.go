@@ -47,12 +47,27 @@ type stubAccountsStore struct {
 	ips    []db.AdminListUserIPsRow
 	ipsErr error
 
-	changes []string
-	logs    []db.CreateAdminActionLogParams
+	// reports and presets answer an account action's lookups, and cited
+	// AdminListCitedStatuses.
+	reports map[int64]db.Report
+	presets map[int64]db.AccountWarningPreset
+	cited   []db.AdminListCitedStatusesRow
+	// failOn makes a call fail with its error: a method name, or
+	// CreateAdminActionLog:<action> for the log entry of one action.
+	failOn map[string]error
+
+	changes       []string
+	logs          []db.CreateAdminActionLogParams
+	strikes       []db.CreateAccountWarningParams
+	resolutions   []db.AdminResolveReportParams
+	notifications []db.CreateNotificationParams
 }
 
 func (s *stubAccountsStore) change(name string, id int64) error {
 	s.changes = append(s.changes, fmt.Sprintf("%s(%d)", name, id))
+	if err := s.failOn[name]; err != nil {
+		return err
+	}
 	return s.writeErr
 }
 
@@ -199,15 +214,28 @@ func (s *stubAccountsStore) GetAccountByIDAllowSuspended(_ context.Context, id i
 	return db.Account{ID: id, Username: fmt.Sprintf("user%d", id), Domain: target.Domain}, nil
 }
 
+// GetUserByAccountID finds the user of an account with one, whose e-mail is
+// user<account>@localDomain and whose locale is de.
 func (s *stubAccountsStore) GetUserByAccountID(_ context.Context, accountID int64) (db.User, error) {
+	if err := s.failOn["GetUserByAccountID"]; err != nil {
+		return db.User{}, err
+	}
 	target, ok := s.targets[accountID]
 	if !ok || !target.UserID.Valid {
 		return db.User{}, pgx.ErrNoRows
 	}
-	return db.User{ID: target.UserID.Int64, AccountID: accountID}, nil
+	return db.User{
+		ID:        target.UserID.Int64,
+		AccountID: accountID,
+		Email:     fmt.Sprintf("user%d@%s", accountID, localDomain),
+		Locale:    pgtype.Text{String: "de", Valid: true},
+	}, nil
 }
 
 func (s *stubAccountsStore) CreateAdminActionLog(_ context.Context, arg db.CreateAdminActionLogParams) error {
+	if err := s.failOn["CreateAdminActionLog:"+arg.Action]; err != nil {
+		return err
+	}
 	s.logs = append(s.logs, arg)
 	return nil
 }
@@ -356,10 +384,15 @@ var (
 )
 
 // accountsFixture serves the admin account routes for an acting role, with
-// WithAccess in front as in production.
+// WithAccess in front as in production. Account actions run in tx, and their
+// warnings go to mail, streamer and pusher.
 type accountsFixture struct {
-	store *stubAccountsStore
-	mux   *http.ServeMux
+	store    *stubAccountsStore
+	mux      *http.ServeMux
+	tx       *stubTransactor
+	mail     *stubMail
+	streamer *stubStreamer
+	pusher   *stubPusher
 }
 
 func newAccountsFixture(a actor) *accountsFixture {
@@ -369,15 +402,25 @@ func newAccountsFixture(a actor) *accountsFixture {
 // newAccountsFixtureFor serves the routes for a server at domain.
 func newAccountsFixtureFor(a actor, domain string) *accountsFixture {
 	store := &stubAccountsStore{targets: newAccountTargets(a.position)}
-	h := NewAccountsHandler(nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: domain}})
+	h := NewAccountsHandler(nil, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: domain}})
 	h.store = store
 	h.roles = &stubRoles{
 		usersByAccount: map[int64]db.User{actingAccount: {ID: 20, AccountID: actingAccount}},
 		roles:          map[int64]db.UserRole{20: {ID: 3, Name: a.name, Permissions: a.permissions, Position: a.position}},
 	}
-	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
-	return &accountsFixture{store: store, mux: mux}
+	f := &accountsFixture{
+		store:    store,
+		mux:      http.NewServeMux(),
+		tx:       &stubTransactor{store: store},
+		mail:     &stubMail{},
+		streamer: &stubStreamer{},
+		pusher:   &stubPusher{},
+	}
+	h.actions = f.tx
+	h.SetMailDeliverer(f.mail)
+	h.SetNotificationPublishers(f.streamer, f.pusher)
+	h.RegisterRoutes(f.mux)
+	return f
 }
 
 // serve sends an authenticated request with both admin scopes. A body is
@@ -424,8 +467,8 @@ func assertAllowed(t *testing.T, f *accountsFixture, rec *httptest.ResponseRecor
 	}
 }
 
-// assertRefused checks the status and error, and that nothing changed and
-// nothing was logged.
+// assertRefused checks the status and error, and that nothing changed,
+// nothing was logged and nobody was warned.
 func assertRefused(t *testing.T, f *accountsFixture, rec *httptest.ResponseRecorder, status int, message string) {
 	t.Helper()
 	if rec.Code != status {
@@ -434,11 +477,27 @@ func assertRefused(t *testing.T, f *accountsFixture, rec *httptest.ResponseRecor
 	if got := errorMessage(t, rec); got != message {
 		t.Fatalf("error = %q, want %q", got, message)
 	}
+	assertNothingDone(t, f)
+}
+
+// assertNothingDone checks that nothing changed, nothing was logged and
+// nobody was warned.
+func assertNothingDone(t *testing.T, f *accountsFixture) {
+	t.Helper()
 	if len(f.store.changes) != 0 {
 		t.Fatalf("refused request changed %v", f.store.changes)
 	}
 	if len(f.store.logs) != 0 {
 		t.Fatalf("refused request logged %v", f.store.loggedActions())
+	}
+	if len(f.store.strikes) != 0 || len(f.store.resolutions) != 0 {
+		t.Fatalf("refused request created strikes %v and resolved reports %v", f.store.strikes, f.store.resolutions)
+	}
+	if len(f.store.notifications) != 0 {
+		t.Fatalf("refused request notified %v", f.store.notifications)
+	}
+	if f.mail != nil && len(f.mail.mails) != 0 {
+		t.Fatalf("refused request sent %v", f.mail.mails)
 	}
 }
 
@@ -579,7 +638,6 @@ func TestAccountsTakeActionRequests(t *testing.T) {
 		writeErr    error
 		wantStatus  int
 		wantMessage string
-		wantChanges []string
 	}{
 		{
 			name: "malformed ID", actor: ownerActor, path: "abc", body: `{"type":"suspend"}`,
@@ -615,9 +673,9 @@ func TestAccountsTakeActionRequests(t *testing.T) {
 			wantStatus: http.StatusUnprocessableEntity, wantMessage: "Invalid action type",
 		},
 		{
+			// The transaction rolls the failed change back.
 			name: "change fails", actor: ownerActor, path: idOf(targetNoRole), body: `{"type":"silence"}`, writeErr: errDatabase,
 			wantStatus: http.StatusInternalServerError, wantMessage: "Database error",
-			wantChanges: []string{fmt.Sprintf("AdminSilenceAccount(%d)", targetNoRole)},
 		},
 	}
 
@@ -634,12 +692,7 @@ func TestAccountsTakeActionRequests(t *testing.T) {
 			if got := errorMessage(t, rec); got != tt.wantMessage {
 				t.Fatalf("error = %q, want %q", got, tt.wantMessage)
 			}
-			if !slices.Equal(f.store.changes, tt.wantChanges) {
-				t.Fatalf("changes = %v, want %v", f.store.changes, tt.wantChanges)
-			}
-			if len(f.store.logs) != 0 {
-				t.Fatalf("failed request logged %v", f.store.loggedActions())
-			}
+			assertNothingDone(t, f)
 		})
 	}
 }
@@ -648,7 +701,7 @@ func TestAccountsTakeActionRequests(t *testing.T) {
 // closed when it runs without WithAccess in front.
 func TestAccountsTakeActionWithoutActingRole(t *testing.T) {
 	store := &stubAccountsStore{targets: newAccountTargets(ownerPosition)}
-	h := NewAccountsHandler(nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: localDomain}})
+	h := NewAccountsHandler(nil, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: localDomain}})
 	h.store = store
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/104/action", strings.NewReader(`{"type":"suspend"}`))
@@ -659,6 +712,23 @@ func TestAccountsTakeActionWithoutActingRole(t *testing.T) {
 	h.TakeAction(rec, req)
 
 	f := &accountsFixture{store: store}
+	assertRefused(t, f, rec, http.StatusInternalServerError, "Admin data unavailable")
+}
+
+// TestAccountsTakeActionWithoutTransactions checks that without a connection
+// pool an account action fails closed.
+func TestAccountsTakeActionWithoutTransactions(t *testing.T) {
+	f := newAccountsFixture(ownerActor)
+	h := NewAccountsHandler(nil, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: localDomain}})
+	h.store = f.store
+	h.roles = &stubRoles{
+		usersByAccount: map[int64]db.User{actingAccount: {ID: 20, AccountID: actingAccount}},
+		roles:          map[int64]db.UserRole{20: {ID: 3, Name: ownerActor.name, Permissions: ownerActor.permissions, Position: ownerActor.position}},
+	}
+	f.mux = http.NewServeMux()
+	h.RegisterRoutes(f.mux)
+
+	rec := f.takeAction(idOf(targetNoRole), "silence")
 	assertRefused(t, f, rec, http.StatusInternalServerError, "Admin data unavailable")
 }
 

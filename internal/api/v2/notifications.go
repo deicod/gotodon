@@ -53,6 +53,9 @@ type NotificationGroup struct {
 	LatestPageNotificationAt *time.Time `json:"latest_page_notification_at,omitempty"`
 	SampleAccountIDs         []string   `json:"sample_account_ids"`
 	StatusID                 *string    `json:"status_id,omitempty"`
+	// ModerationWarning is the strike of a moderation_warning group
+	// (REST::NotificationGroupSerializer's moderation_warning).
+	ModerationWarning *v1.AccountWarning `json:"moderation_warning,omitempty"`
 }
 
 // GroupedNotificationsResponse wraps grouped notifications with referenced accounts and statuses.
@@ -310,6 +313,14 @@ func (h *NotificationsHandler) buildGroupedResponse(ctx context.Context, notific
 		}
 	}
 
+	if warningIDs := v1.ModerationWarningIDs(notifications); len(warningIDs) > 0 {
+		warnings, err := v1.LoadAccountWarnings(ctx, h.queries, h.cfg, warningIDs)
+		if err != nil {
+			return resp, err
+		}
+		h.attachModerationWarnings(resp.NotificationGroups, notifications, warnings)
+	}
+
 	if len(statusIDs) > 0 {
 		dbStatuses, err := h.queries.GetStatusesByIDs(ctx, statusIDs)
 		if err != nil {
@@ -327,6 +338,31 @@ func (h *NotificationsHandler) buildGroupedResponse(ctx context.Context, notific
 	}
 
 	return resp, nil
+}
+
+// attachModerationWarnings sets the strike of every moderation_warning group
+// among groups, which groupNotifications made from notifications, from
+// warnings, which may lack it.
+func (h *NotificationsHandler) attachModerationWarnings(groups []NotificationGroup, notifications []db.Notification, warnings map[int64]v1.AccountWarning) {
+	warningByGroup := map[string]int64{}
+	for _, notif := range notifications {
+		if !v1.IsModerationWarning(notif) {
+			continue
+		}
+		key := h.groupKeyForNotification(notif)
+		if _, ok := warningByGroup[key]; !ok {
+			warningByGroup[key] = notif.ActivityID
+		}
+	}
+	for i := range groups {
+		warningID, ok := warningByGroup[groups[i].GroupKey]
+		if !ok {
+			continue
+		}
+		if warning, ok := warnings[warningID]; ok {
+			groups[i].ModerationWarning = &warning
+		}
+	}
 }
 
 func (h *NotificationsHandler) listNotificationsForGroup(ctx context.Context, accountID int64, groupKey string) ([]db.Notification, error) {

@@ -46,6 +46,8 @@ type Querier interface {
 	// The users and user_roles columns are NULL for an account without a user,
 	// and role_position is NULL for a user without a role.
 	AdminGetAccountActionTarget(ctx context.Context, id int64) (AdminGetAccountActionTargetRow, error)
+	// The warning preset that Admin::AccountAction#warning_preset finds.
+	AdminGetAccountWarningPreset(ctx context.Context, id int64) (AccountWarningPreset, error)
 	AdminGetCanonicalEmailBlock(ctx context.Context, id int64) (CanonicalEmailBlock, error)
 	AdminGetCanonicalEmailBlockByHash(ctx context.Context, canonicalEmailHash string) (CanonicalEmailBlock, error)
 	AdminGetDomainBlock(ctx context.Context, id int64) (DomainBlock, error)
@@ -65,6 +67,10 @@ type Querier interface {
 	// caller reverses; otherwise the newest ones.
 	AdminListAccounts(ctx context.Context, arg AdminListAccountsParams) ([]AdminListAccountsRow, error)
 	AdminListCanonicalEmailBlocks(ctx context.Context, arg AdminListCanonicalEmailBlocksParams) ([]CanonicalEmailBlock, error)
+	// The statuses a strike cites, deleted ones included as in
+	// AccountWarning#statuses (Status.with_discarded), with their authors'
+	// usernames, for the warning e-mail's links.
+	AdminListCitedStatuses(ctx context.Context, ids []int64) ([]AdminListCitedStatusesRow, error)
 	AdminListCustomEmojis(ctx context.Context, arg AdminListCustomEmojisParams) ([]CustomEmoji, error)
 	AdminListDomainBlocks(ctx context.Context, arg AdminListDomainBlocksParams) ([]DomainBlock, error)
 	AdminListEmailDomainBlocks(ctx context.Context, arg AdminListEmailDomainBlocksParams) ([]AdminListEmailDomainBlocksRow, error)
@@ -76,6 +82,11 @@ type Querier interface {
 	AdminListTrendingLinks(ctx context.Context, limit int32) ([]PreviewCard, error)
 	AdminListTrendingStatuses(ctx context.Context, limit int32) ([]Status, error)
 	AdminListTrendingTags(ctx context.Context, limit int32) ([]AdminListTrendingTagsRow, error)
+	// The reports that Admin::AccountAction#reports resolves for every type but
+	// none: Report.where(target_account:).unresolved. FOR UPDATE keeps a
+	// concurrent resolution or reopening of one of them from interleaving with
+	// the action.
+	AdminListUnresolvedReportsByTarget(ctx context.Context, targetAccountID int64) ([]Report, error)
 	AdminListUserIPs(ctx context.Context, userIds []int64) ([]AdminListUserIPsRow, error)
 	AdminMetricsActiveUsersByDay(ctx context.Context, arg AdminMetricsActiveUsersByDayParams) ([]AdminMetricsActiveUsersByDayRow, error)
 	// Metrics: measures
@@ -192,6 +203,10 @@ type Querier interface {
 	CreateAccountNote(ctx context.Context, arg CreateAccountNoteParams) (AccountNote, error)
 	CreateAccountPin(ctx context.Context, arg CreateAccountPinParams) (AccountPin, error)
 	CreateAccountStats(ctx context.Context, accountID int64) (AccountStat, error)
+	// A strike, as Admin::BaseAction#process_strike! creates it. account_id and
+	// report_id are NULL without an acting account or report, and status_ids is
+	// NULL without a report.
+	CreateAccountWarning(ctx context.Context, arg CreateAccountWarningParams) (AccountWarning, error)
 	CreateAdminActionLog(ctx context.Context, arg CreateAdminActionLogParams) error
 	CreateAnnualReport(ctx context.Context, arg CreateAnnualReportParams) (GeneratedAnnualReport, error)
 	CreateBlock(ctx context.Context, arg CreateBlockParams) (Block, error)
@@ -323,6 +338,10 @@ type Querier interface {
 	GetAccountStatuses(ctx context.Context, arg GetAccountStatusesParams) ([]Status, error)
 	// Account Statuses Cleanup Policies
 	GetAccountStatusesCleanupPolicy(ctx context.Context, accountID int64) (AccountStatusesCleanupPolicy, error)
+	// The strikes that moderation_warning notifications render
+	// (REST::AccountWarningSerializer), with their appeal, if any: the appeal
+	// columns are NULL for a strike without one.
+	GetAccountWarningsByIDs(ctx context.Context, ids []int64) ([]GetAccountWarningsByIDsRow, error)
 	GetAccountsByIDs(ctx context.Context, ids []int64) ([]Account, error)
 	GetAccountsByUsernames(ctx context.Context, usernames []string) ([]Account, error)
 	GetAccountsByUsernamesAndDomains(ctx context.Context, arg GetAccountsByUsernamesAndDomainsParams) ([]Account, error)
