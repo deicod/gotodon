@@ -56,24 +56,23 @@ type InstanceConfig struct {
 }
 
 const (
-	settingSiteTitle              = "site_title"
-	settingSiteDescription        = "site_description"
-	settingSiteLanguages          = "site_languages"
-	settingRegistrationsEnabled   = "registrations_enabled"
-	settingApprovalRequired       = "approval_required"
-	settingInvitesEnabled         = "invites_enabled"
-	settingMaxTootChars           = "max_toot_chars"
-	settingMaxPollOptions         = "max_poll_options"
-	settingMaxPollOptionChars     = "max_poll_option_chars"
-	settingMaxImageSize           = "max_image_size"
-	settingMaxVideoSize           = "max_video_size"
-	settingMaxMediaAttachments    = "max_media_attachments"
-	settingMaxCustomEmojis        = "max_custom_emojis"
-	defaultInstanceTitle          = "Gotodon"
-	defaultInstanceVersion        = "4.0.0-gotodon"
-	defaultInstanceSourceURL      = "https://github.com/deicod/gotodon"
-	defaultInstanceDescription    = "A Mastodon-compatible server"
-	defaultInstanceDomainFallback = "example.com"
+	settingSiteTitle            = "site_title"
+	settingSiteDescription      = "site_description"
+	settingSiteLanguages        = "site_languages"
+	settingRegistrationsEnabled = "registrations_enabled"
+	settingApprovalRequired     = "approval_required"
+	settingInvitesEnabled       = "invites_enabled"
+	settingMaxTootChars         = "max_toot_chars"
+	settingMaxPollOptions       = "max_poll_options"
+	settingMaxPollOptionChars   = "max_poll_option_chars"
+	settingMaxImageSize         = "max_image_size"
+	settingMaxVideoSize         = "max_video_size"
+	settingMaxMediaAttachments  = "max_media_attachments"
+	settingMaxCustomEmojis      = "max_custom_emojis"
+	defaultInstanceTitle        = "Gotodon"
+	defaultInstanceVersion      = "4.0.0-gotodon"
+	defaultInstanceSourceURL    = "https://github.com/deicod/gotodon"
+	defaultInstanceDescription  = "A Mastodon-compatible server"
 )
 
 var instanceSettingKeys = []string{
@@ -93,13 +92,7 @@ var instanceSettingKeys = []string{
 }
 
 func instanceDomain(cfg *config.Config) string {
-	if cfg == nil {
-		return ""
-	}
-	if strings.TrimSpace(cfg.Instance.WebDomain) != "" {
-		return cfg.Instance.WebDomain
-	}
-	return cfg.Instance.LocalDomain
+	return cfg.PublicWebDomain()
 }
 
 func defaultRegistrations(cfg *config.Config) (bool, bool) {
@@ -119,10 +112,7 @@ func defaultRegistrations(cfg *config.Config) (bool, bool) {
 
 func defaultInstanceConfig(cfg *config.Config) InstanceConfig {
 	registrations, approvalRequired := defaultRegistrations(cfg)
-	domain := strings.TrimSpace(instanceDomain(cfg))
-	if domain == "" {
-		domain = defaultInstanceDomainFallback
-	}
+	domain := instanceDomain(cfg)
 	return InstanceConfig{
 		Domain:               domain,
 		Title:                defaultInstanceTitle,

@@ -78,10 +78,7 @@ type AccountList struct {
 // NewAccountList returns the admin account list at path, whose Link headers
 // keep linkParams. store may be nil, and then the list answers 500.
 func NewAccountList(store AccountListStore, cfg *config.Config, path string, linkParams []string) *AccountList {
-	localDomain := ""
-	if cfg != nil {
-		localDomain = cfg.Instance.LocalDomain
-	}
+	localDomain := cfg.FederationDomain()
 	return &AccountList{
 		store:            store,
 		cfg:              cfg,
@@ -195,26 +192,14 @@ func (l *AccountList) pageURL(r *http.Request, key string, id int64) string {
 	}
 	params.Set(key, strconv.FormatInt(id, 10))
 
-	scheme, host := l.baseURL(r)
-	u := url.URL{Scheme: scheme, Host: host, Path: l.path, RawQuery: params.Encode()}
+	u := url.URL{Scheme: "https", Host: l.linkHost(), Path: l.path, RawQuery: params.Encode()}
 	return u.String()
 }
 
-func (l *AccountList) baseURL(r *http.Request) (string, string) {
-	if l.cfg != nil && l.cfg.Instance.LocalDomain != "" {
-		return "https", l.cfg.Instance.LocalDomain
-	}
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	} else if forwarded := r.Header.Get("X-Forwarded-Proto"); forwarded != "" {
-		scheme = forwarded
-	}
-	host := r.Host
-	if host == "" {
-		host = "localhost"
-	}
-	return scheme, host
+// linkHost is the host of the Link header URLs: the configured domain, never
+// one taken from the request.
+func (l *AccountList) linkHost() string {
+	return l.cfg.FederationDomain()
 }
 
 // parseAccountsLimit is Api::BaseController#limit_param for the account

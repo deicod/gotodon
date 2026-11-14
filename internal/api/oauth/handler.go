@@ -972,14 +972,5 @@ func (h *Handler) baseURL() string {
 }
 
 func (h *Handler) publicDomain() string {
-	if h.cfg == nil {
-		return "localhost:3000"
-	}
-	if strings.TrimSpace(h.cfg.Instance.WebDomain) != "" {
-		return h.cfg.Instance.WebDomain
-	}
-	if strings.TrimSpace(h.cfg.Instance.LocalDomain) != "" {
-		return h.cfg.Instance.LocalDomain
-	}
-	return "localhost:3000"
+	return h.cfg.PublicWebDomain()
 }

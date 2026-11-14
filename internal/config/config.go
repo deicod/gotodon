@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -88,16 +89,76 @@ type InstanceConfig struct {
 	RegistrationsMode string `mapstructure:"registrations_mode"` // open, none, approved
 }
 
-// PublicWebDomain returns the browser-facing domain, preferring web_domain
-// over local_domain, with a development fallback.
+// FederationDomain returns the domain of the instance's accounts and
+// ActivityPub IDs: local_domain. It is empty only when local_domain is not
+// configured, which Validate rejects and serve refuses to start with.
+func (c InstanceConfig) FederationDomain() string {
+	return strings.TrimSpace(c.LocalDomain)
+}
+
+// PublicWebDomain returns the browser-facing domain gotodon is reached at:
+// web_domain, otherwise local_domain. It is empty only when neither is
+// configured.
 func (c InstanceConfig) PublicWebDomain() string {
 	if domain := strings.TrimSpace(c.WebDomain); domain != "" {
 		return domain
 	}
-	if domain := strings.TrimSpace(c.LocalDomain); domain != "" {
-		return domain
+	return c.FederationDomain()
+}
+
+// Validate checks the domains: local_domain is required, and both must be a
+// host name, optionally with a port, without scheme, path or credentials.
+func (c InstanceConfig) Validate() error {
+	if strings.TrimSpace(c.LocalDomain) == "" {
+		return fmt.Errorf("instance.local_domain is required: set LOCAL_DOMAIN or instance.local_domain to the domain of the instance's accounts")
 	}
-	return "localhost:3000"
+	if err := validateDomain("instance.local_domain", c.LocalDomain); err != nil {
+		return err
+	}
+	if strings.TrimSpace(c.WebDomain) != "" {
+		if err := validateDomain("instance.web_domain", c.WebDomain); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateDomain(key, raw string) error {
+	value := strings.TrimSpace(raw)
+	invalid := fmt.Errorf("%s %q must be a host name such as social.example, optionally with a port, without scheme or path", key, raw)
+	if strings.ContainsAny(value, "/\\?#@ \t") {
+		return invalid
+	}
+	parsed, err := url.Parse("https://" + value)
+	if err != nil || parsed.Host != value || parsed.Hostname() == "" {
+		return invalid
+	}
+	if port := parsed.Port(); port != "" {
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			return invalid
+		}
+	} else if strings.HasSuffix(value, ":") {
+		return invalid
+	}
+	return nil
+}
+
+// FederationDomain returns c.Instance.FederationDomain(), or "" for a nil
+// config.
+func (c *Config) FederationDomain() string {
+	if c == nil {
+		return ""
+	}
+	return c.Instance.FederationDomain()
+}
+
+// PublicWebDomain returns c.Instance.PublicWebDomain(), or "" for a nil
+// config.
+func (c *Config) PublicWebDomain() string {
+	if c == nil {
+		return ""
+	}
+	return c.Instance.PublicWebDomain()
 }
 
 // TranslationConfig holds translation service configuration.

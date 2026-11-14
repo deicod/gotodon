@@ -353,31 +353,15 @@ func (h *Handler) isAllowedHost(host string) bool {
 }
 
 func (h *Handler) localDomain() string {
-	if h.cfg == nil {
-		return ""
-	}
-	return strings.TrimSpace(h.cfg.Instance.LocalDomain)
+	return h.cfg.FederationDomain()
 }
 
 func (h *Handler) webDomain() string {
-	if h.cfg == nil {
-		return ""
-	}
-	return strings.TrimSpace(h.cfg.Instance.WebDomain)
-}
-
-func (h *Handler) publicDomain() string {
-	if d := h.webDomain(); d != "" {
-		return d
-	}
-	if d := h.localDomain(); d != "" {
-		return d
-	}
-	return "example.com"
+	return h.cfg.PublicWebDomain()
 }
 
 func (h *Handler) rootURL() string {
-	return "https://" + h.publicDomain()
+	return "https://" + h.webDomain()
 }
 
 func (h *Handler) shortAccountURL(username string) string {

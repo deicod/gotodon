@@ -340,29 +340,11 @@ func (h *Handler) shortStatusURL(username string, statusID int64) string {
 }
 
 func (h *Handler) publicDomain() string {
-	if h.cfg == nil {
-		return "example.com"
-	}
-	if d := strings.TrimSpace(h.cfg.Instance.WebDomain); d != "" {
-		return d
-	}
-	if d := strings.TrimSpace(h.cfg.Instance.LocalDomain); d != "" {
-		return d
-	}
-	return "example.com"
+	return h.cfg.PublicWebDomain()
 }
 
 func (h *Handler) federationDomain() string {
-	if h.cfg == nil {
-		return "example.com"
-	}
-	if d := strings.TrimSpace(h.cfg.Instance.LocalDomain); d != "" {
-		return d
-	}
-	if d := strings.TrimSpace(h.cfg.Instance.WebDomain); d != "" {
-		return d
-	}
-	return "example.com"
+	return h.cfg.FederationDomain()
 }
 
 func displayName(account db.Account) string {

@@ -553,7 +553,7 @@ func serializeStatusesInternal(ctx context.Context, q statusSerializerQuerier, c
 
 			allTags = append(allTags, Tag{
 				Name: t.Name,
-				URL:  "https://" + cfg.Instance.LocalDomain + "/tags/" + t.Name, // Construct local tag URL
+				URL:  "https://" + cfg.FederationDomain() + "/tags/" + t.Name, // Construct local tag URL
 			})
 		}
 		if currentSID != -1 {

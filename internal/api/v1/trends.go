@@ -205,11 +205,7 @@ func parseTrendOffset(s string) int {
 }
 
 func (h *TrendsHandler) tagURL(name string) string {
-	domain := "localhost:3000"
-	if h.cfg != nil && h.cfg.Instance.LocalDomain != "" {
-		domain = h.cfg.Instance.LocalDomain
-	}
-	return "https://" + domain + "/tags/" + name
+	return "https://" + h.cfg.FederationDomain() + "/tags/" + name
 }
 
 func trendHistoryEntry(uses, accounts int64) HashtagUsage {

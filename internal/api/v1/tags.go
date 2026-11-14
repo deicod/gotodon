@@ -49,7 +49,7 @@ type TagDayCount struct {
 
 // dbTagToAPI converts a database Tag to API TagResponse
 func (h *TagsHandler) dbTagToAPI(tag db.Tag, following bool, history []TagDayCount) TagResponse {
-	url := "https://" + h.cfg.Instance.LocalDomain + "/tags/" + tag.Name
+	url := "https://" + h.cfg.FederationDomain() + "/tags/" + tag.Name
 	if history == nil {
 		history = []TagDayCount{}
 	}

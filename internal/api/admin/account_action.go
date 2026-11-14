@@ -468,8 +468,8 @@ func (h *AccountsHandler) sendWarningMail(ctx context.Context, target db.AdminGe
 
 	// User#account's local_username_and_domain.
 	acct := "@" + account.Username
-	if h.cfg != nil && h.cfg.Instance.LocalDomain != "" {
-		acct += "@" + h.cfg.Instance.LocalDomain
+	if domain := h.cfg.FederationDomain(); domain != "" {
+		acct += "@" + domain
 	}
 	mail := mailer.Mail{
 		Kind:   mailer.KindWarning,

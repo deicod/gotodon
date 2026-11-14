@@ -229,17 +229,11 @@ func parseDimension(val string) *int {
 }
 
 func (h *Handler) localDomain() string {
-	if h.cfg != nil && h.cfg.Instance.LocalDomain != "" {
-		return h.cfg.Instance.LocalDomain
-	}
-	return "localhost:3000"
+	return h.cfg.FederationDomain()
 }
 
 func (h *Handler) webDomain() string {
-	if h.cfg != nil && h.cfg.Instance.WebDomain != "" {
-		return h.cfg.Instance.WebDomain
-	}
-	return h.localDomain()
+	return h.cfg.PublicWebDomain()
 }
 
 func (h *Handler) rootURL() string {

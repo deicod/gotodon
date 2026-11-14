@@ -17,7 +17,7 @@
 This applies to all code: API handlers, database queries, tests, and documentation.
 
 ## Build, Test, and Development Commands
-- `go build ./...` (or `go run . serve --config ./gotodon.yaml --port 3000`) builds/runs the API; requires PostgreSQL and Redis reachable via `GOTODON_*` or `DB_*`/`REDIS_*` env vars.
+- `go build ./...` (or `go run . serve --config ./gotodon.yaml --port 3000`) builds/runs the API; requires PostgreSQL and Redis reachable via `GOTODON_*` or `DB_*`/`REDIS_*` env vars, and `LOCAL_DOMAIN` (`instance.local_domain`): `serve` refuses to start without it. Read domains only through `Config.FederationDomain()` / `Config.PublicWebDomain()`; never fall back to a placeholder domain (a test enforces both).
 - `go run . migrate up` / `... down|status|reset` runs goose migrations from `db/migrations`.
 - `sqlc generate` regenerates the typed DB client in `internal/db` from `db/queries`.
 - `go test ./...` exercises unit tests; some admin/federation cases are skipped without backing DB/Redis. Add focused runs with `go test ./internal/api/v1 -run TestStatusesHandler`.

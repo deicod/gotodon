@@ -229,11 +229,12 @@ func TestSerializeAccountImageURLs(t *testing.T) {
 			wantHeader: "https://web.example/headers/original/missing.png",
 		},
 		{
+			// No domain is invented; serve refuses to start without one.
 			name:       "no configuration",
 			cfg:        nil,
 			account:    db.Account{ID: 6, Username: "d", AvatarFileName: pgtype.Text{String: "a.png", Valid: true}},
-			wantAvatar: "https://localhost:3000/files/a.png",
-			wantHeader: "https://localhost:3000/headers/original/missing.png",
+			wantAvatar: "https:///files/a.png",
+			wantHeader: "https:///headers/original/missing.png",
 		},
 	}
 	for _, tt := range tests {

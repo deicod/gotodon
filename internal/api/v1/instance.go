@@ -17,7 +17,6 @@ const (
 	defaultInstanceTitle             = "Gotodon"
 	defaultInstanceDescription       = "A Mastodon-compatible server"
 	defaultInstanceVersion           = "4.5.3"
-	defaultInstanceDomainFallback    = "example.com"
 	defaultInstanceMaxImageSize      = int64(16777216)
 	defaultInstanceMaxVideoSize      = int64(103809024)
 	defaultInstanceMaxMediaPerPost   = 4
@@ -212,12 +211,6 @@ func (h *InstanceHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	federationDomain := instanceFederationDomain(h.cfg)
 	publicDomain := instancePublicDomain(h.cfg)
-	if federationDomain == "" {
-		federationDomain = defaultInstanceDomainFallback
-	}
-	if publicDomain == "" {
-		publicDomain = defaultInstanceDomainFallback
-	}
 
 	thumbnailURL := "https://" + publicDomain + "/images/preview.png"
 	streamingAPI := "wss://" + publicDomain
@@ -408,10 +401,8 @@ func (h *InstanceHandler) contactAccount(ctx context.Context, username string) *
 		acc, err = h.queries.GetAccountByUsername(ctx, user)
 	} else {
 		domain := strings.TrimSpace(parts[1])
-		if h.cfg != nil {
-			if strings.EqualFold(domain, h.cfg.Instance.LocalDomain) || strings.EqualFold(domain, h.cfg.Instance.WebDomain) {
-				domain = ""
-			}
+		if strings.EqualFold(domain, h.cfg.FederationDomain()) || strings.EqualFold(domain, h.cfg.PublicWebDomain()) {
+			domain = ""
 		}
 		if domain == "" {
 			acc, err = h.queries.GetAccountByUsername(ctx, user)
@@ -463,23 +454,11 @@ func instanceRules(ctx context.Context, queries instanceQuerier) []RuleResponse 
 }
 
 func instancePublicDomain(cfg *config.Config) string {
-	if cfg == nil {
-		return ""
-	}
-	if strings.TrimSpace(cfg.Instance.WebDomain) != "" {
-		return cfg.Instance.WebDomain
-	}
-	return cfg.Instance.LocalDomain
+	return cfg.PublicWebDomain()
 }
 
 func instanceFederationDomain(cfg *config.Config) string {
-	if cfg == nil {
-		return ""
-	}
-	if strings.TrimSpace(cfg.Instance.LocalDomain) != "" {
-		return cfg.Instance.LocalDomain
-	}
-	return instancePublicDomain(cfg)
+	return cfg.FederationDomain()
 }
 
 func defaultRegistrations(cfg *config.Config) (bool, bool) {

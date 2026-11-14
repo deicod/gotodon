@@ -42,7 +42,9 @@ may (a test fails if a `/files` URL is put together by hand).
 | `media.base_url` | `GOTODON_MEDIA_BASE_URL` | `https://<web domain>/files` |
 
 The web domain is `instance.web_domain`, or `instance.local_domain` when no
-web domain is set. `media.base_url` must be an absolute `http` or `https` URL
+web domain is set. `gotodon serve` refuses to start without
+`instance.local_domain`, so there is always a domain to build URLs on; no
+code falls back to a placeholder one. `media.base_url` must be an absolute `http` or `https` URL
 without credentials, query or fragment; gotodon refuses to start otherwise.
 Trailing slashes are dropped.
 

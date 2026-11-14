@@ -46,10 +46,7 @@ func (h *FeaturedTagsHandler) useDB() bool {
 }
 
 func (h *FeaturedTagsHandler) tagResponse(tag db.Tag, following bool) TagResponse {
-	domain := "example.com"
-	if h.cfg != nil {
-		domain = h.cfg.Instance.LocalDomain
-	}
+	domain := h.cfg.FederationDomain()
 	f := following
 	return TagResponse{
 		Name:      tag.Name,

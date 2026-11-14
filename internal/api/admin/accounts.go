@@ -83,10 +83,7 @@ var v1AccountsLinkParams = []string{
 // transactions of account actions. cfg names the server's local domain,
 // whose instance actor the handler recognizes, and may be nil.
 func NewAccountsHandler(queries *db.Queries, pool *pgxpool.Pool, cfg *config.Config) *AccountsHandler {
-	localDomain := ""
-	if cfg != nil {
-		localDomain = cfg.Instance.LocalDomain
-	}
+	localDomain := cfg.FederationDomain()
 	h := &AccountsHandler{
 		roles:            NewRoleLookup(queries),
 		cfg:              cfg,
