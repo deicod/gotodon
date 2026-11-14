@@ -9,6 +9,7 @@ import (
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 type profileQuerier interface {
@@ -92,8 +93,11 @@ func (h *ProfileHandler) DeleteHeader(w http.ResponseWriter, r *http.Request) {
 	writeCredentialAccount(ctx, w, h.queries, h.cfg, dbAcc)
 }
 
-// RegisterRoutes registers the profile routes
-func (h *ProfileHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("DELETE /api/v1/profile/avatar", h.DeleteAvatar)
-	mux.HandleFunc("DELETE /api/v1/profile/header", h.DeleteHeader)
+// RegisterRoutes registers the profile routes with the scopes of Mastodon's
+// Api::V1::Profile::AvatarsController and Api::V1::Profile::HeadersController.
+func (h *ProfileHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	write := middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteAccounts)
+
+	mux.HandleFunc("DELETE /api/v1/profile/avatar", write(h.DeleteAvatar))
+	mux.HandleFunc("DELETE /api/v1/profile/header", write(h.DeleteHeader))
 }

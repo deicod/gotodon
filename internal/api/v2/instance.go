@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/deicod/gotodon/internal/api/middleware"
 	v1 "github.com/deicod/gotodon/internal/api/v1"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
@@ -297,7 +298,9 @@ func (h *InstanceHandler) Get(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, resp)
 }
 
-func (h *InstanceHandler) RegisterRoutes(mux *http.ServeMux) {
+// RegisterRoutes registers the v2 instance route. It needs no scope, as
+// Mastodon's Api::V2::InstancesController.
+func (h *InstanceHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
 	mux.HandleFunc("GET /api/v2/instance", h.Get)
 }
 

@@ -20,6 +20,7 @@ import (
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/moderation"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 const (
@@ -836,15 +837,20 @@ func stringPtr(s string) *string {
 	return &s
 }
 
-// RegisterRoutes registers v2 notification routes.
-func (h *NotificationsHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v2/notifications", h.List)
-	mux.HandleFunc("POST /api/v2/notifications/clear", h.Clear)
-	mux.HandleFunc("GET /api/v2/notifications/unread_count", h.UnreadCount)
-	mux.HandleFunc("GET /api/v2/notifications/policy", h.GetPolicy)
-	mux.HandleFunc("PUT /api/v2/notifications/policy", h.UpdatePolicy)
-	mux.HandleFunc("PATCH /api/v2/notifications/policy", h.UpdatePolicy)
-	mux.HandleFunc("GET /api/v2/notifications/{group_key}", h.Get)
-	mux.HandleFunc("POST /api/v2/notifications/{group_key}/dismiss", h.Dismiss)
-	mux.HandleFunc("GET /api/v2/notifications/{group_key}/accounts", h.Accounts)
+// RegisterRoutes registers the v2 notification routes with the scopes of
+// Mastodon's Api::V2::NotificationsController and the
+// Api::V2::Notifications controllers.
+func (h *NotificationsHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	read := middleware.RequireScope(oauth.ScopeRead, oauth.ScopeReadNotifications)
+	write := middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteNotifications)
+
+	mux.HandleFunc("GET /api/v2/notifications", read(h.List))
+	mux.HandleFunc("POST /api/v2/notifications/clear", write(h.Clear))
+	mux.HandleFunc("GET /api/v2/notifications/unread_count", read(h.UnreadCount))
+	mux.HandleFunc("GET /api/v2/notifications/policy", read(h.GetPolicy))
+	mux.HandleFunc("PUT /api/v2/notifications/policy", write(h.UpdatePolicy))
+	mux.HandleFunc("PATCH /api/v2/notifications/policy", write(h.UpdatePolicy))
+	mux.HandleFunc("GET /api/v2/notifications/{group_key}", read(h.Get))
+	mux.HandleFunc("POST /api/v2/notifications/{group_key}/dismiss", write(h.Dismiss))
+	mux.HandleFunc("GET /api/v2/notifications/{group_key}/accounts", read(h.Accounts))
 }

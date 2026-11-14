@@ -206,20 +206,10 @@ func TestAccountsHandler_UpdateCredentials_ForbiddenWithWrongScope(t *testing.T)
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
 	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "read read:accounts")
 	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
 
-	h.UpdateCredentials(rec, req)
+	rec := serveRoutes(h.RegisterRoutes, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
-	}
-	var errResp map[string]string
-	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
-		t.Fatalf("decode error response: %v", err)
-	}
-	if got, want := errResp["error"], "This action is outside the authorized scopes"; got != want {
-		t.Fatalf("error = %q, want %q", got, want)
-	}
+	wantOutsideScopes(t, rec)
 }
 
 func TestAccountsHandler_UpdateCredentials_AllowsWriteScope(t *testing.T) {
@@ -231,9 +221,8 @@ func TestAccountsHandler_UpdateCredentials_AllowsWriteScope(t *testing.T) {
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
 	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "write")
 	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
 
-	h.UpdateCredentials(rec, req)
+	rec := serveRoutes(h.RegisterRoutes, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -249,30 +238,27 @@ func TestAccountsHandler_UpdateCredentials_AllowsWriteAccountsScope(t *testing.T
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
 	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "write:accounts")
 	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
 
-	h.UpdateCredentials(rec, req)
+	rec := serveRoutes(h.RegisterRoutes, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
 }
 
-func TestAccountsHandler_UpdateCredentials_AllowsEmptyScopesForCompatibility(t *testing.T) {
+func TestAccountsHandler_UpdateCredentials_RefusesEmptyScopes(t *testing.T) {
 	stub := &stubAccountUpdateQueries{}
 	h := NewAccountsHandler(stub, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: "example.com"}}, nil)
 
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/accounts/update_credentials", bytes.NewBufferString(`{}`))
 	req.Header.Set("Content-Type", "application/json")
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(1))
+	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "")
 	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
 
-	h.UpdateCredentials(rec, req)
+	rec := serveRoutes(h.RegisterRoutes, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
+	wantOutsideScopes(t, rec)
 }
 
 func TestAccountsHandler_UpdateCredentials_FieldsAttributesJSON(t *testing.T) {

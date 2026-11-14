@@ -38,13 +38,10 @@ func TestTimelinesHandler_Link_MissingScope(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/timelines/link?url=https://example.com", nil)
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyScopes, "write")
 	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
 
-	h.Link(rec, req)
+	rec := serveRoutes(h.RegisterRoutes, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
-	}
+	wantOutsideScopes(t, rec)
 }
 
 func TestTimelinesHandler_Link_InvalidPagination(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/streaming"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 // Filter action constants
@@ -1019,19 +1020,26 @@ func (h *FiltersHandler) DeleteStatus(w http.ResponseWriter, r *http.Request) {
 	h.publishFiltersChanged(ctx, accountID)
 }
 
-// RegisterRoutes registers filter routes
-func (h *FiltersHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v2/filters", h.List)
-	mux.HandleFunc("POST /api/v2/filters", h.Create)
-	mux.HandleFunc("GET /api/v2/filters/", h.dispatchGet)
-	mux.HandleFunc("POST /api/v2/filters/", h.dispatchPost)
-	mux.HandleFunc("PUT /api/v2/filters/{id}", h.Update)
-	mux.HandleFunc("PATCH /api/v2/filters/{id}", h.Update)
-	mux.HandleFunc("PUT /api/v2/filters/keywords/{id}", h.UpdateKeywordByID)
-	mux.HandleFunc("PATCH /api/v2/filters/keywords/{id}", h.UpdateKeywordByID)
-	mux.HandleFunc("PUT /api/v2/filters/", h.dispatchPut)
-	mux.HandleFunc("PATCH /api/v2/filters/", h.dispatchPut)
-	mux.HandleFunc("DELETE /api/v2/filters/", h.dispatchDelete)
+// RegisterRoutes registers the v2 filter routes with the scopes of Mastodon's
+// Api::V2::FiltersController, Api::V2::Filters::KeywordsController and
+// Api::V2::Filters::StatusesController: reading needs read:filters and every
+// other method write:filters. The trailing-slash patterns dispatch to the
+// keyword and status routes, which take the same scopes per method.
+func (h *FiltersHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	read := middleware.RequireScope(oauth.ScopeRead, oauth.ScopeReadFilters)
+	write := middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteFilters)
+
+	mux.HandleFunc("GET /api/v2/filters", read(h.List))
+	mux.HandleFunc("POST /api/v2/filters", write(h.Create))
+	mux.HandleFunc("GET /api/v2/filters/", read(h.dispatchGet))
+	mux.HandleFunc("POST /api/v2/filters/", write(h.dispatchPost))
+	mux.HandleFunc("PUT /api/v2/filters/{id}", write(h.Update))
+	mux.HandleFunc("PATCH /api/v2/filters/{id}", write(h.Update))
+	mux.HandleFunc("PUT /api/v2/filters/keywords/{id}", write(h.UpdateKeywordByID))
+	mux.HandleFunc("PATCH /api/v2/filters/keywords/{id}", write(h.UpdateKeywordByID))
+	mux.HandleFunc("PUT /api/v2/filters/", write(h.dispatchPut))
+	mux.HandleFunc("PATCH /api/v2/filters/", write(h.dispatchPut))
+	mux.HandleFunc("DELETE /api/v2/filters/", write(h.dispatchDelete))
 }
 
 func (h *FiltersHandler) publishFiltersChanged(ctx context.Context, accountID int64) {

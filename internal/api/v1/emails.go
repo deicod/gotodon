@@ -15,6 +15,7 @@ import (
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/mailer"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 type emailQuerier interface {
@@ -153,8 +154,9 @@ func (h *EmailsHandler) CheckConfirmation(w http.ResponseWriter, r *http.Request
 	web.JSON(w, http.StatusOK, map[string]bool{"confirmed": user.ConfirmedAt.Valid})
 }
 
-// RegisterRoutes registers the emails routes
-func (h *EmailsHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/v1/emails/confirmations", h.Confirmations)
-	mux.HandleFunc("GET /api/v1/emails/check_confirmation", h.CheckConfirmation)
+// RegisterRoutes registers the emails routes with the scopes of Mastodon's
+// Api::V1::Emails::ConfirmationsController.
+func (h *EmailsHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	mux.HandleFunc("POST /api/v1/emails/confirmations", middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteAccounts)(h.Confirmations))
+	mux.HandleFunc("GET /api/v1/emails/check_confirmation", middleware.RequireScopeIfToken(oauth.ScopeRead, oauth.ScopeReadAccounts)(h.CheckConfirmation))
 }

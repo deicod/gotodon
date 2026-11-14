@@ -18,6 +18,7 @@ import (
 	"github.com/deicod/gotodon/internal/moderation"
 	"github.com/deicod/gotodon/internal/streaming"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 // NotificationsHandler handles notification endpoints
@@ -786,21 +787,26 @@ func (h *NotificationsHandler) RequestsMerged(w http.ResponseWriter, r *http.Req
 	web.JSON(w, http.StatusOK, map[string]bool{"merged": merged})
 }
 
-// RegisterRoutes registers the notifications routes
-func (h *NotificationsHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/notifications", h.List)
-	mux.HandleFunc("GET /api/v1/notifications/unread_count", h.UnreadCount)
-	mux.HandleFunc("GET /api/v1/notifications/policy", h.GetPolicy)
-	mux.HandleFunc("PUT /api/v1/notifications/policy", h.UpdatePolicy)
-	mux.HandleFunc("PATCH /api/v1/notifications/policy", h.UpdatePolicy)
-	mux.HandleFunc("GET /api/v1/notifications/requests", h.ListRequests)
-	mux.HandleFunc("GET /api/v1/notifications/requests/{id}", h.GetRequest)
-	mux.HandleFunc("POST /api/v1/notifications/requests/{id}/accept", h.AcceptRequest)
-	mux.HandleFunc("POST /api/v1/notifications/requests/{id}/dismiss", h.DismissRequest)
-	mux.HandleFunc("POST /api/v1/notifications/requests/accept", h.AcceptRequests)
-	mux.HandleFunc("POST /api/v1/notifications/requests/dismiss", h.DismissRequests)
-	mux.HandleFunc("GET /api/v1/notifications/requests/merged", h.RequestsMerged)
-	mux.HandleFunc("GET /api/v1/notifications/{id}", h.Get)
-	mux.HandleFunc("POST /api/v1/notifications/clear", h.Clear)
-	mux.HandleFunc("POST /api/v1/notifications/{id}/dismiss", h.Dismiss)
+// RegisterRoutes registers the notifications routes with the scopes of
+// Mastodon's Api::V1::NotificationsController and the
+// Api::V1::Notifications controllers.
+func (h *NotificationsHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	read := middleware.RequireScope(oauth.ScopeRead, oauth.ScopeReadNotifications)
+	write := middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteNotifications)
+
+	mux.HandleFunc("GET /api/v1/notifications", read(h.List))
+	mux.HandleFunc("GET /api/v1/notifications/unread_count", read(h.UnreadCount))
+	mux.HandleFunc("GET /api/v1/notifications/policy", read(h.GetPolicy))
+	mux.HandleFunc("PUT /api/v1/notifications/policy", write(h.UpdatePolicy))
+	mux.HandleFunc("PATCH /api/v1/notifications/policy", write(h.UpdatePolicy))
+	mux.HandleFunc("GET /api/v1/notifications/requests", read(h.ListRequests))
+	mux.HandleFunc("GET /api/v1/notifications/requests/{id}", read(h.GetRequest))
+	mux.HandleFunc("POST /api/v1/notifications/requests/{id}/accept", write(h.AcceptRequest))
+	mux.HandleFunc("POST /api/v1/notifications/requests/{id}/dismiss", write(h.DismissRequest))
+	mux.HandleFunc("POST /api/v1/notifications/requests/accept", write(h.AcceptRequests))
+	mux.HandleFunc("POST /api/v1/notifications/requests/dismiss", write(h.DismissRequests))
+	mux.HandleFunc("GET /api/v1/notifications/requests/merged", read(h.RequestsMerged))
+	mux.HandleFunc("GET /api/v1/notifications/{id}", read(h.Get))
+	mux.HandleFunc("POST /api/v1/notifications/clear", write(h.Clear))
+	mux.HandleFunc("POST /api/v1/notifications/{id}/dismiss", write(h.Dismiss))
 }

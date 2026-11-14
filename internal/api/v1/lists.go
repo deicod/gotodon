@@ -15,6 +15,7 @@ import (
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 // RepliesPolicy constants matching database enum
@@ -483,16 +484,21 @@ func (h *ListsHandler) RemoveAccounts(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
-// RegisterRoutes registers list routes
-func (h *ListsHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/lists", h.GetAll)
-	mux.HandleFunc("POST /api/v1/lists", h.Create)
-	mux.HandleFunc("GET /api/v1/lists/{id}", h.Get)
-	mux.HandleFunc("PUT /api/v1/lists/{id}", h.Update)
-	mux.HandleFunc("PATCH /api/v1/lists/{id}", h.Update)
-	mux.HandleFunc("DELETE /api/v1/lists/{id}", h.Delete)
-	mux.HandleFunc("GET /api/v1/lists/{id}/accounts", h.GetAccounts)
-	mux.HandleFunc("POST /api/v1/lists/{id}/accounts", h.AddAccounts)
-	mux.HandleFunc("DELETE /api/v1/lists/{id}/accounts", h.RemoveAccounts)
-	mux.HandleFunc("GET /api/v1/accounts/{id}/lists", h.GetListsForAccount)
+// RegisterRoutes registers the list routes with the scopes of Mastodon's
+// Api::V1::ListsController, Api::V1::Lists::AccountsController and
+// Api::V1::Accounts::ListsController.
+func (h *ListsHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	read := middleware.RequireScope(oauth.ScopeRead, oauth.ScopeReadLists)
+	write := middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteLists)
+
+	mux.HandleFunc("GET /api/v1/lists", read(h.GetAll))
+	mux.HandleFunc("POST /api/v1/lists", write(h.Create))
+	mux.HandleFunc("GET /api/v1/lists/{id}", read(h.Get))
+	mux.HandleFunc("PUT /api/v1/lists/{id}", write(h.Update))
+	mux.HandleFunc("PATCH /api/v1/lists/{id}", write(h.Update))
+	mux.HandleFunc("DELETE /api/v1/lists/{id}", write(h.Delete))
+	mux.HandleFunc("GET /api/v1/lists/{id}/accounts", read(h.GetAccounts))
+	mux.HandleFunc("POST /api/v1/lists/{id}/accounts", write(h.AddAccounts))
+	mux.HandleFunc("DELETE /api/v1/lists/{id}/accounts", write(h.RemoveAccounts))
+	mux.HandleFunc("GET /api/v1/accounts/{id}/lists", read(h.GetListsForAccount))
 }

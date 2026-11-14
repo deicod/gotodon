@@ -163,12 +163,6 @@ func (h *TimelinesHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // Link handles GET /api/v1/timelines/link
 func (h *TimelinesHandler) Link(w http.ResponseWriter, r *http.Request) {
-	scopes := middleware.GetScopes(r.Context())
-	if scopes != "" && !oauth.HasScope(scopes, "read:statuses") {
-		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
-		return
-	}
-
 	linkURL := web.QueryParam(r, "url")
 	if linkURL == "" {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
@@ -272,11 +266,17 @@ func parseOptionalTimelineID(raw string) (int64, bool) {
 	return v, true
 }
 
-// RegisterRoutes registers the timelines routes
-func (h *TimelinesHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/timelines/home", h.Home)
-	mux.HandleFunc("GET /api/v1/timelines/public", h.Public)
-	mux.HandleFunc("GET /api/v1/timelines/link", h.Link)
-	mux.HandleFunc("GET /api/v1/timelines/tag/{hashtag}", h.Hashtag)
-	mux.HandleFunc("GET /api/v1/timelines/list/{list_id}", h.List)
+// RegisterRoutes registers the timelines routes with the scopes of Mastodon's
+// Api::V1::Timelines controllers. The public, link and hashtag timelines
+// also serve anonymous clients.
+func (h *TimelinesHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	public := middleware.RequireScopeIfToken(oauth.ScopeRead, oauth.ScopeReadStatuses)
+	home := middleware.RequireScope(oauth.ScopeRead, oauth.ScopeReadStatuses)
+	lists := middleware.RequireScope(oauth.ScopeRead, oauth.ScopeReadLists)
+
+	mux.HandleFunc("GET /api/v1/timelines/home", home(h.Home))
+	mux.HandleFunc("GET /api/v1/timelines/public", public(h.Public))
+	mux.HandleFunc("GET /api/v1/timelines/link", public(h.Link))
+	mux.HandleFunc("GET /api/v1/timelines/tag/{hashtag}", public(h.Hashtag))
+	mux.HandleFunc("GET /api/v1/timelines/list/{list_id}", lists(h.List))
 }

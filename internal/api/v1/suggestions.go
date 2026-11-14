@@ -13,6 +13,7 @@ import (
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 // SuggestionsHandler handles suggestions endpoints
@@ -122,8 +123,9 @@ func (h *SuggestionsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, map[string]any{})
 }
 
-// RegisterRoutes registers suggestion routes
-func (h *SuggestionsHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/suggestions", h.Get)
-	mux.HandleFunc("DELETE /api/v1/suggestions/{account_id}", h.Delete)
+// RegisterRoutes registers the v1 suggestion routes with the scopes of
+// Mastodon's Api::V1::SuggestionsController.
+func (h *SuggestionsHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	mux.HandleFunc("GET /api/v1/suggestions", middleware.RequireScope(oauth.ScopeRead, oauth.ScopeReadAccounts)(h.Get))
+	mux.HandleFunc("DELETE /api/v1/suggestions/{account_id}", middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteAccounts)(h.Delete))
 }

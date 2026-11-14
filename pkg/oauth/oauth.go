@@ -27,10 +27,39 @@ var (
 
 // Mastodon OAuth scopes (from Mastodon documentation)
 const (
-	ScopeRead   = "read"
-	ScopeWrite  = "write"
-	ScopeFollow = "follow"
-	ScopePush   = "push"
+	ScopeRead    = "read"
+	ScopeWrite   = "write"
+	ScopeFollow  = "follow"
+	ScopePush    = "push"
+	ScopeProfile = "profile"
+
+	// Granular user scopes. read and write cover their children (see
+	// HasScope).
+	ScopeReadAccounts      = "read:accounts"
+	ScopeReadBlocks        = "read:blocks"
+	ScopeReadBookmarks     = "read:bookmarks"
+	ScopeReadFavourites    = "read:favourites"
+	ScopeReadFilters       = "read:filters"
+	ScopeReadFollows       = "read:follows"
+	ScopeReadLists         = "read:lists"
+	ScopeReadMutes         = "read:mutes"
+	ScopeReadNotifications = "read:notifications"
+	ScopeReadSearch        = "read:search"
+	ScopeReadStatuses      = "read:statuses"
+
+	ScopeWriteAccounts      = "write:accounts"
+	ScopeWriteBlocks        = "write:blocks"
+	ScopeWriteBookmarks     = "write:bookmarks"
+	ScopeWriteConversations = "write:conversations"
+	ScopeWriteFavourites    = "write:favourites"
+	ScopeWriteFilters       = "write:filters"
+	ScopeWriteFollows       = "write:follows"
+	ScopeWriteLists         = "write:lists"
+	ScopeWriteMedia         = "write:media"
+	ScopeWriteMutes         = "write:mutes"
+	ScopeWriteNotifications = "write:notifications"
+	ScopeWriteReports       = "write:reports"
+	ScopeWriteStatuses      = "write:statuses"
 
 	// Admin scopes. admin:read and admin:write cover their per-resource
 	// children (see HasScope).

@@ -62,20 +62,10 @@ func TestPreferencesHandler_Get_ForbiddenWithWrongScope(t *testing.T) {
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(12345))
 	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "write write:accounts")
 	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
 
-	h.Get(rec, req)
+	rec := serveRoutes(h.RegisterRoutes, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
-	}
-	var errResp map[string]string
-	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
-		t.Fatalf("decode error response: %v", err)
-	}
-	if got, want := errResp["error"], "This action is outside the authorized scopes"; got != want {
-		t.Fatalf("error = %q, want %q", got, want)
-	}
+	wantOutsideScopes(t, rec)
 }
 
 func TestPreferencesHandler_Get_AllowsReadAccountsScope(t *testing.T) {
@@ -84,9 +74,8 @@ func TestPreferencesHandler_Get_AllowsReadAccountsScope(t *testing.T) {
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(12345))
 	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "read:accounts")
 	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
 
-	h.Get(rec, req)
+	rec := serveRoutes(h.RegisterRoutes, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -99,9 +88,8 @@ func TestPreferencesHandler_Get_AllowsReadScopeHierarchy(t *testing.T) {
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyAccountID, int64(12345))
 	ctx = context.WithValue(ctx, middleware.ContextKeyScopes, "read")
 	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
 
-	h.Get(rec, req)
+	rec := serveRoutes(h.RegisterRoutes, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)

@@ -674,8 +674,9 @@ func (h *InstanceInfoHandler) DomainBlocksPublic(w http.ResponseWriter, r *http.
 	web.JSON(w, http.StatusOK, resp)
 }
 
-// RegisterRoutes registers the instance info routes
-func (h *InstanceInfoHandler) RegisterRoutes(mux *http.ServeMux) {
+// RegisterRoutes registers the instance info routes. They need no scope, as
+// Mastodon's Api::V1::Instances controllers.
+func (h *InstanceInfoHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
 	mux.HandleFunc("GET /api/v1/instance/rules", h.Rules)
 	mux.HandleFunc("GET /api/v1/instance/peers", h.Peers)
 	mux.HandleFunc("GET /api/v1/instance/activity", h.Activity)

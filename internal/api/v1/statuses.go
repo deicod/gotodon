@@ -1171,12 +1171,6 @@ func trimTrailingPunctuation(value string) string {
 
 // Index handles GET /api/v1/statuses
 func (h *StatusesHandler) Index(w http.ResponseWriter, r *http.Request) {
-	scopes := middleware.GetScopes(r.Context())
-	if scopes != "" && !oauth.HasScope(scopes, "read:statuses") {
-		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
-		return
-	}
-
 	ids := parseStatusIDs(r)
 	if len(ids) > defaultStatusesLimit {
 		web.JSONError(w, http.StatusUnprocessableEntity, "Validation failed")
@@ -1409,12 +1403,6 @@ func (h *StatusesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
-		return
-	}
-
-	scopes := middleware.GetScopes(r.Context())
-	if !oauth.HasScope(scopes, "write:statuses") {
-		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
 		return
 	}
 
@@ -2037,12 +2025,6 @@ func (h *StatusesHandler) Mute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scopes := middleware.GetScopes(r.Context())
-	if !oauth.HasScope(scopes, "write:mutes") {
-		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
-		return
-	}
-
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		web.JSONError(w, http.StatusNotFound, "Record not found")
@@ -2084,12 +2066,6 @@ func (h *StatusesHandler) Unmute(w http.ResponseWriter, r *http.Request) {
 	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
-		return
-	}
-
-	scopes := middleware.GetScopes(r.Context())
-	if !oauth.HasScope(scopes, "write:mutes") {
-		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
 		return
 	}
 
@@ -2512,12 +2488,6 @@ func (h *StatusesHandler) InteractionPolicy(w http.ResponseWriter, r *http.Reque
 	accountID, ok := middleware.GetAccountID(r.Context())
 	if !ok {
 		web.JSONError(w, http.StatusUnauthorized, "The access token is invalid")
-		return
-	}
-
-	scopes := middleware.GetScopes(r.Context())
-	if !oauth.HasScope(scopes, "write:statuses") {
-		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
 		return
 	}
 
@@ -3510,32 +3480,42 @@ func (h *StatusesHandler) RevokeQuote(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, map[string]interface{}{})
 }
 
-// RegisterRoutes registers the statuses routes
-func (h *StatusesHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/statuses", h.Index)
-	mux.HandleFunc("POST /api/v1/statuses", h.Create)
-	mux.HandleFunc("GET /api/v1/statuses/{id}", h.Get)
-	mux.HandleFunc("PUT /api/v1/statuses/{id}", h.Edit)
-	mux.HandleFunc("PATCH /api/v1/statuses/{id}", h.Edit)
-	mux.HandleFunc("DELETE /api/v1/statuses/{id}", h.Delete)
-	mux.HandleFunc("GET /api/v1/statuses/{id}/context", h.Context)
-	mux.HandleFunc("GET /api/v1/statuses/{id}/history", h.History)
-	mux.HandleFunc("GET /api/v1/statuses/{id}/source", h.Source)
-	mux.HandleFunc("PUT /api/v1/statuses/{id}/interaction_policy", h.InteractionPolicy)
-	mux.HandleFunc("PATCH /api/v1/statuses/{id}/interaction_policy", h.InteractionPolicy)
-	mux.HandleFunc("POST /api/v1/statuses/{id}/translate", h.Translate)
-	mux.HandleFunc("GET /api/v1/statuses/{id}/quotes", h.Quotes)
-	mux.HandleFunc("POST /api/v1/statuses/{id}/quotes/{quote_id}/revoke", h.RevokeQuote)
-	mux.HandleFunc("POST /api/v1/statuses/{id}/favourite", h.Favourite)
-	mux.HandleFunc("POST /api/v1/statuses/{id}/unfavourite", h.Unfavourite)
-	mux.HandleFunc("POST /api/v1/statuses/{id}/reblog", h.Reblog)
-	mux.HandleFunc("POST /api/v1/statuses/{id}/unreblog", h.Unreblog)
-	mux.HandleFunc("POST /api/v1/statuses/{id}/bookmark", h.Bookmark)
-	mux.HandleFunc("POST /api/v1/statuses/{id}/unbookmark", h.Unbookmark)
-	mux.HandleFunc("POST /api/v1/statuses/{id}/mute", h.Mute)
-	mux.HandleFunc("POST /api/v1/statuses/{id}/unmute", h.Unmute)
-	mux.HandleFunc("POST /api/v1/statuses/{id}/pin", h.Pin)
-	mux.HandleFunc("POST /api/v1/statuses/{id}/unpin", h.Unpin)
-	mux.HandleFunc("GET /api/v1/statuses/{id}/favourited_by", h.FavouritedBy)
-	mux.HandleFunc("GET /api/v1/statuses/{id}/reblogged_by", h.RebloggedBy)
+// RegisterRoutes registers the statuses routes with the scopes of Mastodon's
+// Api::V1::StatusesController and the Api::V1::Statuses controllers.
+func (h *StatusesHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	readStatuses := middleware.RequireScopeIfToken(oauth.ScopeRead, oauth.ScopeReadStatuses)
+	readAccounts := middleware.RequireScopeIfToken(oauth.ScopeRead, oauth.ScopeReadAccounts)
+	ownStatuses := middleware.RequireScope(oauth.ScopeRead, oauth.ScopeReadStatuses)
+	writeStatuses := middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteStatuses)
+	favourites := middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteFavourites)
+	bookmarks := middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteBookmarks)
+	mutes := middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteMutes)
+	pins := middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteAccounts)
+
+	mux.HandleFunc("GET /api/v1/statuses", readStatuses(h.Index))
+	mux.HandleFunc("POST /api/v1/statuses", writeStatuses(h.Create))
+	mux.HandleFunc("GET /api/v1/statuses/{id}", readStatuses(h.Get))
+	mux.HandleFunc("PUT /api/v1/statuses/{id}", writeStatuses(h.Edit))
+	mux.HandleFunc("PATCH /api/v1/statuses/{id}", writeStatuses(h.Edit))
+	mux.HandleFunc("DELETE /api/v1/statuses/{id}", writeStatuses(h.Delete))
+	mux.HandleFunc("GET /api/v1/statuses/{id}/context", readStatuses(h.Context))
+	mux.HandleFunc("GET /api/v1/statuses/{id}/history", readStatuses(h.History))
+	mux.HandleFunc("GET /api/v1/statuses/{id}/source", ownStatuses(h.Source))
+	mux.HandleFunc("PUT /api/v1/statuses/{id}/interaction_policy", writeStatuses(h.InteractionPolicy))
+	mux.HandleFunc("PATCH /api/v1/statuses/{id}/interaction_policy", writeStatuses(h.InteractionPolicy))
+	mux.HandleFunc("POST /api/v1/statuses/{id}/translate", ownStatuses(h.Translate))
+	mux.HandleFunc("GET /api/v1/statuses/{id}/quotes", ownStatuses(h.Quotes))
+	mux.HandleFunc("POST /api/v1/statuses/{id}/quotes/{quote_id}/revoke", writeStatuses(h.RevokeQuote))
+	mux.HandleFunc("POST /api/v1/statuses/{id}/favourite", favourites(h.Favourite))
+	mux.HandleFunc("POST /api/v1/statuses/{id}/unfavourite", favourites(h.Unfavourite))
+	mux.HandleFunc("POST /api/v1/statuses/{id}/reblog", writeStatuses(h.Reblog))
+	mux.HandleFunc("POST /api/v1/statuses/{id}/unreblog", writeStatuses(h.Unreblog))
+	mux.HandleFunc("POST /api/v1/statuses/{id}/bookmark", bookmarks(h.Bookmark))
+	mux.HandleFunc("POST /api/v1/statuses/{id}/unbookmark", bookmarks(h.Unbookmark))
+	mux.HandleFunc("POST /api/v1/statuses/{id}/mute", mutes(h.Mute))
+	mux.HandleFunc("POST /api/v1/statuses/{id}/unmute", mutes(h.Unmute))
+	mux.HandleFunc("POST /api/v1/statuses/{id}/pin", pins(h.Pin))
+	mux.HandleFunc("POST /api/v1/statuses/{id}/unpin", pins(h.Unpin))
+	mux.HandleFunc("GET /api/v1/statuses/{id}/favourited_by", readAccounts(h.FavouritedBy))
+	mux.HandleFunc("GET /api/v1/statuses/{id}/reblogged_by", readAccounts(h.RebloggedBy))
 }

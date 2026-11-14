@@ -13,6 +13,7 @@ import (
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 // AnnualReportsHandler handles annual reports endpoints
@@ -171,9 +172,13 @@ func (h *AnnualReportsHandler) dbReportToAPI(r db.GeneratedAnnualReport) AnnualR
 	return report
 }
 
-// RegisterRoutes registers the annual reports routes
-func (h *AnnualReportsHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/annual_reports", h.List)
-	mux.HandleFunc("GET /api/v1/annual_reports/{id}", h.Get)
-	mux.HandleFunc("POST /api/v1/annual_reports/{id}/read", h.MarkAsRead)
+// RegisterRoutes registers the annual reports routes with the scopes of
+// Mastodon's Api::V1::AnnualReportsController.
+func (h *AnnualReportsHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	read := middleware.RequireScope(oauth.ScopeRead, oauth.ScopeReadAccounts)
+	write := middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteAccounts)
+
+	mux.HandleFunc("GET /api/v1/annual_reports", read(h.List))
+	mux.HandleFunc("GET /api/v1/annual_reports/{id}", read(h.Get))
+	mux.HandleFunc("POST /api/v1/annual_reports/{id}/read", write(h.MarkAsRead))
 }

@@ -358,8 +358,10 @@ func splitAppRedirectURIs(raw string) []string {
 	return uris
 }
 
-// RegisterRoutes registers the apps routes
-func (h *AppsHandler) RegisterRoutes(mux *http.ServeMux) {
+// RegisterRoutes registers the apps routes. They need no scope, as in
+// Mastodon's Api::V1::AppsController and Api::V1::Apps::CredentialsController:
+// any valid token may read its own application.
+func (h *AppsHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
 	mux.HandleFunc("POST /api/v1/apps", h.Create)
 	mux.HandleFunc("GET /api/v1/apps/verify_credentials", h.VerifyCredentials)
 }

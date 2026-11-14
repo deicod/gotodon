@@ -152,28 +152,6 @@ func Authenticate(validator TokenValidator) func(http.Handler) http.Handler {
 	}
 }
 
-// RequireScope returns middleware that checks for required scopes
-func RequireScope(requiredScopes ...string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			scopes, ok := r.Context().Value(ContextKeyScopes).(string)
-			if !ok || scopes == "" {
-				web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
-				return
-			}
-
-			for _, required := range requiredScopes {
-				if !hasScope(scopes, required) {
-					web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
-					return
-				}
-			}
-
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
 // OptionalAuth returns middleware that optionally authenticates
 func OptionalAuth(validator TokenValidator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -275,32 +253,6 @@ func clientIP(r *http.Request) string {
 		return host
 	}
 	return strings.TrimSpace(r.RemoteAddr)
-}
-
-func hasScope(tokenScopes, required string) bool {
-	scopes := strings.Fields(tokenScopes)
-	for _, scope := range scopes {
-		if scope == required {
-			return true
-		}
-		// Check hierarchical scope
-		if strings.HasPrefix(required, scope+":") {
-			return true
-		}
-		if scope == "read" && strings.HasPrefix(required, "read:") {
-			return true
-		}
-		if scope == "write" && strings.HasPrefix(required, "write:") {
-			return true
-		}
-		if scope == "admin:read" && strings.HasPrefix(required, "admin:read:") {
-			return true
-		}
-		if scope == "admin:write" && strings.HasPrefix(required, "admin:write:") {
-			return true
-		}
-	}
-	return false
 }
 
 func authErrorMessage(err error) string {

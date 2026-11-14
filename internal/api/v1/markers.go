@@ -9,6 +9,7 @@ import (
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/oauth"
 )
 
 // MarkersHandler handles marker endpoints
@@ -174,8 +175,9 @@ func (h *MarkersHandler) Update(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, http.StatusOK, result)
 }
 
-// RegisterRoutes registers marker routes
-func (h *MarkersHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/markers", h.Get)
-	mux.HandleFunc("POST /api/v1/markers", h.Update)
+// RegisterRoutes registers the marker routes with the scopes of Mastodon's
+// Api::V1::MarkersController.
+func (h *MarkersHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	mux.HandleFunc("GET /api/v1/markers", middleware.RequireScope(oauth.ScopeRead, oauth.ScopeReadStatuses)(h.Get))
+	mux.HandleFunc("POST /api/v1/markers", middleware.RequireScope(oauth.ScopeWrite, oauth.ScopeWriteStatuses)(h.Update))
 }

@@ -167,12 +167,6 @@ func (h *AsyncRefreshHandler) Show(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scopes := middleware.GetScopes(r.Context())
-	if scopes != "" && !oauth.HasScope(scopes, "read") {
-		web.JSONError(w, http.StatusForbidden, "This action is outside the authorized scopes")
-		return
-	}
-
 	if h.signer == nil {
 		web.JSONError(w, http.StatusInternalServerError, "Async refresh unavailable")
 		return
@@ -214,7 +208,9 @@ func (h *AsyncRefreshHandler) Show(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// RegisterRoutes registers v1 alpha async refresh routes.
-func (h *AsyncRefreshHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1_alpha/async_refreshes/{id}", h.Show)
+// RegisterRoutes registers the v1 alpha async refresh route with the scope of
+// Mastodon's Api::V1Alpha::AsyncRefreshesController, which accepts only read
+// itself, not one of its children.
+func (h *AsyncRefreshHandler) RegisterRoutes(mux middleware.RouteRegistrar) {
+	mux.HandleFunc("GET /api/v1_alpha/async_refreshes/{id}", middleware.RequireScope(oauth.ScopeRead)(h.Show))
 }

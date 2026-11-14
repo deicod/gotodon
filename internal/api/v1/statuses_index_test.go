@@ -44,13 +44,10 @@ func TestStatusesHandler_Index_RequiresReadScopeWhenTokenPresent(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/statuses", nil)
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyScopes, "write")
 	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
 
-	h.Index(rec, req)
+	rec := serveRoutes(h.RegisterRoutes, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
-	}
+	wantOutsideScopes(t, rec)
 }
 
 func TestStatusesHandler_Index_AllowsReadScope(t *testing.T) {
@@ -58,9 +55,8 @@ func TestStatusesHandler_Index_AllowsReadScope(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/statuses", nil)
 	ctx := context.WithValue(req.Context(), middleware.ContextKeyScopes, "read:statuses")
 	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
 
-	h.Index(rec, req)
+	rec := serveRoutes(h.RegisterRoutes, req)
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
