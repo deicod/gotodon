@@ -186,7 +186,7 @@ func TestHandler_Show_WebDomainResourceSuccessWithFederationSubject(t *testing.T
 				Username:          "alice",
 				Uri:               "https://social.example/users/alice",
 				AvatarContentType: pgtype.Text{String: "image/jpeg", Valid: true},
-				AvatarRemoteUrl:   pgtype.Text{String: "/accounts/avatars/alice.jpg", Valid: true},
+				AvatarFileName:    pgtype.Text{String: "accounts/avatars/alice.jpg", Valid: true},
 			},
 		},
 	}, &config.Config{
@@ -222,7 +222,7 @@ func TestHandler_Show_WebDomainResourceSuccessWithFederationSubject(t *testing.T
 	assertLink(t, links, webFingerProfilePageRel, "text/html", "https://web.example/@alice", "")
 	assertLink(t, links, "self", activityPubContentType, "https://social.example/users/alice", "")
 	assertLink(t, links, webFingerSubscribeRel, "", "", "https://web.example/authorize_interaction?uri={uri}")
-	assertLink(t, links, webFingerAvatarRel, "image/jpeg", "https://web.example/accounts/avatars/alice.jpg", "")
+	assertLink(t, links, webFingerAvatarRel, "image/jpeg", "https://web.example/files/accounts/avatars/alice.jpg", "")
 }
 
 func TestHandler_Show_URLResourceSuccess(t *testing.T) {

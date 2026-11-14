@@ -14,6 +14,7 @@ import (
 
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/media"
 )
 
 const (
@@ -317,27 +318,13 @@ func (h *Handler) accountTitle(account db.Account) string {
 }
 
 func (h *Handler) accountImageURL(account db.Account) string {
-	if account.AvatarRemoteUrl.Valid && strings.TrimSpace(account.AvatarRemoteUrl.String) != "" {
-		return h.imageURL(account.AvatarRemoteUrl.String)
+	if remote := strings.TrimSpace(account.AvatarRemoteUrl.String); media.IsAbsoluteURL(remote) {
+		return remote
 	}
-	if account.AvatarFileName.Valid && strings.TrimSpace(account.AvatarFileName.String) != "" {
-		return h.imageURL(account.AvatarFileName.String)
+	if image := media.FileURL(media.NewStorage(h.cfg), account.AvatarFileName.String); image != "" {
+		return image
 	}
 	return h.rootURL() + "/icons/android-chrome-192x192.png"
-}
-
-func (h *Handler) imageURL(value string) string {
-	trimmedVal := strings.TrimSpace(value)
-	if trimmedVal == "" {
-		return ""
-	}
-	if strings.HasPrefix(trimmedVal, "http://") || strings.HasPrefix(trimmedVal, "https://") {
-		return trimmedVal
-	}
-	if !strings.HasPrefix(trimmedVal, "/") {
-		trimmedVal = "/files/" + trimmedVal
-	}
-	return h.rootURL() + trimmedVal
 }
 
 func (h *Handler) rootURL() string {

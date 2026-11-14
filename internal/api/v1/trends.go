@@ -10,6 +10,7 @@ import (
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/media"
 	"github.com/deicod/gotodon/internal/web"
 )
 
@@ -165,7 +166,7 @@ func (h *TrendsHandler) Links(w http.ResponseWriter, r *http.Request) {
 	resp := make([]TrendingLink, 0, len(rows))
 	for _, row := range rows {
 		card := previewCardFromTrendRow(row)
-		preview := serializePreviewCard(card, authorAccounts)
+		preview := serializePreviewCard(media.NewStorage(h.cfg), card, authorAccounts)
 		if preview == nil {
 			continue
 		}

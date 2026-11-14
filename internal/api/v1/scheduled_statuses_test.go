@@ -122,7 +122,7 @@ func scheduledStatusRequestWithToken(method, path, body string, accountID int64,
 }
 
 func TestScheduledStatusesHandler_Update_Unauthorized(t *testing.T) {
-	h := NewScheduledStatusesHandler(nil)
+	h := NewScheduledStatusesHandler(nil, nil)
 
 	req, rec := scheduledStatusRequest(http.MethodPut, "/api/v1/scheduled_statuses/1", `{"scheduled_at":"2024-01-01T00:00:00Z"}`, 0, "")
 	req.SetPathValue("id", "1")
@@ -135,7 +135,7 @@ func TestScheduledStatusesHandler_Update_Unauthorized(t *testing.T) {
 }
 
 func TestScheduledStatusesHandler_Update_Forbidden(t *testing.T) {
-	h := NewScheduledStatusesHandler(nil)
+	h := NewScheduledStatusesHandler(nil, nil)
 
 	req, _ := scheduledStatusRequest(http.MethodPut, "/api/v1/scheduled_statuses/1", `{"scheduled_at":"2024-01-01T00:00:00Z"}`, 10, "read")
 
@@ -153,7 +153,7 @@ func TestScheduledStatusesHandler_Update_InvalidScheduledAt(t *testing.T) {
 			ScheduledAt: pgtype.Timestamptz{Time: now, Valid: true},
 		},
 	}
-	h := NewScheduledStatusesHandler(stub)
+	h := NewScheduledStatusesHandler(stub, nil)
 
 	req, rec := scheduledStatusRequest(http.MethodPut, "/api/v1/scheduled_statuses/10", `{"scheduled_at":"nope"}`, 5, "write:statuses")
 	req.SetPathValue("id", "10")
@@ -174,7 +174,7 @@ func TestScheduledStatusesHandler_Update_TooSoon(t *testing.T) {
 			ScheduledAt: pgtype.Timestamptz{Time: now.Add(10 * time.Minute), Valid: true},
 		},
 	}
-	h := NewScheduledStatusesHandler(stub)
+	h := NewScheduledStatusesHandler(stub, nil)
 
 	tooSoon := now.Add(2 * time.Minute).Format(time.RFC3339Nano)
 	req, rec := scheduledStatusRequest(http.MethodPut, "/api/v1/scheduled_statuses/12", fmt.Sprintf(`{"scheduled_at":"%s"}`, tooSoon), 5, "write:statuses")
@@ -200,7 +200,7 @@ func TestScheduledStatusesHandler_Update_TotalLimitExceeded(t *testing.T) {
 			ScheduledAt: pgtype.Timestamptz{Time: now.Add(10 * time.Minute), Valid: true},
 		},
 	}
-	h := NewScheduledStatusesHandler(stub)
+	h := NewScheduledStatusesHandler(stub, nil)
 
 	future := now.Add(10 * time.Minute).Format(time.RFC3339Nano)
 	req, rec := scheduledStatusRequest(http.MethodPut, "/api/v1/scheduled_statuses/20", fmt.Sprintf(`{"scheduled_at":"%s"}`, future), 5, "write:statuses")
@@ -224,7 +224,7 @@ func TestScheduledStatusesHandler_Update_DailyLimitExceeded(t *testing.T) {
 			ScheduledAt: pgtype.Timestamptz{Time: now.Add(20 * time.Minute), Valid: true},
 		},
 	}
-	h := NewScheduledStatusesHandler(stub)
+	h := NewScheduledStatusesHandler(stub, nil)
 
 	future := now.Add(20 * time.Minute).Format(time.RFC3339Nano)
 	req, rec := scheduledStatusRequest(http.MethodPut, "/api/v1/scheduled_statuses/21", fmt.Sprintf(`{"scheduled_at":"%s"}`, future), 5, "write:statuses")
@@ -241,7 +241,7 @@ func TestScheduledStatusesHandler_Update_NotFound(t *testing.T) {
 	stub := &scheduledStatusStub{
 		getErr: pgx.ErrNoRows,
 	}
-	h := NewScheduledStatusesHandler(stub)
+	h := NewScheduledStatusesHandler(stub, nil)
 
 	req, rec := scheduledStatusRequest(http.MethodPut, "/api/v1/scheduled_statuses/44", `{"scheduled_at":"2024-01-01T00:00:00Z"}`, 5, "write:statuses")
 	req.SetPathValue("id", "44")
@@ -266,7 +266,7 @@ func TestScheduledStatusesHandler_Update_Success(t *testing.T) {
 			Params:      []byte(`{}`),
 		},
 	}
-	h := NewScheduledStatusesHandler(stub)
+	h := NewScheduledStatusesHandler(stub, nil)
 
 	body := fmt.Sprintf(`{"scheduled_at":"%s"}`, updatedAt.Format(time.RFC3339Nano))
 	req, rec := scheduledStatusRequest(http.MethodPut, "/api/v1/scheduled_statuses/15", body, 7, "write:statuses")
@@ -311,7 +311,7 @@ func TestScheduledStatusesHandler_Update_Success(t *testing.T) {
 }
 
 func TestScheduledStatusesHandler_List_AppToken(t *testing.T) {
-	h := NewScheduledStatusesHandler(nil)
+	h := NewScheduledStatusesHandler(nil, nil)
 
 	req, rec := scheduledStatusRequestWithToken(http.MethodGet, "/api/v1/scheduled_statuses", "", 0, "read:statuses", 99)
 
@@ -323,7 +323,7 @@ func TestScheduledStatusesHandler_List_AppToken(t *testing.T) {
 }
 
 func TestScheduledStatusesHandler_List_Forbidden(t *testing.T) {
-	h := NewScheduledStatusesHandler(nil)
+	h := NewScheduledStatusesHandler(nil, nil)
 
 	req, _ := scheduledStatusRequest(http.MethodGet, "/api/v1/scheduled_statuses", "", 10, "write:statuses")
 
@@ -344,7 +344,7 @@ func TestScheduledStatusesHandler_List_Success(t *testing.T) {
 			},
 		},
 	}
-	h := NewScheduledStatusesHandler(stub)
+	h := NewScheduledStatusesHandler(stub, nil)
 
 	req, rec := scheduledStatusRequest(http.MethodGet, "/api/v1/scheduled_statuses?limit=5&max_id=99&since_id=2&min_id=1", "", 5, "read:statuses")
 
@@ -379,7 +379,7 @@ func TestScheduledStatusesHandler_List_Success(t *testing.T) {
 }
 
 func TestScheduledStatusesHandler_List_InvalidMaxID(t *testing.T) {
-	h := NewScheduledStatusesHandler(nil)
+	h := NewScheduledStatusesHandler(nil, nil)
 
 	req, rec := scheduledStatusRequest(http.MethodGet, "/api/v1/scheduled_statuses?max_id=bad", "", 5, "read:statuses")
 
@@ -398,7 +398,7 @@ func TestScheduledStatusesHandler_List_InvalidMaxID(t *testing.T) {
 }
 
 func TestScheduledStatusesHandler_Get_AppToken(t *testing.T) {
-	h := NewScheduledStatusesHandler(nil)
+	h := NewScheduledStatusesHandler(nil, nil)
 
 	req, rec := scheduledStatusRequestWithToken(http.MethodGet, "/api/v1/scheduled_statuses/1", "", 0, "read:statuses", 77)
 	req.SetPathValue("id", "1")
@@ -411,7 +411,7 @@ func TestScheduledStatusesHandler_Get_AppToken(t *testing.T) {
 }
 
 func TestScheduledStatusesHandler_Get_Forbidden(t *testing.T) {
-	h := NewScheduledStatusesHandler(nil)
+	h := NewScheduledStatusesHandler(nil, nil)
 
 	req, _ := scheduledStatusRequest(http.MethodGet, "/api/v1/scheduled_statuses/1", "", 5, "write:statuses")
 
@@ -421,7 +421,7 @@ func TestScheduledStatusesHandler_Get_Forbidden(t *testing.T) {
 }
 
 func TestScheduledStatusesHandler_Delete_AppToken(t *testing.T) {
-	h := NewScheduledStatusesHandler(nil)
+	h := NewScheduledStatusesHandler(nil, nil)
 
 	req, rec := scheduledStatusRequestWithToken(http.MethodDelete, "/api/v1/scheduled_statuses/1", "", 0, "write:statuses", 55)
 	req.SetPathValue("id", "1")
@@ -434,7 +434,7 @@ func TestScheduledStatusesHandler_Delete_AppToken(t *testing.T) {
 }
 
 func TestScheduledStatusesHandler_Delete_Forbidden(t *testing.T) {
-	h := NewScheduledStatusesHandler(nil)
+	h := NewScheduledStatusesHandler(nil, nil)
 
 	req, _ := scheduledStatusRequest(http.MethodDelete, "/api/v1/scheduled_statuses/1", "", 5, "read:statuses")
 

@@ -15,6 +15,7 @@ import (
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/media"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/activitypub"
 )
@@ -23,6 +24,7 @@ import (
 type FederationHandler struct {
 	store             Store
 	domain            string
+	files             media.Storage
 	actorFetcher      activitypub.ActorFetcher
 	inboxHandlers     map[string]InboxHandler
 	replayStore       middleware.InboxReplayStore
@@ -47,6 +49,7 @@ func NewFederationHandler(store Store, domain string) *FederationHandler {
 	return &FederationHandler{
 		store:             store,
 		domain:            domain,
+		files:             media.NewStorage(&config.Config{Instance: config.InstanceConfig{LocalDomain: domain}}),
 		actorFetcher:      newActorFetcher(store, domain),
 		inboxHandlers:     make(map[string]InboxHandler),
 		replayStore:       middleware.NewMemoryInboxReplayStore(0),
@@ -59,6 +62,14 @@ func NewFederationHandler(store Store, domain string) *FederationHandler {
 // called before RegisterRoutes; the default store is in-memory.
 func (h *FederationHandler) SetReplayStore(store middleware.InboxReplayStore) {
 	h.replayStore = store
+}
+
+// SetMediaStorage sets the storage whose URLs attachments carry. The default
+// is local storage served at https://<domain>/files.
+func (h *FederationHandler) SetMediaStorage(files media.Storage) {
+	if files != nil {
+		h.files = files
+	}
 }
 
 // SetInboxMaxBodyBytes sets the largest request body the inbox routes accept;

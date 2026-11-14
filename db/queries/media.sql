@@ -1,9 +1,12 @@
 -- name: CreateMediaAttachment :one
+-- created_at is the upload time that dates the file's storage path.
 INSERT INTO media_attachments (
     account_id, status_id, file_file_name, file_content_type, file_file_size,
-    type, description, blurhash, processing, shortcode, file_meta
+    type, description, blurhash, processing, shortcode, file_meta,
+    created_at, updated_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+    sqlc.arg(created_at), sqlc.arg(created_at)
 ) RETURNING *;
 
 -- name: CreateRemoteMediaAttachment :one

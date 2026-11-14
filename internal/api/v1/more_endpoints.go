@@ -21,6 +21,7 @@ import (
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/federation"
+	"github.com/deicod/gotodon/internal/media"
 	"github.com/deicod/gotodon/internal/push"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/oauth"
@@ -462,11 +463,12 @@ func isValidDomainName(host string) bool {
 // ScheduledStatusesHandler handles scheduled statuses endpoints
 type ScheduledStatusesHandler struct {
 	queries db.Querier
+	cfg     *config.Config
 }
 
 // NewScheduledStatusesHandler creates a new scheduled statuses handler
-func NewScheduledStatusesHandler(queries db.Querier) *ScheduledStatusesHandler {
-	return &ScheduledStatusesHandler{queries: queries}
+func NewScheduledStatusesHandler(queries db.Querier, cfg *config.Config) *ScheduledStatusesHandler {
+	return &ScheduledStatusesHandler{queries: queries, cfg: cfg}
 }
 
 func (h *ScheduledStatusesHandler) useDB() bool {
@@ -539,7 +541,7 @@ func (h *ScheduledStatusesHandler) List(w http.ResponseWriter, r *http.Request) 
 		for _, s := range statuses {
 			ids = append(ids, s.ID)
 		}
-		mediaMap := scheduledStatusMediaAttachments(r.Context(), h.queries, ids)
+		mediaMap := scheduledStatusMediaAttachments(r.Context(), h.queries, media.NewStorage(h.cfg), ids)
 
 		res := make([]ScheduledStatus, len(statuses))
 		for i, s := range statuses {
@@ -594,7 +596,7 @@ func (h *ScheduledStatusesHandler) Get(w http.ResponseWriter, r *http.Request) {
 			web.JSONError(w, http.StatusNotFound, "Record not found")
 			return
 		}
-		mediaMap := scheduledStatusMediaAttachments(r.Context(), h.queries, []int64{s.ID})
+		mediaMap := scheduledStatusMediaAttachments(r.Context(), h.queries, media.NewStorage(h.cfg), []int64{s.ID})
 		web.JSON(w, http.StatusOK, serializeScheduledStatus(s, mediaMap[s.ID]))
 		return
 	}
@@ -677,7 +679,7 @@ func (h *ScheduledStatusesHandler) Update(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	mediaMap := scheduledStatusMediaAttachments(ctx, h.queries, []int64{updated.ID})
+	mediaMap := scheduledStatusMediaAttachments(ctx, h.queries, media.NewStorage(h.cfg), []int64{updated.ID})
 	web.JSON(w, http.StatusOK, serializeScheduledStatus(updated, mediaMap[updated.ID]))
 }
 

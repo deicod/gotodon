@@ -126,12 +126,13 @@ func NewCustomEmojisHandler(queries *db.Queries, storage media.Storage) *CustomE
 	return h
 }
 
-func mapAdminCustomEmoji(emoji db.CustomEmoji, categoryName string) map[string]any {
+func mapAdminCustomEmoji(files media.Storage, emoji db.CustomEmoji, categoryName string) map[string]any {
+	url := v1.GetEmojiURL(files, emoji)
 	resp := map[string]any{
 		"id":                strconv.FormatInt(emoji.ID, 10),
 		"shortcode":         emoji.Shortcode,
-		"url":               v1.GetEmojiURL(emoji),
-		"static_url":        v1.GetEmojiURL(emoji),
+		"url":               url,
+		"static_url":        url,
 		"visible_in_picker": emoji.VisibleInPicker,
 		"disabled":          emoji.Disabled,
 		"domain":            emoji.Domain.String,
@@ -210,7 +211,7 @@ func (h *CustomEmojisHandler) List(w http.ResponseWriter, r *http.Request) {
 		if e.CategoryID.Valid {
 			categoryName = categoryNames[e.CategoryID.Int64]
 		}
-		resp[i] = mapAdminCustomEmoji(e, categoryName)
+		resp[i] = mapAdminCustomEmoji(h.storage, e, categoryName)
 	}
 
 	web.JSON(w, http.StatusOK, resp)
@@ -446,7 +447,7 @@ func (h *CustomEmojisHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	web.JSON(w, http.StatusOK, mapAdminCustomEmoji(emoji, ""))
+	web.JSON(w, http.StatusOK, mapAdminCustomEmoji(h.storage, emoji, ""))
 }
 
 // removeImage deletes a stored image, even when the request has been

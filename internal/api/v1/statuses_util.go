@@ -12,6 +12,7 @@ import (
 	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/media"
 )
 
 const (
@@ -180,7 +181,7 @@ func statusEmojiDomain(acc Account) string {
 	return ""
 }
 
-func buildStatusEmojis(ctx context.Context, q statusEmojiQuerier, statuses []db.Status, accounts map[int64]Account) map[int64][]CustomEmoji {
+func buildStatusEmojis(ctx context.Context, q statusEmojiQuerier, files media.Storage, statuses []db.Status, accounts map[int64]Account) map[int64][]CustomEmoji {
 	if q == nil || len(statuses) == 0 {
 		return nil
 	}
@@ -294,10 +295,11 @@ func buildStatusEmojis(ctx context.Context, q statusEmojiQuerier, statuses []db.
 			if !ok {
 				continue
 			}
+			url := GetEmojiURL(files, emoji)
 			emojis = append(emojis, CustomEmoji{
 				Shortcode:       emoji.Shortcode,
-				URL:             GetEmojiURL(emoji),
-				StaticURL:       GetEmojiURL(emoji),
+				URL:             url,
+				StaticURL:       url,
 				VisibleInPicker: emoji.VisibleInPicker,
 			})
 		}
@@ -384,8 +386,9 @@ func serializeStatusesInternal(ctx context.Context, q statusSerializerQuerier, c
 	dbStats, _ := q.GetStatusStatsByIDs(ctx, statusIDs)
 
 	// Map data for easy lookup
+	files := media.NewStorage(cfg)
 	accountsMap := serializeAccounts(ctx, q, cfg, dbAccounts, true)
-	statusEmojis := buildStatusEmojis(ctx, q, dbStatuses, accountsMap)
+	statusEmojis := buildStatusEmojis(ctx, q, files, dbStatuses, accountsMap)
 
 	type indexRange struct {
 		start, end int
@@ -434,43 +437,7 @@ func serializeStatusesInternal(ctx context.Context, q statusSerializerQuerier, c
 				start = len(allMedia)
 			}
 
-			mediaType := "image"
-			if m.Type == MediaTypeVideo {
-				mediaType = "video"
-			}
-
-			var remoteURL *string
-			if m.RemoteUrl != "" {
-				s := m.RemoteUrl
-				remoteURL = &s
-			}
-
-			var description *string
-			if m.Description.Valid {
-				s := m.Description.String
-				description = &s
-			}
-
-			var blurhash *string
-			if m.Blurhash.Valid {
-				s := m.Blurhash.String
-				blurhash = &s
-			}
-
-			// Use configured domain if media is local and URL is relative (though model usually stores full or relative)
-			// For robustness, assumes URL in DB is correct for now, or we could prefix if needed.
-			// Existing code used raw m.RemoteUrl or m.ThumbnailRemoteUrl.
-			// For local files, we might need to prepend valid URLs but let's stick to DB values for now unless empty.
-
-			allMedia = append(allMedia, MediaAttach{
-				ID:          strconv.FormatInt(m.ID, 10),
-				Type:        mediaType,
-				URL:         m.RemoteUrl,
-				PreviewURL:  m.ThumbnailRemoteUrl.String,
-				RemoteURL:   remoteURL,
-				Description: description,
-				Blurhash:    blurhash,
-			})
+			allMedia = append(allMedia, serializeMediaAttach(files, m))
 		}
 		if currentSID != -1 {
 			mediaRanges[currentSID] = indexRange{start: start, end: len(allMedia)}
@@ -670,7 +637,7 @@ func serializeStatusesInternal(ctx context.Context, q statusSerializerQuerier, c
 				ImageDescription:          row.ImageDescription,
 				AuthorAccountID:           row.AuthorAccountID,
 			}
-			previewCardsMap[row.StatusID] = serializePreviewCard(card, authorAccounts)
+			previewCardsMap[row.StatusID] = serializePreviewCard(files, card, authorAccounts)
 		}
 	}
 
@@ -904,7 +871,7 @@ func SerializeStatusSimple(ctx context.Context, q statusSerializerQuerier, cfg *
 
 	emojis := []CustomEmoji{}
 	if q != nil {
-		statusEmojis := buildStatusEmojis(ctx, q, []db.Status{dbStatus}, map[int64]Account{
+		statusEmojis := buildStatusEmojis(ctx, q, media.NewStorage(cfg), []db.Status{dbStatus}, map[int64]Account{
 			dbStatus.AccountID: account,
 		})
 		if list, ok := statusEmojis[dbStatus.ID]; ok {
@@ -935,21 +902,15 @@ func SerializeStatusSimple(ctx context.Context, q statusSerializerQuerier, cfg *
 	}
 }
 
-func serializePreviewCard(card db.PreviewCard, authorAccounts map[int64]Account) *PreviewCard {
+func serializePreviewCard(files media.Storage, card db.PreviewCard, authorAccounts map[int64]Account) *PreviewCard {
 	if card.ID == 0 {
 		return nil
 	}
 
 	var imageURL *string
 	if card.ImageFileName.Valid {
-		image := strings.TrimSpace(card.ImageFileName.String)
-		if image != "" {
-			if strings.HasPrefix(image, "http://") || strings.HasPrefix(image, "https://") {
-				imageURL = &image
-			} else {
-				local := "/files/" + image
-				imageURL = &local
-			}
+		if image := media.FileURL(files, card.ImageFileName.String); image != "" {
+			imageURL = &image
 		}
 	}
 

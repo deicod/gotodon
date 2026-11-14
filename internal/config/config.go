@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -19,6 +20,7 @@ type Config struct {
 	Translation TranslationConfig `mapstructure:"translation"`
 	Mail        MailConfig        `mapstructure:"mail"`
 	Federation  FederationConfig  `mapstructure:"federation"`
+	Media       MediaConfig       `mapstructure:"media"`
 }
 
 // ServerConfig holds HTTP server configuration.
@@ -145,6 +147,49 @@ type FederationConfig struct {
 	InboxMaxBodyBytes int64 `mapstructure:"inbox_max_body_bytes"`
 }
 
+// DefaultMediaStoragePath is the default for MediaConfig.StoragePath.
+const DefaultMediaStoragePath = "./uploads"
+
+// MediaConfig holds where uploaded files are stored and the URL they are
+// served at.
+type MediaConfig struct {
+	// StoragePath is the directory uploads are written to. gotodon serves it
+	// at /files/.
+	StoragePath string `mapstructure:"storage_path"`
+	// BaseURL is the public URL of the storage root, for a CDN or an object
+	// storage alias in front of it, like Mastodon's CDN_HOST and
+	// S3_ALIAS_HOST. Empty means gotodon's own /files route on the web
+	// domain. Load rejects anything but an absolute http or https URL without
+	// query or fragment, and strips trailing slashes.
+	BaseURL string `mapstructure:"base_url"`
+}
+
+// NormalizeMediaBaseURL validates a media base URL and returns it without
+// surrounding space or trailing slashes. An empty value stays empty.
+func NormalizeMediaBaseURL(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", nil
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return "", fmt.Errorf("media.base_url %q is not a URL: %w", raw, err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("media.base_url %q must use http or https", raw)
+	}
+	if parsed.Host == "" || parsed.Hostname() == "" {
+		return "", fmt.Errorf("media.base_url %q has no host", raw)
+	}
+	if parsed.User != nil {
+		return "", fmt.Errorf("media.base_url %q must not contain credentials", raw)
+	}
+	if parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || strings.Contains(value, "#") {
+		return "", fmt.Errorf("media.base_url %q must not contain a query or fragment", raw)
+	}
+	return strings.TrimRight(value, "/"), nil
+}
+
 // Load reads configuration from file and environment variables.
 func Load() (*Config, error) {
 	v := viper.New()
@@ -175,6 +220,9 @@ func Load() (*Config, error) {
 	v.SetDefault("mail.smtp_enable_starttls", "auto")
 	v.SetDefault("mail.smtp_from_address", "notifications@localhost")
 	v.SetDefault("federation.inbox_max_body_bytes", DefaultInboxMaxBodyBytes)
+	v.SetDefault("media.storage_path", DefaultMediaStoragePath)
+	// Registered so GOTODON_MEDIA_BASE_URL reaches Unmarshal.
+	v.SetDefault("media.base_url", "")
 
 	// Config file settings
 	v.SetConfigName("gotodon")
@@ -241,6 +289,16 @@ func Load() (*Config, error) {
 	if cfg.Federation.InboxMaxBodyBytes <= 0 {
 		return nil, fmt.Errorf("federation.inbox_max_body_bytes must be positive, got %d", cfg.Federation.InboxMaxBodyBytes)
 	}
+
+	cfg.Media.StoragePath = strings.TrimSpace(cfg.Media.StoragePath)
+	if cfg.Media.StoragePath == "" {
+		return nil, fmt.Errorf("media.storage_path must not be empty")
+	}
+	baseURL, err := NormalizeMediaBaseURL(cfg.Media.BaseURL)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Media.BaseURL = baseURL
 
 	return &cfg, nil
 }

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/media"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/activitypub"
 )
@@ -692,6 +692,7 @@ type statusContext struct {
 	ctx                 context.Context
 	store               Store
 	localDomain         string
+	files               media.Storage
 	mentionsByStatus    map[int64][]db.Account
 	tagsByStatus        map[int64][]db.GetTagsByStatusIDsRow
 	attachmentsByStatus map[int64][]db.MediaAttachment
@@ -706,6 +707,7 @@ func (h *FederationHandler) buildStatusContext(ctx context.Context, statuses []d
 		ctx:                 ctx,
 		store:               h.store,
 		localDomain:         h.domain,
+		files:               h.files,
 		mentionsByStatus:    make(map[int64][]db.Account),
 		tagsByStatus:        make(map[int64][]db.GetTagsByStatusIDsRow),
 		attachmentsByStatus: make(map[int64][]db.MediaAttachment),
@@ -1035,7 +1037,7 @@ func (c *statusContext) noteForStatus(author db.Account, status db.Status) (acti
 	note.Tag = buildTags(c.localDomain, mentions, tags, status.ID)
 
 	if len(attachments) > 0 {
-		note.Attachment = buildAttachments(c.localDomain, attachments)
+		note.Attachment = buildAttachments(c.files, attachments)
 	}
 
 	if c.isLocalStatus(status) {
@@ -1340,13 +1342,10 @@ func mentionTags(localDomain string, mentions []db.Account) []activitypub.Tag {
 	return tags
 }
 
-func buildAttachments(localDomain string, attachments []db.MediaAttachment) []any {
+func buildAttachments(files media.Storage, attachments []db.MediaAttachment) []any {
 	items := make([]any, 0, len(attachments))
 	for _, attachment := range attachments {
-		url := attachment.RemoteUrl
-		if url == "" {
-			url = localAttachmentURL(localDomain, attachment)
-		}
+		url := media.AttachmentFileURL(files, attachment)
 		if url == "" {
 			continue
 		}
@@ -1363,13 +1362,8 @@ func buildAttachments(localDomain string, attachments []db.MediaAttachment) []an
 		if attachment.Blurhash.Valid && attachment.Blurhash.String != "" {
 			item["blurhash"] = attachment.Blurhash.String
 		}
-		if attachment.ThumbnailRemoteUrl.Valid && attachment.ThumbnailRemoteUrl.String != "" {
-			item["previewUrl"] = attachment.ThumbnailRemoteUrl.String
-		} else if attachment.ThumbnailFileName.Valid && attachment.ThumbnailFileName.String != "" {
-			previewURL := localAttachmentThumbnailURL(localDomain, attachment)
-			if previewURL != "" {
-				item["previewUrl"] = previewURL
-			}
+		if previewURL := media.AttachmentThumbnailURL(files, attachment); previewURL != "" {
+			item["previewUrl"] = previewURL
 		}
 
 		items = append(items, item)
@@ -1395,58 +1389,4 @@ func attachmentMediaType(attachment db.MediaAttachment) string {
 		return attachment.FileContentType.String
 	}
 	return ""
-}
-
-func localAttachmentURL(localDomain string, attachment db.MediaAttachment) string {
-	if localDomain == "" {
-		return ""
-	}
-	if !attachment.AccountID.Valid || attachment.AccountID.Int64 == 0 {
-		return ""
-	}
-	if !attachment.FileFileName.Valid || attachment.FileFileName.String == "" {
-		return ""
-	}
-	if !attachment.CreatedAt.Valid {
-		return ""
-	}
-	storagePath := mediaStoragePath(attachment.AccountID.Int64, attachment.CreatedAt.Time, attachment.FileFileName.String)
-	if storagePath == "" {
-		return ""
-	}
-	return fmt.Sprintf("https://%s/files/%s", localDomain, storagePath)
-}
-
-func localAttachmentThumbnailURL(localDomain string, attachment db.MediaAttachment) string {
-	if localDomain == "" {
-		return ""
-	}
-	if !attachment.AccountID.Valid || attachment.AccountID.Int64 == 0 {
-		return ""
-	}
-	if !attachment.ThumbnailFileName.Valid || attachment.ThumbnailFileName.String == "" {
-		return ""
-	}
-	if !attachment.CreatedAt.Valid {
-		return ""
-	}
-	storagePath := mediaStoragePath(attachment.AccountID.Int64, attachment.CreatedAt.Time, attachment.ThumbnailFileName.String)
-	if storagePath == "" {
-		return ""
-	}
-	return fmt.Sprintf("https://%s/files/%s", localDomain, storagePath)
-}
-
-func mediaStoragePath(accountID int64, createdAt time.Time, filename string) string {
-	if accountID <= 0 || filename == "" {
-		return ""
-	}
-	return path.Join(
-		"media_attachments",
-		"files",
-		fmt.Sprintf("%d", accountID%1000),
-		fmt.Sprintf("%d", accountID),
-		createdAt.UTC().Format("2006/01/02"),
-		filename,
-	)
 }

@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/media"
 )
 
 type scheduledStatusMediaQuerier interface {
@@ -19,7 +20,7 @@ func scheduledStatusParamsJSON(raw []byte) json.RawMessage {
 	return json.RawMessage(raw)
 }
 
-func scheduledStatusMediaAttachments(ctx context.Context, q scheduledStatusMediaQuerier, ids []int64) map[int64][]MediaAttach {
+func scheduledStatusMediaAttachments(ctx context.Context, q scheduledStatusMediaQuerier, files media.Storage, ids []int64) map[int64][]MediaAttach {
 	mediaMap := make(map[int64][]MediaAttach)
 	if q == nil || len(ids) == 0 {
 		return mediaMap
@@ -33,38 +34,7 @@ func scheduledStatusMediaAttachments(ctx context.Context, q scheduledStatusMedia
 			continue
 		}
 		scheduledID := m.ScheduledStatusID.Int64
-		mediaType := "image"
-		if m.Type == MediaTypeVideo {
-			mediaType = "video"
-		}
-
-		var remoteURL *string
-		if m.RemoteUrl != "" {
-			s := m.RemoteUrl
-			remoteURL = &s
-		}
-
-		var description *string
-		if m.Description.Valid {
-			s := m.Description.String
-			description = &s
-		}
-
-		var blurhash *string
-		if m.Blurhash.Valid {
-			s := m.Blurhash.String
-			blurhash = &s
-		}
-
-		mediaMap[scheduledID] = append(mediaMap[scheduledID], MediaAttach{
-			ID:          strconv.FormatInt(m.ID, 10),
-			Type:        mediaType,
-			URL:         m.RemoteUrl,
-			PreviewURL:  m.ThumbnailRemoteUrl.String,
-			RemoteURL:   remoteURL,
-			Description: description,
-			Blurhash:    blurhash,
-		})
+		mediaMap[scheduledID] = append(mediaMap[scheduledID], serializeMediaAttach(files, m))
 	}
 	return mediaMap
 }

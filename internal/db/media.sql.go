@@ -55,26 +55,30 @@ func (q *Queries) AttachMediaToStatus(ctx context.Context, arg AttachMediaToStat
 const createMediaAttachment = `-- name: CreateMediaAttachment :one
 INSERT INTO media_attachments (
     account_id, status_id, file_file_name, file_content_type, file_file_size,
-    type, description, blurhash, processing, shortcode, file_meta
+    type, description, blurhash, processing, shortcode, file_meta,
+    created_at, updated_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+    $12, $12
 ) RETURNING id, status_id, file_file_name, file_content_type, file_file_size, file_updated_at, remote_url, created_at, updated_at, shortcode, type, file_meta, account_id, description, scheduled_status_id, blurhash, processing, file_storage_schema_version, thumbnail_file_name, thumbnail_content_type, thumbnail_file_size, thumbnail_updated_at, thumbnail_remote_url
 `
 
 type CreateMediaAttachmentParams struct {
-	AccountID       pgtype.Int8 `db:"account_id" json:"account_id"`
-	StatusID        pgtype.Int8 `db:"status_id" json:"status_id"`
-	FileFileName    pgtype.Text `db:"file_file_name" json:"file_file_name"`
-	FileContentType pgtype.Text `db:"file_content_type" json:"file_content_type"`
-	FileFileSize    pgtype.Int4 `db:"file_file_size" json:"file_file_size"`
-	Type            int32       `db:"type" json:"type"`
-	Description     pgtype.Text `db:"description" json:"description"`
-	Blurhash        pgtype.Text `db:"blurhash" json:"blurhash"`
-	Processing      pgtype.Int4 `db:"processing" json:"processing"`
-	Shortcode       pgtype.Text `db:"shortcode" json:"shortcode"`
-	FileMeta        []byte      `db:"file_meta" json:"file_meta"`
+	AccountID       pgtype.Int8        `db:"account_id" json:"account_id"`
+	StatusID        pgtype.Int8        `db:"status_id" json:"status_id"`
+	FileFileName    pgtype.Text        `db:"file_file_name" json:"file_file_name"`
+	FileContentType pgtype.Text        `db:"file_content_type" json:"file_content_type"`
+	FileFileSize    pgtype.Int4        `db:"file_file_size" json:"file_file_size"`
+	Type            int32              `db:"type" json:"type"`
+	Description     pgtype.Text        `db:"description" json:"description"`
+	Blurhash        pgtype.Text        `db:"blurhash" json:"blurhash"`
+	Processing      pgtype.Int4        `db:"processing" json:"processing"`
+	Shortcode       pgtype.Text        `db:"shortcode" json:"shortcode"`
+	FileMeta        []byte             `db:"file_meta" json:"file_meta"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
 }
 
+// created_at is the upload time that dates the file's storage path.
 func (q *Queries) CreateMediaAttachment(ctx context.Context, arg CreateMediaAttachmentParams) (MediaAttachment, error) {
 	row := q.db.QueryRow(ctx, createMediaAttachment,
 		arg.AccountID,
@@ -88,6 +92,7 @@ func (q *Queries) CreateMediaAttachment(ctx context.Context, arg CreateMediaAtta
 		arg.Processing,
 		arg.Shortcode,
 		arg.FileMeta,
+		arg.CreatedAt,
 	)
 	var i MediaAttachment
 	err := row.Scan(

@@ -16,6 +16,7 @@ import (
 
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/media"
 	"github.com/deicod/gotodon/internal/moderation"
 	"github.com/deicod/gotodon/pkg/safehttp"
 )
@@ -275,28 +276,16 @@ func (s *Service) follows(ctx context.Context, accountID, targetAccountID int64)
 	return true, nil
 }
 
+// avatarURL returns the absolute URL of the notifying account's avatar, the
+// default avatar when it has none.
 func (s *Service) avatarURL(account db.Account) string {
-	domain := ""
-	if s.cfg != nil {
-		domain = s.cfg.Instance.PublicWebDomain()
+	if remote := strings.TrimSpace(account.AvatarRemoteUrl.String); media.IsAbsoluteURL(remote) {
+		return remote
 	}
-	value := strings.TrimSpace(account.AvatarRemoteUrl.String)
-	if value == "" {
-		value = strings.TrimSpace(account.AvatarFileName.String)
+	if image := media.FileURL(media.NewStorage(s.cfg), account.AvatarFileName.String); image != "" {
+		return image
 	}
-	if value == "" {
-		value = "/avatars/original/missing.png"
-	}
-	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
-		return value
-	}
-	if !strings.HasPrefix(value, "/") {
-		value = "/files/" + value
-	}
-	if domain == "" {
-		return value
-	}
-	return "https://" + domain + value
+	return media.MissingAvatarURL(s.cfg)
 }
 
 type pushSubscriptionData struct {

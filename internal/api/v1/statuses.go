@@ -24,6 +24,7 @@ import (
 	"github.com/deicod/gotodon/internal/conversations"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/federation"
+	"github.com/deicod/gotodon/internal/media"
 	"github.com/deicod/gotodon/internal/streaming"
 	"github.com/deicod/gotodon/internal/translation"
 	"github.com/deicod/gotodon/internal/web"
@@ -1458,7 +1459,7 @@ func (h *StatusesHandler) Create(w http.ResponseWriter, r *http.Request) {
 				web.JSONError(w, http.StatusInternalServerError, "Failed to create status")
 				return
 			}
-			mediaMap := scheduledStatusMediaAttachments(ctx, h.queries, []int64{scheduled.ID})
+			mediaMap := scheduledStatusMediaAttachments(ctx, h.queries, media.NewStorage(h.cfg), []int64{scheduled.ID})
 			web.JSON(w, http.StatusOK, serializeScheduledStatus(scheduled, mediaMap[scheduled.ID]))
 			return
 		}
@@ -2927,38 +2928,7 @@ func (h *StatusesHandler) getMediaAttachmentsByIDs(ctx context.Context, ids []in
 
 // serializeMedia converts a db.MediaAttachment to API MediaAttach
 func (h *StatusesHandler) serializeMedia(m db.MediaAttachment) MediaAttach {
-	mediaType := "image"
-	if m.Type == MediaTypeVideo {
-		mediaType = "video"
-	}
-
-	var remoteURL *string
-	if m.RemoteUrl != "" {
-		s := m.RemoteUrl
-		remoteURL = &s
-	}
-
-	var description *string
-	if m.Description.Valid {
-		s := m.Description.String
-		description = &s
-	}
-
-	var blurhash *string
-	if m.Blurhash.Valid {
-		s := m.Blurhash.String
-		blurhash = &s
-	}
-
-	return MediaAttach{
-		ID:          strconv.FormatInt(m.ID, 10),
-		Type:        mediaType,
-		URL:         m.RemoteUrl,
-		PreviewURL:  m.ThumbnailRemoteUrl.String,
-		RemoteURL:   remoteURL,
-		Description: description,
-		Blurhash:    blurhash,
-	}
+	return serializeMediaAttach(media.NewStorage(h.cfg), m)
 }
 
 // getPollForStatus fetches and serializes a poll for display

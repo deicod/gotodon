@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/media"
 )
 
 type stubMediaCleanupStore struct {
@@ -85,8 +86,8 @@ func TestMediaCleanupServiceRemovesOrphanedAttachments(t *testing.T) {
 	if len(storage.deleted) != 2 {
 		t.Fatalf("storage.deleted = %d, want 2", len(storage.deleted))
 	}
-	expectedFile := mediaStoragePath(attachment.AccountID.Int64, attachment.CreatedAt.Time, attachment.FileFileName.String)
-	expectedThumb := mediaStoragePath(attachment.AccountID.Int64, attachment.CreatedAt.Time, attachment.ThumbnailFileName.String)
+	expectedFile := media.MediaStoragePath(attachment.AccountID.Int64, attachment.CreatedAt.Time, attachment.FileFileName.String)
+	expectedThumb := media.MediaStoragePath(attachment.AccountID.Int64, attachment.CreatedAt.Time, attachment.ThumbnailFileName.String)
 	if storage.deleted[0] != expectedFile || storage.deleted[1] != expectedThumb {
 		t.Fatalf("storage.deleted = %#v, want [%s %s]", storage.deleted, expectedFile, expectedThumb)
 	}
@@ -101,7 +102,7 @@ func TestMediaCleanupSkipsDeleteOnStorageError(t *testing.T) {
 		FileFileName: pgtype.Text{String: "bad.png", Valid: true},
 	}
 	store := &stubMediaCleanupStore{attachments: []db.MediaAttachment{attachment}}
-	badPath := mediaStoragePath(attachment.AccountID.Int64, attachment.CreatedAt.Time, attachment.FileFileName.String)
+	badPath := media.MediaStoragePath(attachment.AccountID.Int64, attachment.CreatedAt.Time, attachment.FileFileName.String)
 	storage := &stubCleanupStorage{errors: map[string]error{badPath: errors.New("boom")}}
 
 	svc := NewMediaCleanupService(store, storage, nil)

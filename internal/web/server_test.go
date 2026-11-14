@@ -216,3 +216,83 @@ func TestExtendUploadDeadlines_IgnoresWritersWithoutDeadlines(t *testing.T) {
 		t.Fatalf("body = %q, want JSON response", rec.Body.String())
 	}
 }
+
+func TestDownloadBudget(t *testing.T) {
+	tests := []struct {
+		name string
+		size int64
+		want time.Duration
+	}{
+		{name: "empty", size: 0, want: serverWriteTimeout},
+		{name: "small file keeps the ordinary budget", size: 64 << 10, want: serverWriteTimeout},
+		{name: "one second of transfer", size: downloadMinRate, want: serverWriteTimeout + time.Second},
+		{name: "maximum-size video", size: 103809024, want: serverWriteTimeout + 792*time.Second},
+		{name: "capped", size: 1 << 40, want: downloadTimeout},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := downloadBudget(tt.size); got != tt.want {
+				t.Fatalf("downloadBudget(%d) = %v, want %v", tt.size, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtendDownloadDeadline(t *testing.T) {
+	const size = 4 * downloadMinRate
+	tests := []struct {
+		name    string
+		extend  bool
+		wantErr bool
+	}{
+		{name: "slow download outlives the ordinary write timeout", extend: true},
+		{name: "slow download without extension is cut off", extend: false, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := NewServer("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tt.extend {
+					ExtendDownloadDeadline(w, size)
+				}
+				// Outlast the ordinary write timeout before finishing the body.
+				_, _ = w.Write(make([]byte, size/2))
+				w.(http.Flusher).Flush()
+				time.Sleep(300 * time.Millisecond)
+				_, _ = w.Write(make([]byte, size/2))
+			}))
+			srv.WriteTimeout = 100 * time.Millisecond
+			ts := startServer(t, srv)
+
+			resp, err := ts.Client().Get(ts.URL)
+			if err != nil {
+				if tt.wantErr {
+					return
+				}
+				t.Fatalf("get: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			n, err := io.Copy(io.Discard, resp.Body)
+			if tt.wantErr {
+				if err == nil && n == size {
+					t.Fatal("slow download completed despite the ordinary write timeout")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if n != size {
+				t.Fatalf("read %d bytes, want %d", n, size)
+			}
+		})
+	}
+}
+
+func TestExtendDownloadDeadline_IgnoresWritersWithoutDeadlines(t *testing.T) {
+	rec := httptest.NewRecorder()
+	ExtendDownloadDeadline(rec, 1<<30)
+	rec.WriteHeader(http.StatusOK)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}

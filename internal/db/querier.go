@@ -227,6 +227,7 @@ type Querier interface {
 	CreateList(ctx context.Context, arg CreateListParams) (List, error)
 	// Login Activities queries
 	CreateLoginActivity(ctx context.Context, arg CreateLoginActivityParams) (LoginActivity, error)
+	// created_at is the upload time that dates the file's storage path.
 	CreateMediaAttachment(ctx context.Context, arg CreateMediaAttachmentParams) (MediaAttachment, error)
 	CreateMention(ctx context.Context, arg CreateMentionParams) (Mention, error)
 	CreateMentions(ctx context.Context, arg CreateMentionsParams) error

@@ -3,10 +3,8 @@ package services
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -136,33 +134,13 @@ func attachmentStoragePaths(attachment db.MediaAttachment, filename string) []st
 		return []string{name}
 	}
 	if attachment.AccountID.Valid && attachment.AccountID.Int64 > 0 && attachment.CreatedAt.Valid {
-		primary := mediaStoragePath(attachment.AccountID.Int64, attachment.CreatedAt.Time, name)
-		if primary == "" {
-			return []string{name}
+		if paths := media.MediaStoragePaths(attachment.AccountID.Int64, attachment.CreatedAt.Time, name); len(paths) > 0 {
+			return paths
 		}
-		alt := mediaStoragePath(attachment.AccountID.Int64, attachment.CreatedAt.Time.In(time.Local), name)
-		if alt == primary {
-			return []string{primary}
-		}
-		return []string{primary, alt}
 	}
 	return []string{name}
 }
 
 func hasPathSeparator(value string) bool {
 	return strings.ContainsRune(value, '/') || strings.ContainsRune(value, '\\')
-}
-
-func mediaStoragePath(accountID int64, createdAt time.Time, filename string) string {
-	if accountID <= 0 || filename == "" {
-		return ""
-	}
-	return filepath.Join(
-		"media_attachments",
-		"files",
-		fmt.Sprintf("%d", accountID%1000),
-		fmt.Sprintf("%d", accountID),
-		createdAt.Format("2006/01/02"),
-		filename,
-	)
 }

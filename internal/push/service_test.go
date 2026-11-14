@@ -591,3 +591,30 @@ func TestStripTags(t *testing.T) {
 		t.Errorf("stripTags = %q", got)
 	}
 }
+
+func TestAvatarURLIsAbsolute(t *testing.T) {
+	cdn := testConfig()
+	cdn.Media.BaseURL = "https://cdn.example.net/media"
+
+	tests := []struct {
+		name    string
+		cfg     *config.Config
+		account db.Account
+		want    string
+	}{
+		{name: "stored avatar", cfg: testConfig(), account: db.Account{AvatarFileName: pgtype.Text{String: "media_attachments/files/2/2/a.png", Valid: true}}, want: "https://example.com/files/media_attachments/files/2/2/a.png"},
+		{name: "configured base URL", cfg: cdn, account: db.Account{AvatarFileName: pgtype.Text{String: "a.png", Valid: true}}, want: "https://cdn.example.net/media/a.png"},
+		{name: "remote avatar", cfg: testConfig(), account: db.Account{AvatarRemoteUrl: pgtype.Text{String: "https://remote.example/a.png", Valid: true}}, want: "https://remote.example/a.png"},
+		{name: "no avatar", cfg: testConfig(), account: db.Account{}, want: "https://example.com/avatars/original/missing.png"},
+		{name: "relative remote avatar", cfg: testConfig(), account: db.Account{AvatarRemoteUrl: pgtype.Text{String: "/a.png", Valid: true}}, want: "https://example.com/avatars/original/missing.png"},
+		{name: "no configuration", cfg: nil, account: db.Account{}, want: "https://localhost:3000/avatars/original/missing.png"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := NewService(newFakeStore(), &fakeSender{status: 201}, tt.cfg, nil)
+			if got := service.avatarURL(tt.account); got != tt.want {
+				t.Fatalf("avatarURL = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
