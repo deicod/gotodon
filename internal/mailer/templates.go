@@ -157,6 +157,55 @@ A new account ({{.Username}}, {{.Email}}) is waiting for your review. You can ap
 `),
 		},
 	},
+	// UserMailer.warning. Params: Action (the strike's action: none,
+	// disable, mark_statuses_as_sensitive, delete_statuses, sensitive,
+	// silence or suspend; anything else reads as none), Acct (the
+	// recipient as @username@domain), Text (the strike's text, may be
+	// empty), Statuses (the cited posts, one "=> URL" line each, may be
+	// empty).
+	KindWarning: {
+		subject: map[string]*texttemplate.Template{
+			"en": mustSubject("en", KindWarning, `{{if eq .Action "disable"}}Your account {{.Acct}} has been frozen`+
+				`{{else if eq .Action "mark_statuses_as_sensitive"}}Your posts on {{.Acct}} have been marked as sensitive`+
+				`{{else if eq .Action "delete_statuses"}}Your posts on {{.Acct}} have been removed`+
+				`{{else if eq .Action "sensitive"}}Your posts on {{.Acct}} will be marked as sensitive from now on`+
+				`{{else if eq .Action "silence"}}Your account {{.Acct}} has been limited`+
+				`{{else if eq .Action "suspend"}}Your account {{.Acct}} has been suspended`+
+				`{{else}}Warning for {{.Acct}}{{end}}`),
+		},
+		body: map[string]*texttemplate.Template{
+			"en": mustBody("en", KindWarning, `{{if eq .Action "disable"}}Account frozen`+
+				`{{else if eq .Action "mark_statuses_as_sensitive"}}Posts marked as sensitive`+
+				`{{else if eq .Action "delete_statuses"}}Posts removed`+
+				`{{else if eq .Action "sensitive"}}Account marked as sensitive`+
+				`{{else if eq .Action "silence"}}Account limited`+
+				`{{else if eq .Action "suspend"}}Account suspended`+
+				`{{else}}Warning{{end}}
+
+===
+{{if eq .Action "disable"}}
+You can no longer use your account, but your profile and other data remains intact. You can request a backup of your data, change account settings or delete your account.
+{{else if eq .Action "mark_statuses_as_sensitive"}}
+Some of your posts have been marked as sensitive by the moderators of {{.Domain}}. This means that people will need to tap the media in the posts before a preview is displayed. You can mark media as sensitive yourself when posting in the future.
+{{else if eq .Action "delete_statuses"}}
+Some of your posts have been found to violate one or more community guidelines and have been subsequently removed by the moderators of {{.Domain}}.
+{{else if eq .Action "sensitive"}}
+From now on, all your uploaded media files will be marked as sensitive and hidden behind a click-through warning.
+{{else if eq .Action "silence"}}
+You can still use your account but only people who are already following you will see your posts on this server, and you may be excluded from various discovery features. However, others may still manually follow you.
+{{else if eq .Action "suspend"}}
+You can no longer use your account, and your profile and other data are no longer accessible. You can still login to request a backup of your data until the data is fully removed in about 30 days, but we will retain some basic data to prevent you from evading the suspension.
+{{end}}{{if .Text}}
+Reason:
+
+{{.Text}}
+{{end}}{{if .Statuses}}
+Posts cited:
+
+{{.Statuses}}
+{{end}}`),
+		},
+	},
 }
 
 // Kinds returns the supported mail kinds, sorted.

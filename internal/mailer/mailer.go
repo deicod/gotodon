@@ -16,6 +16,7 @@ const (
 	KindSuspiciousSignIn          = "suspicious_sign_in"
 	KindAdminNewReport            = "admin_new_report"
 	KindAdminNewPendingAccount    = "admin_new_pending_account"
+	KindWarning                   = "warning"
 )
 
 var (

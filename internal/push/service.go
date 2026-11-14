@@ -16,6 +16,7 @@ import (
 
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/moderation"
 	"github.com/deicod/gotodon/pkg/safehttp"
 )
 
@@ -31,6 +32,7 @@ type Store interface {
 	GetUserByAccountID(ctx context.Context, accountID int64) (db.User, error)
 	GetUserByID(ctx context.Context, id int64) (db.User, error)
 	GetFollow(ctx context.Context, arg db.GetFollowParams) (db.Follow, error)
+	GetAccountWarningsByIDs(ctx context.Context, ids []int64) ([]db.GetAccountWarningsByIDsRow, error)
 }
 
 // Deliverer hands a per-subscription delivery to the worker queue (or an
@@ -194,6 +196,22 @@ func (s *Service) buildPayload(ctx context.Context, sub db.WebPushSubscription, 
 	}
 
 	notificationType := notification.Type.String
+	title := notificationTitle(notificationType, displayName(fromAccount))
+	body := truncateBody(stripTags(bodySource), 140)
+
+	// A strike's notification comes from its recipient, so the sender's
+	// name and bio would only show the recipient themselves. It says what
+	// the moderators did instead, with the strike's text, which is plain
+	// text, as the body. A deleted strike aborts the delivery, as a deleted
+	// status does.
+	if moderation.IsWarningNotification(notification) {
+		strike, err := s.strike(ctx, notification.ActivityID)
+		if err != nil {
+			return nil, fmt.Errorf("loading strike: %w", err)
+		}
+		title = warningTitle(strike.Action)
+		body = truncateBody(strings.TrimSpace(strike.Text), 140)
+	}
 
 	return json.Marshal(notificationPayload{
 		AccessToken:      accessToken,
@@ -201,9 +219,23 @@ func (s *Service) buildPayload(ctx context.Context, sub db.WebPushSubscription, 
 		NotificationID:   notification.ID,
 		NotificationType: notificationType,
 		Icon:             s.avatarURL(fromAccount),
-		Title:            notificationTitle(notificationType, displayName(fromAccount)),
-		Body:             truncateBody(stripTags(bodySource), 140),
+		Title:            title,
+		Body:             body,
 	})
+}
+
+// strike loads the strike id, and pgx.ErrNoRows when it is gone.
+func (s *Service) strike(ctx context.Context, id int64) (db.GetAccountWarningsByIDsRow, error) {
+	rows, err := s.store.GetAccountWarningsByIDs(ctx, []int64{id})
+	if err != nil {
+		return db.GetAccountWarningsByIDsRow{}, err
+	}
+	for _, row := range rows {
+		if row.ID == id {
+			return row, nil
+		}
+	}
+	return db.GetAccountWarningsByIDsRow{}, pgx.ErrNoRows
 }
 
 // pushable mirrors Web::PushSubscription#pushable?: the subscription's alert
@@ -319,6 +351,27 @@ func notificationTitle(notificationType, name string) string {
 		return fmt.Sprintf("%s submitted a report", name)
 	default:
 		return name
+	}
+}
+
+// warningTitle says what a strike with the stored action did, in the words
+// of Mastodon's web notification for it (notification.moderation_warning.*).
+func warningTitle(action int32) string {
+	switch moderation.StrikeActionName(action) {
+	case "disable":
+		return "Your account has been disabled"
+	case "mark_statuses_as_sensitive":
+		return "Some of your posts have been marked as sensitive"
+	case "delete_statuses":
+		return "Some of your posts have been removed"
+	case "sensitive":
+		return "Your posts will be marked as sensitive from now on"
+	case "silence":
+		return "Your account has been limited"
+	case "suspend":
+		return "Your account has been suspended"
+	default:
+		return "Your account has received a moderation warning"
 	}
 }
 

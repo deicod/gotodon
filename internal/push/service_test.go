@@ -24,6 +24,8 @@ type fakeStore struct {
 	usersByAcct   map[int64]db.User
 	usersByID     map[int64]db.User
 	follows       map[[2]int64]bool
+	warnings      map[int64]db.GetAccountWarningsByIDsRow
+	warningsErr   error
 
 	deletedSubscriptions []int64
 }
@@ -38,6 +40,7 @@ func newFakeStore() *fakeStore {
 		usersByAcct:   map[int64]db.User{},
 		usersByID:     map[int64]db.User{},
 		follows:       map[[2]int64]bool{},
+		warnings:      map[int64]db.GetAccountWarningsByIDsRow{},
 	}
 }
 
@@ -118,6 +121,19 @@ func (f *fakeStore) GetFollow(_ context.Context, arg db.GetFollowParams) (db.Fol
 		return db.Follow{}, nil
 	}
 	return db.Follow{}, pgx.ErrNoRows
+}
+
+func (f *fakeStore) GetAccountWarningsByIDs(_ context.Context, ids []int64) ([]db.GetAccountWarningsByIDsRow, error) {
+	if f.warningsErr != nil {
+		return nil, f.warningsErr
+	}
+	var rows []db.GetAccountWarningsByIDsRow
+	for _, id := range ids {
+		if row, ok := f.warnings[id]; ok {
+			rows = append(rows, row)
+		}
+	}
+	return rows, nil
 }
 
 type fakeSender struct {
@@ -438,6 +454,102 @@ func TestDeliverSubscriptionDropsKeylessSubscription(t *testing.T) {
 	}
 	if len(sender.payloads) != 0 {
 		t.Errorf("expected no send for keyless subscription")
+	}
+}
+
+// warningFixture adds a moderation_warning notification (501) for account 1,
+// from account 1 as Mastodon creates it, about strike 60, and enables its
+// alert.
+func warningFixture(action int32, text string) *fakeStore {
+	store := fixture()
+	store.accounts[1] = db.Account{ID: 1, Username: "bob", DisplayName: "Bob", Note: "<p>My own bio</p>"}
+	store.warnings[60] = db.GetAccountWarningsByIDsRow{ID: 60, TargetAccountID: pgtype.Int8{Int64: 1, Valid: true}, Action: action, Text: text}
+	store.notifications[501] = db.Notification{
+		ID:            501,
+		AccountID:     1,
+		FromAccountID: 1,
+		ActivityType:  "AccountWarning",
+		ActivityID:    60,
+		Type:          pgtype.Text{String: "moderation_warning", Valid: true},
+		UpdatedAt:     pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	}
+	sub := store.subscriptions[7]
+	sub.Data = []byte(`{"alerts":{"moderation_warning":true}}`)
+	store.subscriptions[7] = sub
+	return store
+}
+
+// TestDeliverSubscriptionModerationWarning checks that a strike's push says
+// what the moderators did, with the strike's text, rather than showing the
+// recipient's own name and bio.
+func TestDeliverSubscriptionModerationWarning(t *testing.T) {
+	long := strings.Repeat("a", 150)
+	tests := []struct {
+		name      string
+		action    int32
+		text      string
+		wantTitle string
+		wantBody  string
+	}{
+		{"warning", 0, "Please stop posting spam.", "Your account has received a moderation warning", "Please stop posting spam."},
+		{"disable", 1000, "", "Your account has been disabled", ""},
+		{"mark statuses as sensitive", 1250, "", "Some of your posts have been marked as sensitive", ""},
+		{"delete statuses", 1500, "", "Some of your posts have been removed", ""},
+		{"sensitive", 2000, "Media.", "Your posts will be marked as sensitive from now on", "Media."},
+		{"silence", 3000, "  Spam.\n\nSecond time.  ", "Your account has been limited", "Spam.\n\nSecond time."},
+		{"suspend", 4000, "", "Your account has been suspended", ""},
+		{"unknown action", 42, "", "Your account has received a moderation warning", ""},
+		// The text is plain, so markup in it is kept.
+		{"text with markup", 0, "Don't post <b>this</b>", "Your account has received a moderation warning", "Don't post <b>this</b>"},
+		{"long text", 0, long, "Your account has received a moderation warning", long[:137] + "..."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := warningFixture(tt.action, tt.text)
+			sender := &fakeSender{status: 201}
+			service := NewService(store, sender, testConfig(), nil)
+			if err := service.DeliverSubscription(context.Background(), 7, 501); err != nil {
+				t.Fatalf("DeliverSubscription: %v", err)
+			}
+			if len(sender.payloads) != 1 {
+				t.Fatalf("expected 1 send, got %d", len(sender.payloads))
+			}
+			payload := decodePayload(t, sender.payloads[0])
+			if payload.NotificationType != "moderation_warning" || payload.NotificationID != 501 {
+				t.Errorf("payload = %+v, want moderation_warning 501", payload)
+			}
+			if payload.Title != tt.wantTitle {
+				t.Errorf("title = %q, want %q", payload.Title, tt.wantTitle)
+			}
+			if payload.Body != tt.wantBody {
+				t.Errorf("body = %q, want %q", payload.Body, tt.wantBody)
+			}
+		})
+	}
+}
+
+// TestDeliverSubscriptionModerationWarningStrikeLookup checks that a deleted
+// strike drops the delivery and a failed lookup is retried.
+func TestDeliverSubscriptionModerationWarningStrikeLookup(t *testing.T) {
+	store := warningFixture(3000, "Spam.")
+	delete(store.warnings, 60)
+	sender := &fakeSender{status: 201}
+	if err := NewService(store, sender, testConfig(), nil).DeliverSubscription(context.Background(), 7, 501); err != nil {
+		t.Fatalf("deleted strike: DeliverSubscription = %v, want nil", err)
+	}
+	if len(sender.payloads) != 0 {
+		t.Fatalf("deleted strike: sent %d payloads, want none", len(sender.payloads))
+	}
+
+	failing := errors.New("database unavailable")
+	store = warningFixture(3000, "Spam.")
+	store.warningsErr = failing
+	sender = &fakeSender{status: 201}
+	if err := NewService(store, sender, testConfig(), nil).DeliverSubscription(context.Background(), 7, 501); !errors.Is(err, failing) {
+		t.Fatalf("failed lookup: DeliverSubscription = %v, want %v", err, failing)
+	}
+	if len(sender.payloads) != 0 {
+		t.Fatalf("failed lookup: sent %d payloads, want none", len(sender.payloads))
 	}
 }
 
