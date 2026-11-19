@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,15 +13,24 @@ import (
 )
 
 func TestLocalStorage(t *testing.T) {
-	// Create temp directory
-	tmpDir, err := os.MkdirTemp("", "gotodon-storage-test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
-
-	storage := NewLocalStorage(tmpDir, "https://example.com/files")
+	storage := NewLocalStorage(filepath.Join(t.TempDir(), "uploads"), "https://example.com/files")
 	ctx := context.Background()
+
+	t.Run("Missing storage directory", func(t *testing.T) {
+		const name = "test/file.txt"
+		if _, err := storage.Load(ctx, name); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("Load() error = %v, want %v", err, os.ErrNotExist)
+		}
+		if exists, err := storage.Exists(ctx, name); exists || err != nil {
+			t.Errorf("Exists() = %v, %v, want false, nil", exists, err)
+		}
+		if err := storage.Delete(ctx, name); err != nil {
+			t.Errorf("Delete() error = %v, want nil", err)
+		}
+		if _, err := os.Lstat(storage.BasePath); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("storage directory should still be absent, got %v", err)
+		}
+	})
 
 	t.Run("Save and Load", func(t *testing.T) {
 		data := []byte("test content")
@@ -49,8 +59,10 @@ func TestLocalStorage(t *testing.T) {
 	})
 
 	t.Run("Exists", func(t *testing.T) {
-		path := "exists/test.txt"
-		_ = storage.Save(ctx, path, []byte("test"))
+		path := "exists.txt"
+		if err := storage.Save(ctx, path, []byte("test")); err != nil {
+			t.Fatalf("Save() error = %v", err)
+		}
 
 		exists, err := storage.Exists(ctx, path)
 		if err != nil {
@@ -87,6 +99,98 @@ func TestLocalStorage(t *testing.T) {
 			t.Errorf("Delete nonexistent should not error: %v", err)
 		}
 	})
+}
+
+func TestLocalStorageRejectsInvalidPaths(t *testing.T) {
+	parent := t.TempDir()
+	outside := filepath.Join(parent, "x")
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "parent traversal", path: "../x"},
+		{name: "nested traversal", path: "a/../../x"},
+		{name: "unclean path within root", path: "a/../x"},
+		{name: "leading dot segment", path: "./x"},
+		{name: "repeated separator", path: "a//x"},
+		{name: "trailing separator", path: "x/"},
+		{name: "absolute path", path: outside},
+		{name: "NUL byte", path: "a/nu\x00l"},
+		{name: "storage root", path: "."},
+		{name: "empty path", path: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := filepath.Join(parent, "uploads")
+			assertStoragePathRejected(t, NewLocalStorage(root, ""), tt.path, os.ErrInvalid)
+			for _, name := range []string{root, outside} {
+				if _, err := os.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("%q should still be absent, got %v", name, err)
+				}
+			}
+		})
+	}
+}
+
+func TestLocalStorageRejectsSymlinkEscapes(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "uploads")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const original = "outside storage"
+	writeFile(t, parent, "outside/x", []byte(original))
+	for link, target := range map[string]string{
+		"dir":  filepath.Join("..", "outside"),
+		"leaf": filepath.Join("..", "outside", "x"),
+	} {
+		if err := os.Symlink(target, filepath.Join(root, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	storage := NewLocalStorage(root, "")
+	for _, name := range []string{"dir/x", "dir/missing/x", "leaf"} {
+		t.Run(name, func(t *testing.T) {
+			assertStoragePathRejected(t, storage, name, nil)
+		})
+	}
+	if data, err := os.ReadFile(filepath.Join(parent, "outside", "x")); err != nil || string(data) != original {
+		t.Errorf("outside file changed: got %q, %v", data, err)
+	}
+	if _, err := os.Lstat(filepath.Join(parent, "outside", "missing")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("outside directory should still be absent, got %v", err)
+	}
+	if _, err := os.Readlink(filepath.Join(root, "leaf")); err != nil {
+		t.Errorf("leaf symlink should still exist, got %v", err)
+	}
+}
+
+func assertStoragePathRejected(t *testing.T, storage *LocalStorage, path string, want error) {
+	t.Helper()
+	ctx := t.Context()
+	data, loadErr := storage.Load(ctx, path)
+	if data != nil {
+		t.Errorf("Load(%q) returned data", path)
+	}
+	exists, existsErr := storage.Exists(ctx, path)
+	if exists {
+		t.Errorf("Exists(%q) = true", path)
+	}
+	for _, op := range []struct {
+		name string
+		err  error
+	}{
+		{"Save", storage.Save(ctx, path, []byte("replacement"))},
+		{"Load", loadErr},
+		{"Delete", storage.Delete(ctx, path)},
+		{"Exists", existsErr},
+	} {
+		if op.err == nil {
+			t.Errorf("%s(%q) succeeded, want an error", op.name, path)
+		} else if want != nil && !errors.Is(op.err, want) {
+			t.Errorf("%s(%q) error = %v, want %v", op.name, path, op.err, want)
+		}
+	}
 }
 
 func TestGenerateStoragePath(t *testing.T) {
