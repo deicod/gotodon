@@ -695,3 +695,71 @@ func assertContains(t *testing.T, got, want string) {
 		t.Fatalf("body missing %q\nbody=%s", want, got)
 	}
 }
+
+// TestShortRoutesNegotiateAccept checks that /@name and /@name/id hand the
+// same Accept headers to the ActivityPub handlers as /users/name and
+// /users/name/statuses/id serve documents for, and render the page for the
+// rest.
+func TestShortRoutesNegotiateAccept(t *testing.T) {
+	tests := []struct {
+		name            string
+		accept          []string
+		wantActivityPub bool
+	}{
+		{name: "Mastodon fetch", accept: []string{"application/activity+json, application/ld+json"}, wantActivityPub: true},
+		{name: "activity+json", accept: []string{"application/activity+json"}, wantActivityPub: true},
+		{name: "profiled ld+json", accept: []string{`application/ld+json; profile="https://www.w3.org/ns/activitystreams"`}, wantActivityPub: true},
+		{name: "bare ld+json", accept: []string{"application/ld+json"}, wantActivityPub: true},
+		{name: "ActivityPub preferred by q", accept: []string{"text/html;q=0.5, application/activity+json"}, wantActivityPub: true},
+		{name: "ActivityPub then */*", accept: []string{"application/activity+json, */*;q=0.1"}, wantActivityPub: true},
+		{name: "HTML preferred by q", accept: []string{"application/activity+json;q=0.5, text/html"}, wantActivityPub: false},
+		{name: "ActivityPub refused with q=0", accept: []string{"application/activity+json;q=0, text/html;q=0.1"}, wantActivityPub: false},
+		{name: "browser", accept: []string{"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}, wantActivityPub: false},
+		{name: "*/*", accept: []string{"*/*"}, wantActivityPub: false},
+		{name: "no Accept", wantActivityPub: false},
+		{name: "a substring is not a media type", accept: []string{"application/activity"}, wantActivityPub: false},
+	}
+	store := &stubStore{
+		accounts: map[string]db.Account{
+			"alice": {ID: 1, Username: "alice", DisplayName: "Alice"},
+		},
+		statusesByID: map[int64]db.Status{
+			7: {ID: 7, AccountID: 1, Visibility: visibilityPublic, Text: "hello"},
+		},
+	}
+	for _, tt := range tests {
+		for _, path := range []string{"/@alice", "/@alice/7"} {
+			t.Run(tt.name+" "+path, func(t *testing.T) {
+				renderer := &stubActivityPubRenderer{}
+				mux := http.NewServeMux()
+				NewHandler(store, &config.Config{}, renderer).RegisterRoutes(mux)
+
+				req := httptest.NewRequest(http.MethodGet, path, nil)
+				for _, value := range tt.accept {
+					req.Header.Add("Accept", value)
+				}
+				rec := httptest.NewRecorder()
+				mux.ServeHTTP(rec, req)
+
+				if rec.Code != http.StatusOK {
+					t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+				}
+				if got := rec.Header().Get("Vary"); got != "Accept" {
+					t.Fatalf("Vary = %q, want Accept", got)
+				}
+				delegated := renderer.actorCalled || renderer.statusCalled
+				if delegated != tt.wantActivityPub {
+					t.Fatalf("delegated to ActivityPub = %v, want %v", delegated, tt.wantActivityPub)
+				}
+				if delegated && renderer.accept != "application/activity+json" {
+					t.Fatalf("forwarded Accept = %q, want application/activity+json", renderer.accept)
+				}
+				if !delegated {
+					if got := rec.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
+						t.Fatalf("Content-Type = %q, want the HTML page", got)
+					}
+				}
+			})
+		}
+	}
+}

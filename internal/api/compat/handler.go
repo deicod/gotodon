@@ -15,6 +15,8 @@ import (
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/media"
+	"github.com/deicod/gotodon/internal/web"
+	"github.com/deicod/gotodon/pkg/activitypub"
 )
 
 const (
@@ -73,21 +75,21 @@ func (h *Handler) ShowAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	acceptNegotiated := !jsonRequested
 	if acceptNegotiated {
-		setVaryAccept(w.Header())
+		web.AddVary(w.Header(), "Accept")
 	}
 	if strings.TrimSpace(username) == "" {
 		http.NotFound(w, r)
 		return
 	}
 
-	if jsonRequested || wantsActivityPub(r) {
+	if jsonRequested || activitypub.PrefersActivityPub(r.Header) {
 		if h.ap == nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		cloned := r.Clone(r.Context())
 		cloned.SetPathValue("username", username)
-		cloned.Header.Set("Accept", "application/activity+json")
+		cloned.Header.Set("Accept", activitypub.ActivityPubContentType)
 		h.ap.GetActor(w, cloned)
 		return
 	}
@@ -151,7 +153,7 @@ func (h *Handler) ShowStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	acceptNegotiated := !jsonRequested
 	if acceptNegotiated {
-		setVaryAccept(w.Header())
+		web.AddVary(w.Header(), "Accept")
 	}
 
 	statusID, err := strconv.ParseInt(statusPart, 10, 64)
@@ -160,7 +162,7 @@ func (h *Handler) ShowStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if jsonRequested || wantsActivityPub(r) {
+	if jsonRequested || activitypub.PrefersActivityPub(r.Header) {
 		if h.ap == nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
@@ -168,7 +170,7 @@ func (h *Handler) ShowStatus(w http.ResponseWriter, r *http.Request) {
 		cloned := r.Clone(r.Context())
 		cloned.SetPathValue("username", username)
 		cloned.SetPathValue("statusID", strconv.FormatInt(statusID, 10))
-		cloned.Header.Set("Accept", "application/activity+json")
+		cloned.Header.Set("Accept", activitypub.ActivityPubContentType)
 		h.ap.GetStatus(w, cloned)
 		return
 	}
@@ -269,13 +271,6 @@ func (h *Handler) loadLocalAccount(ctx context.Context, username string) (db.Acc
 		return db.Account{}, &accountVisibilityError{status: http.StatusGone}
 	}
 	return account, nil
-}
-
-func wantsActivityPub(r *http.Request) bool {
-	accept := strings.ToLower(r.Header.Get("Accept"))
-	return strings.Contains(accept, "application/activity+json") ||
-		strings.Contains(accept, "application/ld+json") ||
-		strings.Contains(accept, "application/activity")
 }
 
 func (h *Handler) reblogTargetURL(ctx context.Context, account db.Account, status db.Status) (string, bool) {
@@ -386,19 +381,4 @@ func statusErrorCode(err error) int {
 		return serr.Status()
 	}
 	return 0
-}
-
-func setVaryAccept(h http.Header) {
-	if h == nil {
-		return
-	}
-	values := h.Values("Vary")
-	for _, value := range values {
-		for _, token := range strings.Split(value, ",") {
-			if strings.EqualFold(strings.TrimSpace(token), "Accept") {
-				return
-			}
-		}
-	}
-	h.Add("Vary", "Accept")
 }

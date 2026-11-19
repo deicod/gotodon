@@ -55,12 +55,33 @@ func Bind(r *http.Request, v interface{}) error {
 
 // JSON writes a JSON response with the given status code.
 func JSON(w http.ResponseWriter, status int, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
+	JSONWithContentType(w, status, "application/json", v)
+}
+
+// JSONWithContentType writes v as JSON with the given status code under
+// contentType, such as application/activity+json, replacing any Content-Type
+// set before.
+func JSONWithContentType(w http.ResponseWriter, status int, contentType string, v interface{}) {
+	w.Header().Set("Content-Type", contentType)
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		// Fallback logging or ignore if write failed
 		_ = err
 	}
+}
+
+// AddVary adds the header name token to the Vary header of h unless Vary
+// already lists it or is "*".
+func AddVary(h http.Header, token string) {
+	for _, value := range h.Values("Vary") {
+		for _, listed := range strings.Split(value, ",") {
+			listed = strings.TrimSpace(listed)
+			if listed == "*" || strings.EqualFold(listed, token) {
+				return
+			}
+		}
+	}
+	h.Add("Vary", token)
 }
 
 func decodeJSON(body []byte, v interface{}) error {

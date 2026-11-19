@@ -71,8 +71,7 @@ func (h *FederationHandler) writeOutboxForAccount(w http.ResponseWriter, r *http
 				Last:       last,
 			},
 		}
-		w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-		web.JSON(w, http.StatusOK, collection)
+		writeActivityJSON(w, collection)
 		return
 	}
 
@@ -126,8 +125,7 @@ func (h *FederationHandler) writeOutboxForAccount(w http.ResponseWriter, r *http
 		Prev:         prev,
 	}
 
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, page)
+	writeActivityJSON(w, page)
 }
 
 func (h *FederationHandler) writeFollowers(w http.ResponseWriter, r *http.Request) {
@@ -190,8 +188,7 @@ func (h *FederationHandler) writeFollowCollection(w http.ResponseWriter, r *http
 				First:      collectionPageURL(base, limit, 0),
 			},
 		}
-		w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-		web.JSON(w, http.StatusOK, collection)
+		writeActivityJSON(w, collection)
 		return
 	}
 
@@ -238,8 +235,7 @@ func (h *FederationHandler) writeFollowCollection(w http.ResponseWriter, r *http
 		Prev:         prev,
 	}
 
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, page)
+	writeActivityJSON(w, page)
 }
 
 // GetFeatured handles GET /users/:username/collections/featured.
@@ -296,8 +292,7 @@ func (h *FederationHandler) GetFeatured(w http.ResponseWriter, r *http.Request) 
 		OrderedItems: notes,
 	}
 
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, collection)
+	writeActivityJSON(w, collection)
 }
 
 // GetFeaturedTags handles GET /users/:username/collections/tags.
@@ -353,8 +348,7 @@ func (h *FederationHandler) GetFeaturedTags(w http.ResponseWriter, r *http.Reque
 		Items:      items,
 	}
 
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, collection)
+	writeActivityJSON(w, collection)
 }
 
 func (h *FederationHandler) renderEmptyOrderedItemsCollection(w http.ResponseWriter, base string) {
@@ -370,8 +364,7 @@ func (h *FederationHandler) renderEmptyOrderedItemsCollection(w http.ResponseWri
 		OrderedItems: []any{},
 	}
 
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, collection)
+	writeActivityJSON(w, collection)
 }
 
 func (h *FederationHandler) renderEmptyCollection(w http.ResponseWriter, base string) {
@@ -385,8 +378,7 @@ func (h *FederationHandler) renderEmptyCollection(w http.ResponseWriter, base st
 		Items:      []any{},
 	}
 
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, collection)
+	writeActivityJSON(w, collection)
 }
 
 func (h *FederationHandler) renderEmptyOrderedCollection(w http.ResponseWriter, base string) {
@@ -405,8 +397,7 @@ func (h *FederationHandler) renderEmptyOrderedCollectionWithPage(w http.Response
 			First:      collectionPageURL(base, limit, 0),
 		},
 	}
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, collection)
+	writeActivityJSON(w, collection)
 }
 
 func (h *FederationHandler) renderEmptyOrderedPage(w http.ResponseWriter, base string, limit, offset int) {
@@ -422,8 +413,7 @@ func (h *FederationHandler) renderEmptyOrderedPage(w http.ResponseWriter, base s
 		OrderedItems: []any{},
 		PartOf:       base,
 	}
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, page)
+	writeActivityJSON(w, page)
 }
 
 func (h *FederationHandler) renderEmptyOutboxCollection(w http.ResponseWriter, base string, limit int) {
@@ -440,8 +430,7 @@ func (h *FederationHandler) renderEmptyOutboxCollection(w http.ResponseWriter, b
 		},
 	}
 
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, collection)
+	writeActivityJSON(w, collection)
 }
 
 func (h *FederationHandler) renderEmptyOutboxPage(w http.ResponseWriter, base string, limit int, maxID, minID, sinceID int64) {
@@ -458,8 +447,7 @@ func (h *FederationHandler) renderEmptyOutboxPage(w http.ResponseWriter, base st
 		PartOf:       base,
 	}
 
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, page)
+	writeActivityJSON(w, page)
 }
 
 func (h *FederationHandler) actorURIFromUsername(username string) string {

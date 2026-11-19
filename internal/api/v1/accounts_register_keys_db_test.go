@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -310,7 +311,7 @@ func TestRegisteredAccountFederatesWithMastodonPeer(t *testing.T) {
 }
 
 // fetchActorDocument fetches an actor document as the peer does, without
-// following redirects.
+// following redirects, and checks that Mastodon would read it.
 func fetchActorDocument(t *testing.T, client *http.Client, uri string) activitypub.Actor {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodGet, uri, nil)
@@ -327,6 +328,12 @@ func fetchActorDocument(t *testing.T, client *http.Client, uri string) activityp
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("fetch actor: status = %d, Location = %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	if got := resp.Header.Values("Content-Type"); len(got) != 1 || got[0] != activitypub.ActivityPubContentType {
+		t.Fatalf("actor Content-Type = %q, want [%s]", got, activitypub.ActivityPubContentType)
+	}
+	if !validActivityPubContentType(resp.Header) {
+		t.Fatalf("Mastodon discards an actor served as %q", resp.Header.Get("Content-Type"))
 	}
 	var actor activitypub.Actor
 	if err := json.NewDecoder(resp.Body).Decode(&actor); err != nil {
@@ -350,22 +357,61 @@ func (e *signingEnqueuer) Enqueue(localActor db.Account, inbox string, activity 
 	return outbox.DeliverActivity(context.Background(), inbox, activity)
 }
 
-// peerFetchAccept is the Accept header the peer fetches documents with.
-// Mastodon 4.5.3 sends "application/activity+json, application/ld+json"
-// (JsonLdHelper#build_request), which gotodon still answers with a redirect
-// to the profile page (#134).
-const peerFetchAccept = "application/activity+json"
+// peerFetchAccept is the Accept header Mastodon 4.5.3 fetches ActivityPub
+// documents with (JsonLdHelper#build_request).
+const peerFetchAccept = "application/activity+json, application/ld+json"
+
+// activityStreamsContext is the JSON-LD context Mastodon requires of a fetched
+// key document (ActivityPub::TagManager::CONTEXT).
+const activityStreamsContext = "https://www.w3.org/ns/activitystreams"
+
+// validActivityPubContentType reports whether Mastodon reads a fetched
+// document with these response headers, as
+// JsonLdHelper#valid_activitypub_content_type? decides: its media type is
+// application/activity+json, or application/ld+json with a profile parameter
+// that lists the ActivityStreams namespace.
+func validActivityPubContentType(header http.Header) bool {
+	contentType := header.Get("Content-Type")
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil && !errors.Is(err, mime.ErrInvalidMediaParameter) {
+		return false
+	}
+	switch mediaType {
+	case "application/activity+json":
+		return true
+	case "application/ld+json":
+		for _, part := range strings.Split(contentType, ";") {
+			part = strings.TrimSpace(part)
+			if strings.HasPrefix(part, `profile="`) && len(part) > len(`profile="`) &&
+				slices.Contains(strings.Fields(part[len(`profile="`):len(part)-1]), activityStreamsContext) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasActivityStreamsContext reports whether document's @context is or lists
+// the ActivityStreams context, as JsonLdHelper#supported_context? requires.
+func hasActivityStreamsContext(document map[string]any) bool {
+	switch context := document["@context"].(type) {
+	case string:
+		return context == activityStreamsContext
+	case []any:
+		return slices.Contains(context, any(activityStreamsContext))
+	}
+	return false
+}
 
 // mastodonPeer stands in for a Mastodon 4.5.3 server hosting the actor
 // https://peer.example.com/users/bob. Its inbox accepts a delivery only when
 // the request's draft-cavage signature verifies as Mastodon's SignedRequest
 // (mastodon/app/lib/signed_request.rb) verifies it, with the key resolved
 // from keyId over HTTP as ActivityPub::FetchRemoteKeyService resolves it.
+// It fetches with Mastodon's Accept header and reads only documents that
+// JsonLdHelper would read: a 200 response under an ActivityPub media type.
 // Beyond Mastodon, it requires the key's id and owner to match keyId and the
-// actor. Unlike Mastodon, it fetches with peerFetchAccept and does not check
-// the Content-Type of fetched documents, which gotodon serves as
-// application/json (#134). It signs its own deliveries as Mastodon's Request
-// does.
+// actor. It signs its own deliveries as Mastodon's Request does.
 type mastodonPeer struct {
 	key    *rsa.PrivateKey
 	client *http.Client
@@ -602,6 +648,9 @@ func (p *mastodonPeer) fetchKey(keyID string) (string, *rsa.PublicKey, error) {
 	if document["id"] != actorURI {
 		return "", nil, fmt.Errorf("unable to fetch key JSON at %s", keyID)
 	}
+	if !hasActivityStreamsContext(document) {
+		return "", nil, fmt.Errorf("unsupported JSON-LD context for document %s", keyID)
+	}
 	raw, err := json.Marshal(document)
 	if err != nil {
 		return "", nil, err
@@ -647,7 +696,7 @@ func (p *mastodonPeer) fetchKey(keyID string) (string, *rsa.PublicKey, error) {
 
 // fetchDocument fetches an ActivityPub document as
 // JsonLdHelper#fetch_resource_without_id_validation does: only a 200 response
-// yields a document.
+// under an ActivityPub media type yields a document.
 func (p *mastodonPeer) fetchDocument(uri string, allowRedirects bool) (map[string]any, error) {
 	req, err := http.NewRequest(http.MethodGet, uri, nil)
 	if err != nil {
@@ -665,6 +714,9 @@ func (p *mastodonPeer) fetchDocument(uri string, allowRedirects bool) (map[strin
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("fetch %s: status %d", uri, resp.StatusCode)
+	}
+	if !validActivityPubContentType(resp.Header) {
+		return nil, fmt.Errorf("fetch %s: not an ActivityPub document: Content-Type %q", uri, resp.Header.Get("Content-Type"))
 	}
 	var document map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&document); err != nil {
@@ -748,4 +800,33 @@ func parseCavageSignature(header string) (map[string]string, error) {
 		}
 	}
 	return params, nil
+}
+
+// TestValidActivityPubContentType checks the peer's media type check against
+// the cases JsonLdHelper#valid_activitypub_content_type? distinguishes.
+func TestValidActivityPubContentType(t *testing.T) {
+	tests := []struct {
+		contentType string
+		want        bool
+	}{
+		{contentType: "application/activity+json", want: true},
+		{contentType: "application/activity+json; charset=utf-8", want: true},
+		{contentType: "Application/Activity+JSON", want: true},
+		{contentType: `application/ld+json; profile="https://www.w3.org/ns/activitystreams"`, want: true},
+		{contentType: `application/ld+json; profile="https://example.com/x https://www.w3.org/ns/activitystreams"`, want: true},
+		{contentType: "application/ld+json", want: false},
+		{contentType: `application/ld+json; profile="https://example.com/x"`, want: false},
+		{contentType: "application/json", want: false},
+		{contentType: "text/html; charset=utf-8", want: false},
+		{contentType: "", want: false},
+	}
+	for _, tt := range tests {
+		header := http.Header{}
+		if tt.contentType != "" {
+			header.Set("Content-Type", tt.contentType)
+		}
+		if got := validActivityPubContentType(header); got != tt.want {
+			t.Errorf("validActivityPubContentType(%q) = %v, want %v", tt.contentType, got, tt.want)
+		}
+	}
 }

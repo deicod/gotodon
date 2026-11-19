@@ -124,8 +124,7 @@ func (h *FederationHandler) GetQuoteAuthorization(w http.ResponseWriter, r *http
 		InteractionTarget: interactionTarget,
 	}
 
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, resp)
+	writeActivityJSON(w, resp)
 }
 
 func quoteApprovalID(domain, username string, quote db.Quote) string {
@@ -145,11 +144,13 @@ func validInt64(value pgtype.Int8) (int64, bool) {
 	return value.Int64, true
 }
 
+// parseQuoteID reads the quote id of /users/{username}/quote_authorizations/{id}
+// or /ap/users/{id}/quote_authorizations/{quoteID}, where {id} is the account.
 func parseQuoteID(r *http.Request) (int64, error) {
-	if raw := web.Param(r, "id"); raw != "" {
+	if raw := web.Param(r, "quoteID"); raw != "" {
 		return strconv.ParseInt(raw, 10, 64)
 	}
-	if raw := web.Param(r, "quoteID"); raw != "" {
+	if raw := web.Param(r, "id"); raw != "" {
 		return strconv.ParseInt(raw, 10, 64)
 	}
 	return 0, fmt.Errorf("missing id")
