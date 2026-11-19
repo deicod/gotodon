@@ -48,6 +48,18 @@ takes the connection over from the HTTP server, which clears the server's
 deadlines. The WebSocket handler then pings every 30 s and closes connections
 that send no pong within 60 s.
 
+## Multipart form bodies
+
+Endpoints that take only fields read their body with `web.Bind`, which accepts
+JSON, urlencoded and `multipart/form-data` bodies, as Mastodon does. A multipart
+body there may be at most 16 MiB with at most 4096 parts, the limits Rack 3.2.7
+applies for Mastodon 4.5.3. File parts are skipped without being stored in
+memory or on disk. A body whose `Content-Length` exceeds the limit is rejected
+unread. Otherwise reading stops once it passes the limit. Endpoints answer such
+bodies, and malformed ones, as they answer other unreadable bodies, usually with
+`400`. Endpoints that take files (media uploads, `update_credentials`, admin
+custom emojis) parse their own bodies under their own limits.
+
 ## Behind a reverse proxy
 
 These limits apply between the proxy and gotodon. Keep the proxy's own limits

@@ -1,19 +1,63 @@
 package web
 
 import (
+	"bufio"
 	"bytes"
 	"encoding"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"maps"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 )
 
+// Limits on the multipart/form-data bodies Bind reads. They follow Rack
+// 3.2.7, which parses request bodies for Mastodon 4.5.3.
+const (
+	// maxMultipartBodyBytes caps a multipart body, file parts included. Rack
+	// keeps up to 16 MiB of a body's non-file parts
+	// (Rack::Multipart::Parser::BUFFERED_UPLOAD_BYTESIZE_LIMIT). Bind binds no
+	// files, so the same cap covers the whole body.
+	maxMultipartBodyBytes int64 = 16 << 20
+	// maxMultipartParts caps the parts of a multipart body, as Rack's
+	// multipart_total_part_limit does.
+	maxMultipartParts = 4096
+	// maxMultipartBoundaryLength is the longest boundary RFC 2046 §5.1.1
+	// allows. Rack rejects longer ones as well.
+	maxMultipartBoundaryLength = 70
+)
+
+// errInvalidMultipart reports a multipart/form-data body that cannot be
+// parsed or has too many parts. It never matches io.EOF, which Bind returns
+// for a body without fields.
+var errInvalidMultipart = errors.New("invalid multipart/form-data body")
+
+var textUnmarshalerType = reflect.TypeFor[encoding.TextUnmarshaler]()
+
 // Bind decodes the request body into v.
+//
+// JSON bodies are decoded with encoding/json. Form bodies
+// (application/x-www-form-urlencoded and multipart/form-data) are mapped onto
+// v by form or json tag, with Rails-style keys: name[] for slices, and
+// name[key] for struct fields and map entries. After a form body, r.PostForm
+// and r.Form hold its fields as after r.ParseForm.
+//
+// A multipart body is read as a stream of at most maxMultipartBodyBytes and
+// maxMultipartParts. File parts are skipped without being stored in memory or
+// on disk; handlers that accept files parse their own bodies. A larger body
+// fails with *http.MaxBytesError, without being read when its Content-Length
+// already exceeds the limit and otherwise once reading passes it.
+//
+// Bind returns io.EOF when the body has no content or, for form bodies, no
+// fields.
 func Bind(r *http.Request, v interface{}) error {
 	if r == nil {
 		return errors.New("request is nil")
@@ -22,19 +66,32 @@ func Bind(r *http.Request, v interface{}) error {
 		return errors.New("target is nil")
 	}
 
+	contentType := strings.ToLower(r.Header.Get("Content-Type"))
+	if strings.HasPrefix(contentType, "multipart/form-data") {
+		values, err := readMultipartValues(r)
+		if err != nil {
+			return err
+		}
+		// ParseForm keeps a PostForm that is already set and adds the
+		// query string to r.Form, as for urlencoded bodies.
+		r.PostForm = values
+		if err := r.ParseForm(); err != nil {
+			return err
+		}
+		return bindForm(v, r.PostForm)
+	}
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return err
 	}
 	_ = r.Body.Close()
 
-	contentType := strings.ToLower(r.Header.Get("Content-Type"))
 	if strings.HasPrefix(contentType, "application/json") {
 		return decodeJSON(body, v)
 	}
 
-	if strings.HasPrefix(contentType, "application/x-www-form-urlencoded") ||
-		strings.HasPrefix(contentType, "multipart/form-data") {
+	if strings.HasPrefix(contentType, "application/x-www-form-urlencoded") {
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		if err := r.ParseForm(); err != nil {
 			return err
@@ -106,19 +163,107 @@ func isLikelyJSON(body []byte) bool {
 	return false
 }
 
+// readMultipartValues reads the fields of r's multipart/form-data body,
+// skipping file parts. See Bind for the limits.
+func readMultipartValues(r *http.Request) (url.Values, error) {
+	// The boundary is case-sensitive, so it comes from the header as sent.
+	_, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errInvalidMultipart, err)
+	}
+	boundary := params["boundary"]
+	if boundary == "" {
+		return nil, fmt.Errorf("%w: %v", errInvalidMultipart, http.ErrMissingBoundary)
+	}
+	if len(boundary) > maxMultipartBoundaryLength {
+		return nil, fmt.Errorf("%w: boundary longer than %d characters", errInvalidMultipart, maxMultipartBoundaryLength)
+	}
+	if r.ContentLength > maxMultipartBodyBytes {
+		return nil, &http.MaxBytesError{Limit: maxMultipartBodyBytes}
+	}
+
+	values := url.Values{}
+	if r.Body == nil {
+		return values, nil
+	}
+	defer func() { _ = r.Body.Close() }()
+	body := bufio.NewReader(http.MaxBytesReader(nil, r.Body, maxMultipartBodyBytes))
+	if _, err := body.Peek(1); err != nil {
+		if err == io.EOF {
+			// No content at all: no fields, as for an empty urlencoded
+			// body. Rack also returns no parameters here.
+			return values, nil
+		}
+		return nil, multipartReadError(err)
+	}
+
+	reader := multipart.NewReader(body, boundary)
+	for parts := 0; ; parts++ {
+		part, err := reader.NextPart()
+		// NextPart returns io.EOF itself only after the closing boundary.
+		// A body that ends early fails with an error wrapping io.EOF.
+		if err == io.EOF {
+			return values, nil
+		}
+		if err != nil {
+			return nil, multipartReadError(err)
+		}
+		if parts == maxMultipartParts {
+			return nil, fmt.Errorf("%w: more than %d parts", errInvalidMultipart, maxMultipartParts)
+		}
+		name := part.FormName()
+		if name == "" || isFilePart(part) {
+			// The next NextPart call discards the rest of this part.
+			continue
+		}
+		value, err := io.ReadAll(part)
+		if err != nil {
+			return nil, multipartReadError(err)
+		}
+		values.Add(name, string(value))
+	}
+}
+
+// isFilePart reports whether part has a filename parameter. Rack treats such
+// a part as a file even when the filename is empty, as browsers send for an
+// empty file input.
+func isFilePart(part *multipart.Part) bool {
+	_, params, err := mime.ParseMediaType(part.Header.Get("Content-Disposition"))
+	if err != nil {
+		return false
+	}
+	_, ok := params["filename"]
+	return ok
+}
+
+// multipartReadError returns the *http.MaxBytesError in err, if any, and
+// otherwise err wrapped in errInvalidMultipart, without the io.EOF it may
+// wrap.
+func multipartReadError(err error) error {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		return tooLarge
+	}
+	return fmt.Errorf("%w: %v", errInvalidMultipart, err)
+}
+
 func bindForm(target interface{}, values url.Values) error {
 	if len(values) == 0 {
 		return io.EOF
 	}
 	rv := reflect.ValueOf(target)
-	if rv.Kind() != reflect.Ptr || rv.IsNil() {
+	if rv.Kind() != reflect.Pointer || rv.IsNil() {
 		return errors.New("target must be a non-nil pointer")
 	}
 	rv = rv.Elem()
-	if rv.Kind() != reflect.Struct {
-		return errors.New("target must point to a struct")
+	switch rv.Kind() {
+	case reflect.Struct:
+		return bindStruct(rv, values)
+	case reflect.Map:
+		return bindMap(rv, values)
+	default:
+		return errors.New("target must point to a struct or a map")
 	}
-	return bindStruct(rv, values)
 }
 
 func bindStruct(rv reflect.Value, values url.Values) error {
@@ -136,24 +281,86 @@ func bindStruct(rv reflect.Value, values url.Values) error {
 		if !fv.CanSet() {
 			continue
 		}
-		if fv.Kind() == reflect.Ptr && fv.Type().Elem().Kind() == reflect.Struct {
-			nestedValues := nestedFormValues(values, key)
-			if len(nestedValues) == 0 {
-				continue
-			}
-			if fv.IsNil() {
-				fv.Set(reflect.New(fv.Type().Elem()))
-			}
-			if err := bindStruct(fv.Elem(), nestedValues); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := setFieldFromValues(fv, values, key); err != nil {
+		if _, err := bindField(fv, values, key); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// bindMap binds values onto mv, a map with string keys. Each entry binds like
+// a struct field named by its key: home[last_read_id] sets last_read_id in
+// the entry "home" of a map of structs, and follow sets the entry "follow" of
+// a map of bools.
+func bindMap(mv reflect.Value, values url.Values) error {
+	mt := mv.Type()
+	if mt.Key().Kind() != reflect.String {
+		return errors.New("form map keys must be strings")
+	}
+	names := make(map[string]struct{}, len(values))
+	for key := range values {
+		if name, _, _ := strings.Cut(key, "["); name != "" {
+			names[name] = struct{}{}
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(names)) {
+		elem := reflect.New(mt.Elem()).Elem()
+		bound, err := bindField(elem, values, name)
+		if err != nil {
+			return err
+		}
+		if !bound {
+			continue
+		}
+		if mv.IsNil() {
+			mv.Set(reflect.MakeMap(mt))
+		}
+		mv.SetMapIndex(reflect.ValueOf(name).Convert(mt.Key()), elem)
+	}
+	return nil
+}
+
+// bindField binds the values for key onto fv and reports whether values
+// were present. Structs and maps bind from bracketed keys (key[name]), other
+// types from the values of key itself.
+func bindField(fv reflect.Value, values url.Values, key string) (bool, error) {
+	switch {
+	case fv.Kind() == reflect.Pointer && isNested(fv.Type().Elem()):
+		nestedValues := nestedFormValues(values, key)
+		if len(nestedValues) == 0 {
+			return false, nil
+		}
+		if fv.IsNil() {
+			fv.Set(reflect.New(fv.Type().Elem()))
+		}
+		return true, bindNested(fv.Elem(), nestedValues)
+	case isNested(fv.Type()):
+		nestedValues := nestedFormValues(values, key)
+		if len(nestedValues) == 0 {
+			return false, nil
+		}
+		return true, bindNested(fv, nestedValues)
+	default:
+		return setFieldFromValues(fv, values, key)
+	}
+}
+
+// isNested reports whether a form field of type t binds from bracketed keys:
+// a struct or map that does not unmarshal itself from text.
+func isNested(t reflect.Type) bool {
+	switch t.Kind() {
+	case reflect.Struct, reflect.Map:
+		return !reflect.PointerTo(t).Implements(textUnmarshalerType)
+	default:
+		return false
+	}
+}
+
+func bindNested(v reflect.Value, values url.Values) error {
+	if v.Kind() == reflect.Map {
+		return bindMap(v, values)
+	}
+	return bindStruct(v, values)
 }
 
 func formKey(field reflect.StructField) string {
@@ -207,26 +414,28 @@ func nestedFormValues(values url.Values, key string) url.Values {
 	return nested
 }
 
-func setFieldFromValues(field reflect.Value, values url.Values, key string) error {
+// setFieldFromValues sets field from the values of key and reports whether
+// it was set.
+func setFieldFromValues(field reflect.Value, values url.Values, key string) (bool, error) {
 	vals, ok := values[key]
 	if !ok && field.Kind() == reflect.Slice && !strings.HasSuffix(key, "[]") {
 		vals, ok = values[key+"[]"]
 	}
 	if !ok {
-		return nil
+		return false, nil
 	}
-	if field.Kind() == reflect.Ptr {
+	if field.Kind() == reflect.Pointer {
 		if len(vals) == 0 || strings.TrimSpace(vals[0]) == "" {
-			return nil
+			return false, nil
 		}
 		ptr := reflect.New(field.Type().Elem())
 		if err := setValue(ptr.Elem(), vals); err != nil {
-			return err
+			return false, err
 		}
 		field.Set(ptr)
-		return nil
+		return true, nil
 	}
-	return setValue(field, vals)
+	return true, setValue(field, vals)
 }
 
 func setValue(field reflect.Value, vals []string) error {
