@@ -24,7 +24,7 @@ var errStoreUnavailable = errors.New("activitypub store unavailable")
 // GetStatus handles GET /users/:username/statuses/:statusID
 func (h *FederationHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	account, status, err := h.loadAccountStatus(r)
-	if !isActivityPubRequest(r) {
+	if !negotiateActivityPub(w, r) {
 		if err == nil && account.Username != "" {
 			redirectURL := fmt.Sprintf("https://%s/@%s/%d", h.domain, account.Username, status.ID)
 			http.Redirect(w, r, redirectURL, http.StatusFound)
@@ -71,8 +71,7 @@ func (h *FederationHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, note)
+	writeActivityJSON(w, note)
 }
 
 // GetStatusActivity handles GET /users/:username/statuses/:statusID/activity
@@ -102,8 +101,7 @@ func (h *FederationHandler) GetStatusActivity(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, activities[0])
+	writeActivityJSON(w, activities[0])
 }
 
 // GetStatusReplies handles GET /users/:username/statuses/:statusID/replies
@@ -162,8 +160,7 @@ func (h *FederationHandler) GetStatusReplies(w http.ResponseWriter, r *http.Requ
 	}
 
 	if pageRequested {
-		w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-		web.JSON(w, http.StatusOK, page)
+		writeActivityJSON(w, page)
 		return
 	}
 
@@ -176,8 +173,7 @@ func (h *FederationHandler) GetStatusReplies(w http.ResponseWriter, r *http.Requ
 		First: page,
 	}
 
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, collection)
+	writeActivityJSON(w, collection)
 }
 
 // GetStatusLikes handles GET /users/:username/statuses/:statusID/likes
@@ -228,8 +224,7 @@ func (h *FederationHandler) renderStatusCounter(w http.ResponseWriter, r *http.R
 		TotalItems: int(count),
 	}
 
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, collection)
+	writeActivityJSON(w, collection)
 }
 
 func (h *FederationHandler) loadAccountStatus(r *http.Request) (db.Account, db.Status, error) {

@@ -71,8 +71,7 @@ func (h *FederationHandler) GetFollowersSynchronization(w http.ResponseWriter, r
 		OrderedItems: ordered,
 	}
 
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, collection)
+	writeActivityJSON(w, collection)
 }
 
 func (h *FederationHandler) verifySignedRequest(w http.ResponseWriter, r *http.Request) (string, bool) {

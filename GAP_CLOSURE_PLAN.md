@@ -1,6 +1,6 @@
 # Gotodon Port Status & Gap-Closure Plan
 
-Last updated: 2026-06-10
+Last updated: 2026-11-19
 Target: Mastodon 4.5.3 (server-side compatibility)
 Supersedes: `PLAN.md` (last updated 2026-01-30; its subsystem ratings are stale)
 
@@ -245,6 +245,41 @@ clients depend on them**:
       the route-diff generator to `tools/` (currently only `schema_diff` exists).
 - [ ] G13.5 Keep this document current: check off tasks in the same PR that closes
       them; re-date the header.
+
+### SEC-01 · Local actor URI and signing keys — P0
+
+Found by code inspection (#99): `POST /api/v1/accounts` stored every account as
+`https://example.com/users/<name>` with an empty public key and no private key. Peers
+could neither resolve a registered account under the instance's domain nor verify it,
+and gotodon refused to sign its deliveries. A Mastodon peer also could not fetch any
+gotodon document, keys included. Reference: `mastodon/app/helpers/json_ld_helper.rb`,
+`app/services/activitypub/fetch_remote_key_service.rb`, `app/lib/signed_request.rb`.
+
+- [x] SEC-01.1 Store `https://<local_domain>/users/<name>` at registration. `serve`
+      refuses to start without `LOCAL_DOMAIN`, placeholder domains are gone, and
+      placeholder URIs of existing accounts are repaired at startup (PR #133).
+- [x] SEC-01.2 Generate a 2048-bit RSA key pair per account at registration, stored
+      as Mastodon stores keys (PKCS #1 private, PKIX public). Without a key,
+      registration fails and creates nothing (PR #135). The instance actor, the only
+      other local account creation path, already had keys.
+- [x] SEC-01.3 Serve ActivityPub documents so Mastodon can fetch them (#134). Actor,
+      instance actor and status routes negotiate `Accept` as Rails negotiates
+      Mastodon's `respond_to { html; json }`. Mastodon's
+      `application/activity+json, application/ld+json` and any profiled `ld+json`
+      get the document, and browsers get the redirect. Every federation document is
+      served as `application/activity+json`, the negotiated routes send
+      `Vary: Accept`, and `/@name` negotiates like `/users/name`.
+- [x] SEC-01.4 `TestRegisteredAccountFederatesWithMastodonPeer` (DB-backed) registers
+      an account and checks its URI, key pair and actor document. Its Follow and
+      Create verify at a peer that fetches and verifies as Mastodon 4.5.3 does:
+      Mastodon's `Accept`, only `valid_activitypub_content_type?` documents with the
+      ActivityStreams context, a no-redirect refetch of the key's actor and
+      `SignedRequest` checks. The peer's signed Accept verifies at the account's
+      inbox. `TestFederationRoutesServeActivityPubDocuments` covers every federation
+      GET route.
+
+Accounts registered before PR #135 have no keys; no backfill was added because no
+instance is deployed. A two-way test against a real Mastodon container remains G13.3.
 
 ---
 

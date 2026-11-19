@@ -186,3 +186,58 @@ func TestBindFormInvalidBool(t *testing.T) {
 		t.Fatal("expected error for invalid boolean")
 	}
 }
+
+func TestJSONWithContentType(t *testing.T) {
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Content-Type", "text/plain")
+	JSONWithContentType(rec, http.StatusCreated, "application/activity+json", map[string]string{"id": "x"})
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusCreated)
+	}
+	if got := rec.Header().Values("Content-Type"); len(got) != 1 || got[0] != "application/activity+json" {
+		t.Fatalf("Content-Type = %q, want [application/activity+json]", got)
+	}
+	if got := rec.Body.String(); got != "{\"id\":\"x\"}\n" {
+		t.Fatalf("body = %q", got)
+	}
+}
+
+func TestJSONSetsApplicationJSON(t *testing.T) {
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Content-Type", "application/activity+json")
+	JSON(rec, http.StatusOK, map[string]string{})
+
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", got)
+	}
+}
+
+func TestAddVary(t *testing.T) {
+	tests := []struct {
+		name     string
+		existing []string
+		want     []string
+	}{
+		{name: "no Vary", want: []string{"Accept"}},
+		{name: "other token", existing: []string{"Origin"}, want: []string{"Origin", "Accept"}},
+		{name: "already listed", existing: []string{"Accept"}, want: []string{"Accept"}},
+		{name: "listed in another case among others", existing: []string{"Origin, accept"}, want: []string{"Origin, accept"}},
+		{name: "listed in a second field", existing: []string{"Origin", "Accept-Language, Accept"}, want: []string{"Origin", "Accept-Language, Accept"}},
+		{name: "prefix of another token", existing: []string{"Accept-Language"}, want: []string{"Accept-Language", "Accept"}},
+		{name: "star", existing: []string{"*"}, want: []string{"*"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := http.Header{}
+			for _, value := range tt.existing {
+				h.Add("Vary", value)
+			}
+			AddVary(h, "Accept")
+			got := h.Values("Vary")
+			if strings.Join(got, "|") != strings.Join(tt.want, "|") {
+				t.Fatalf("Vary = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

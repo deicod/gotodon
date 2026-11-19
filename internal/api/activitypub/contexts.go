@@ -75,8 +75,7 @@ func (h *FederationHandler) GetContext(w http.ResponseWriter, r *http.Request) {
 		First: page,
 	}
 
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, collection)
+	writeActivityJSON(w, collection)
 }
 
 // GetContextItems handles GET /contexts/:id/items
@@ -116,8 +115,7 @@ func (h *FederationHandler) GetContextItems(w http.ResponseWriter, r *http.Reque
 	}
 
 	if pageRequested {
-		w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-		web.JSON(w, http.StatusOK, page)
+		writeActivityJSON(w, page)
 		return
 	}
 
@@ -130,8 +128,7 @@ func (h *FederationHandler) GetContextItems(w http.ResponseWriter, r *http.Reque
 		First: page,
 	}
 
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, collection)
+	writeActivityJSON(w, collection)
 }
 
 func (h *FederationHandler) loadContextConversation(ctx context.Context, rawID string) (db.Conversation, int64, int64, error) {

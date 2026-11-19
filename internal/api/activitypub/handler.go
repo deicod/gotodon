@@ -101,7 +101,7 @@ func (h *FederationHandler) RegisterInboxHandler(activityType string, handler In
 func (h *FederationHandler) GetActor(w http.ResponseWriter, r *http.Request) {
 	username := accountParam(r)
 
-	if !isActivityPubRequest(r) {
+	if !negotiateActivityPub(w, r) {
 		if h.useDB() {
 			if account, err := h.loadAccountFromRequest(r.Context(), r); err == nil && account.Username != "" {
 				http.Redirect(w, r, fmt.Sprintf("https://%s/@%s", h.domain, account.Username), http.StatusFound)
@@ -172,8 +172,7 @@ func (h *FederationHandler) renderActor(w http.ResponseWriter, account db.Accoun
 		actor.Published = account.CreatedAt.Time.Format("2006-01-02T15:04:05Z")
 	}
 
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, actor)
+	writeActivityJSON(w, actor)
 }
 
 // GetOutbox handles GET /users/:username/outbox
@@ -193,7 +192,7 @@ func (h *FederationHandler) GetFollowing(w http.ResponseWriter, r *http.Request)
 
 // GetInstanceActor handles GET /actor
 func (h *FederationHandler) GetInstanceActor(w http.ResponseWriter, r *http.Request) {
-	if !isActivityPubRequest(r) {
+	if !negotiateActivityPub(w, r) {
 		redirectURL := h.instanceActorURL()
 		if redirectURL == "" {
 			redirectURL = "/"
@@ -395,11 +394,19 @@ func parseInboxActivity(body []byte) (*activitypub.Activity, error) {
 	return &activity, nil
 }
 
-func isActivityPubRequest(r *http.Request) bool {
-	accept := r.Header.Get("Accept")
-	return accept == activitypub.ActivityPubContentType ||
-		accept == activitypub.ActivityPubLDContentType ||
-		accept == "application/activity+json"
+// negotiateActivityPub reports whether r should get the ActivityPub document
+// of a resource rather than a redirect to its page. Either response depends
+// on Accept, so it adds Accept to Vary.
+func negotiateActivityPub(w http.ResponseWriter, r *http.Request) bool {
+	web.AddVary(w.Header(), "Accept")
+	return activitypub.PrefersActivityPub(r.Header)
+}
+
+// writeActivityJSON writes v as a 200 ActivityPub document. Mastodon reads a
+// fetched document only when its media type is application/activity+json
+// (JsonLdHelper#valid_activitypub_content_type?).
+func writeActivityJSON(w http.ResponseWriter, v any) {
+	web.JSONWithContentType(w, http.StatusOK, activitypub.ActivityPubContentType, v)
 }
 
 func (h *FederationHandler) instanceActorAccount(ctx context.Context) (db.Account, error) {
@@ -453,8 +460,7 @@ func (h *FederationHandler) renderInstanceActor(w http.ResponseWriter, account d
 		actor.Published = account.CreatedAt.Time.Format("2006-01-02T15:04:05Z")
 	}
 
-	w.Header().Set("Content-Type", activitypub.ActivityPubContentType)
-	web.JSON(w, http.StatusOK, actor)
+	writeActivityJSON(w, actor)
 }
 
 func (h *FederationHandler) instanceActorURI() string {
