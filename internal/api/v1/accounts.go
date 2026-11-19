@@ -42,6 +42,22 @@ type AccountsHandler struct {
 	resolver             *federation.RemoteActorResolver
 	profileMediaUploader profileMediaUploader
 	mail                 mailer.Deliverer
+	// newKeyPair creates the signing key pair of a registering account.
+	newKeyPair func() (privateKeyPEM, publicKeyPEM string, err error)
+}
+
+// newAccountKeyPair creates an RSA key pair for a local account, PEM-encoded
+// as Mastodon stores it: the private key as PKCS #1, the public key as PKIX.
+func newAccountKeyPair() (privateKeyPEM, publicKeyPEM string, err error) {
+	privateKey, publicKey, err := activitypub.GenerateKeyPair()
+	if err != nil {
+		return "", "", err
+	}
+	publicKeyPEM, err = activitypub.EncodePublicKey(publicKey)
+	if err != nil {
+		return "", "", err
+	}
+	return activitypub.EncodePrivateKey(privateKey), publicKeyPEM, nil
 }
 
 type profileMediaUploader interface {
@@ -75,7 +91,7 @@ func NewAccountsHandler(queries db.Querier, pool *pgxpool.Pool, cfg *config.Conf
 	if queries != nil {
 		resolver = federation.NewRemoteActorResolver(queries, cfg.FederationDomain())
 	}
-	return &AccountsHandler{queries: queries, pool: pool, cfg: cfg, outgoing: outgoing, resolver: resolver}
+	return &AccountsHandler{queries: queries, pool: pool, cfg: cfg, outgoing: outgoing, resolver: resolver, newKeyPair: newAccountKeyPair}
 }
 
 // SetRemoteAccountRefresher enables background refresh for stale remote accounts.
@@ -1231,6 +1247,15 @@ func (h *AccountsHandler) Register(w http.ResponseWriter, r *http.Request) {
 			web.JSONError(w, http.StatusInternalServerError, "Registration unavailable")
 			return
 		}
+		// The account signs its federated requests with its own key pair and
+		// publishes the public key in its actor document. Generate it before
+		// the transaction so the transaction stays short.
+		privateKeyPEM, publicKeyPEM, err := h.newKeyPair()
+		if err != nil {
+			slog.Error("Failed to generate account key pair", "error", err)
+			web.JSONError(w, http.StatusInternalServerError, "Failed to generate account keys")
+			return
+		}
 		// Start transaction
 		tx, err := h.pool.Begin(ctx)
 		if err != nil {
@@ -1246,7 +1271,8 @@ func (h *AccountsHandler) Register(w http.ResponseWriter, r *http.Request) {
 			DisplayName:  req.Username,
 			Note:         "",
 			Uri:          "https://" + federationDomain + "/users/" + req.Username,
-			PublicKey:    "",
+			PrivateKey:   pgtype.Text{String: privateKeyPEM, Valid: true},
+			PublicKey:    publicKeyPEM,
 			Discoverable: pgtype.Bool{Bool: true, Valid: true},
 			Indexable:    true,
 			Protocol:     0,
