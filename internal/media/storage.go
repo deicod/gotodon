@@ -3,6 +3,7 @@ package media
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -119,39 +120,78 @@ func NewLocalStorage(basePath, baseURL string) *LocalStorage {
 	}
 }
 
-// Save saves data to a file
-func (s *LocalStorage) Save(_ context.Context, path string, data []byte) error {
-	fullPath := filepath.Join(s.BasePath, path)
-
-	// Create directories if needed
-	dir := filepath.Dir(fullPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("creating directory %s: %w", dir, err)
+// openRoot validates the file name before accessing the storage directory.
+func (s *LocalStorage) openRoot(name string, create bool) (*os.Root, string, error) {
+	// Stored media paths can use slash separators on any platform.
+	local := filepath.FromSlash(name)
+	if local == "." || !filepath.IsLocal(local) || filepath.Clean(local) != local || strings.IndexByte(local, 0) >= 0 {
+		return nil, "", fmt.Errorf("invalid storage path %q: %w", name, os.ErrInvalid)
 	}
 
-	// Write file
-	if err := os.WriteFile(fullPath, data, 0644); err != nil {
-		return fmt.Errorf("writing file %s: %w", fullPath, err)
+	base := filepath.Clean(s.BasePath)
+	root, err := os.OpenRoot(base)
+	if create && errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(base, 0o755); err != nil {
+			return nil, "", fmt.Errorf("creating storage directory %q: %w", base, err)
+		}
+		root, err = os.OpenRoot(base)
+	}
+	return root, local, err
+}
+
+// Save saves data to a file
+func (s *LocalStorage) Save(_ context.Context, name string, data []byte) error {
+	root, name, err := s.openRoot(name, true)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+
+	dir := filepath.Dir(name)
+	if err := root.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("creating directory %q: %w", dir, err)
+	}
+
+	if err := root.WriteFile(name, data, 0o644); err != nil {
+		return fmt.Errorf("writing file %q: %w", name, err)
 	}
 
 	return nil
 }
 
 // Load loads data from a file
-func (s *LocalStorage) Load(_ context.Context, path string) ([]byte, error) {
-	fullPath := filepath.Join(s.BasePath, path)
-	data, err := os.ReadFile(fullPath)
+func (s *LocalStorage) Load(_ context.Context, name string) ([]byte, error) {
+	root, name, err := s.openRoot(name, false)
 	if err != nil {
-		return nil, fmt.Errorf("reading file %s: %w", fullPath, err)
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+
+	data, err := root.ReadFile(name)
+	if err != nil {
+		return nil, fmt.Errorf("reading file %q: %w", name, err)
 	}
 	return data, nil
 }
 
 // Delete deletes a file
-func (s *LocalStorage) Delete(_ context.Context, path string) error {
-	fullPath := filepath.Join(s.BasePath, path)
-	if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("deleting file %s: %w", fullPath, err)
+func (s *LocalStorage) Delete(_ context.Context, name string) error {
+	root, name, err := s.openRoot(name, false)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+
+	// Remove operates on a final symlink itself. Stat checks its target so
+	// Delete rejects paths that resolve outside storage as the other methods do.
+	if _, err := root.Stat(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("resolving file %q: %w", name, err)
+	}
+	if err := root.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("deleting file %q: %w", name, err)
 	}
 	return nil
 }
@@ -167,16 +207,21 @@ func (s *LocalStorage) URL(stored string) string {
 }
 
 // Exists checks if a file exists
-func (s *LocalStorage) Exists(_ context.Context, path string) (bool, error) {
-	fullPath := filepath.Join(s.BasePath, path)
-	_, err := os.Stat(fullPath)
-	if err == nil {
-		return true, nil
-	}
-	if os.IsNotExist(err) {
+func (s *LocalStorage) Exists(_ context.Context, name string) (bool, error) {
+	root, name, err := s.openRoot(name, false)
+	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
-	return false, err
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = root.Close() }()
+
+	_, err = root.Stat(name)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // GenerateStoragePath generates a storage path for a file uploaded at the
