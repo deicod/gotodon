@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"html/template"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -665,6 +666,14 @@ func bindTokenRequest(r *http.Request) (TokenRequest, error) {
 			return req, err
 		}
 	} else {
+		// ParseForm leaves a multipart body unread. web.Bind reads it into
+		// r.Form, which the FormValue calls below read together with the
+		// query string, as for urlencoded bodies.
+		if strings.HasPrefix(contentType, "multipart/form-data") {
+			if err := web.Bind(r, &req); err != nil && !errors.Is(err, io.EOF) {
+				return req, err
+			}
+		}
 		if err := r.ParseForm(); err != nil {
 			return req, err
 		}
