@@ -14,6 +14,7 @@ import (
 	"github.com/pressly/goose/v3"
 
 	"github.com/deicod/gotodon/internal/config"
+	"github.com/deicod/gotodon/internal/testenv"
 )
 
 type indexExpectation struct {
@@ -152,7 +153,7 @@ func schemaTestDSN(t *testing.T) string {
 	t.Helper()
 
 	if testing.Short() {
-		t.Skip("skipping database-backed migration test in -short mode")
+		testenv.SkipService(t, "skipping database-backed migration test in -short mode")
 	}
 
 	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
@@ -160,7 +161,7 @@ func schemaTestDSN(t *testing.T) string {
 	}
 
 	if !hasExplicitDBEnv() {
-		t.Skip("skipping database-backed migration test; set DB_* or GOTODON_DATABASE_* env vars")
+		testenv.SkipService(t, "skipping database-backed migration test; set DB_* or GOTODON_DATABASE_* env vars")
 	}
 
 	cfg, err := config.Load()

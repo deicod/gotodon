@@ -14,6 +14,7 @@ import (
 
 	"github.com/deicod/gotodon/db/migrations"
 	"github.com/deicod/gotodon/internal/config"
+	"github.com/deicod/gotodon/internal/testenv"
 )
 
 // openMigratedTestPool connects to a new database with every migration applied
@@ -23,7 +24,7 @@ import (
 func openMigratedTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	if testing.Short() {
-		t.Skip("skipping database-backed test in -short mode")
+		testenv.SkipService(t, "skipping database-backed test in -short mode")
 	}
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
@@ -43,7 +44,7 @@ func openMigratedTestPool(t *testing.T) *pgxpool.Pool {
 		}
 	}
 	if dsn == "" {
-		t.Skip("skipping database-backed test; set DATABASE_URL, DB_* or GOTODON_DATABASE_* env vars")
+		testenv.SkipService(t, "skipping database-backed test; set DATABASE_URL, DB_* or GOTODON_DATABASE_* env vars")
 	}
 
 	ctx := context.Background()

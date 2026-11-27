@@ -1,0 +1,76 @@
+# Build, vet and test checks for main and for pull requests.
+# docs/testing.md describes both jobs and how to run them locally.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Build, vet and unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        run: go vet ./...
+      # -short skips the PostgreSQL- and Redis-backed tests; the integration
+      # job runs them.
+      - name: Unit tests
+        run: go test -short ./...
+
+  integration:
+    name: Tests with PostgreSQL and Redis
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+      REDIS_HOST: localhost
+      REDIS_PORT: "6379"
+      # Fail, rather than skip, any test that cannot reach PostgreSQL or Redis.
+      GOTODON_TEST_REQUIRE_SERVICES: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # -count=1 runs every test against the services instead of reusing
+      # results from the restored build cache.
+      - name: All tests
+        run: go test -count=1 ./...
