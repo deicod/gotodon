@@ -97,6 +97,9 @@ LIMIT $1 OFFSET $2;
 -- name: DeleteStatusTrend :exec
 DELETE FROM status_trends WHERE status_id = $1;
 
+-- name: DeleteStatusTrendsByAccount :exec
+DELETE FROM status_trends WHERE account_id = $1;
+
 -- name: ClearStatusTrends :exec
 DELETE FROM status_trends;
 

@@ -150,7 +150,9 @@ WHERE account_id = $1
 
 -- name: GetHomeTimeline :many
 SELECT s.* FROM statuses s
+JOIN accounts a ON a.id = s.account_id
 WHERE s.deleted_at IS NULL
+  AND a.suspended_at IS NULL
   AND s.account_id IN (
     SELECT f.target_account_id FROM follows f WHERE f.account_id = @account_id
     UNION ALL
@@ -162,13 +164,15 @@ ORDER BY s.id DESC
 LIMIT $1 OFFSET $2;
 
 -- name: GetPublicTimeline :many
-SELECT * FROM statuses
-WHERE deleted_at IS NULL
-  AND visibility = 0  -- public
-  AND reblog_of_id IS NULL
-  AND (NOT reply OR in_reply_to_account_id = account_id)
-  AND (@local::boolean = false OR local = true)
-ORDER BY id DESC
+SELECT s.* FROM statuses s
+JOIN accounts a ON a.id = s.account_id
+WHERE s.deleted_at IS NULL
+  AND a.suspended_at IS NULL
+  AND s.visibility = 0  -- public
+  AND s.reblog_of_id IS NULL
+  AND (NOT s.reply OR s.in_reply_to_account_id = s.account_id)
+  AND (@local::boolean = false OR s.local = true)
+ORDER BY s.id DESC
 LIMIT $1 OFFSET $2;
 
 -- name: GetAccountStatuses :many
@@ -226,7 +230,9 @@ LIMIT sqlc.arg('limit');
 SELECT s.* FROM statuses s
 JOIN statuses_tags st ON st.status_id = s.id
 JOIN tags t ON t.id = st.tag_id
+JOIN accounts a ON a.id = s.account_id
 WHERE s.deleted_at IS NULL
+  AND a.suspended_at IS NULL
   AND s.visibility = 0  -- public
   AND lower(t.name) = lower(@tag)
   AND (@local::boolean = false OR s.local = true)
@@ -236,8 +242,10 @@ LIMIT $1 OFFSET $2;
 -- name: GetListTimeline :many
 SELECT s.* FROM statuses s
 JOIN list_accounts la ON la.account_id = s.account_id
+JOIN accounts a ON a.id = s.account_id
 WHERE la.list_id = @list_id
   AND s.deleted_at IS NULL
+  AND a.suspended_at IS NULL
   AND s.reblog_of_id IS NULL
 ORDER BY s.id DESC
 LIMIT $1 OFFSET $2;
@@ -245,8 +253,10 @@ LIMIT $1 OFFSET $2;
 -- name: GetLinkTimelineStatuses :many
 SELECT s.* FROM statuses s
 JOIN preview_cards_statuses pcs ON pcs.status_id = s.id
+JOIN accounts a ON a.id = s.account_id
 WHERE pcs.preview_card_id = $1
   AND s.deleted_at IS NULL
+  AND a.suspended_at IS NULL
   AND s.visibility IN (0, 1)
   AND (sqlc.narg('max_id')::bigint IS NULL OR s.id < sqlc.narg('max_id')::bigint)
   AND (sqlc.narg('since_id')::bigint IS NULL OR s.id > sqlc.narg('since_id')::bigint)
@@ -256,8 +266,10 @@ LIMIT $2;
 -- name: GetLinkTimelineStatusesMinID :many
 SELECT s.* FROM statuses s
 JOIN preview_cards_statuses pcs ON pcs.status_id = s.id
+JOIN accounts a ON a.id = s.account_id
 WHERE pcs.preview_card_id = $1
   AND s.deleted_at IS NULL
+  AND a.suspended_at IS NULL
   AND s.visibility IN (0, 1)
   AND s.id > $2
   AND (sqlc.narg('max_id')::bigint IS NULL OR s.id < sqlc.narg('max_id')::bigint)

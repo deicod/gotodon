@@ -113,6 +113,7 @@ type Actor struct {
 	Memorial                  bool       `json:"memorial,omitempty"`
 	AlsoKnownAs               []string   `json:"alsoKnownAs,omitempty"`
 	MovedTo                   string     `json:"movedTo,omitempty"`
+	Suspended                 bool       `json:"suspended,omitempty"`
 }
 
 // Endpoints represents actor endpoints

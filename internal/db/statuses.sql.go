@@ -328,7 +328,9 @@ const getHashtagTimeline = `-- name: GetHashtagTimeline :many
 SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at, s.quote_approval_policy FROM statuses s
 JOIN statuses_tags st ON st.status_id = s.id
 JOIN tags t ON t.id = st.tag_id
+JOIN accounts a ON a.id = s.account_id
 WHERE s.deleted_at IS NULL
+  AND a.suspended_at IS NULL
   AND s.visibility = 0  -- public
   AND lower(t.name) = lower($3)
   AND ($4::boolean = false OR s.local = true)
@@ -396,7 +398,9 @@ func (q *Queries) GetHashtagTimeline(ctx context.Context, arg GetHashtagTimeline
 
 const getHomeTimeline = `-- name: GetHomeTimeline :many
 SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at, s.quote_approval_policy FROM statuses s
+JOIN accounts a ON a.id = s.account_id
 WHERE s.deleted_at IS NULL
+  AND a.suspended_at IS NULL
   AND s.account_id IN (
     SELECT f.target_account_id FROM follows f WHERE f.account_id = $3
     UNION ALL
@@ -463,8 +467,10 @@ func (q *Queries) GetHomeTimeline(ctx context.Context, arg GetHomeTimelineParams
 const getLinkTimelineStatuses = `-- name: GetLinkTimelineStatuses :many
 SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at, s.quote_approval_policy FROM statuses s
 JOIN preview_cards_statuses pcs ON pcs.status_id = s.id
+JOIN accounts a ON a.id = s.account_id
 WHERE pcs.preview_card_id = $1
   AND s.deleted_at IS NULL
+  AND a.suspended_at IS NULL
   AND s.visibility IN (0, 1)
   AND ($3::bigint IS NULL OR s.id < $3::bigint)
   AND ($4::bigint IS NULL OR s.id > $4::bigint)
@@ -533,8 +539,10 @@ func (q *Queries) GetLinkTimelineStatuses(ctx context.Context, arg GetLinkTimeli
 const getLinkTimelineStatusesMinID = `-- name: GetLinkTimelineStatusesMinID :many
 SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at, s.quote_approval_policy FROM statuses s
 JOIN preview_cards_statuses pcs ON pcs.status_id = s.id
+JOIN accounts a ON a.id = s.account_id
 WHERE pcs.preview_card_id = $1
   AND s.deleted_at IS NULL
+  AND a.suspended_at IS NULL
   AND s.visibility IN (0, 1)
   AND s.id > $2
   AND ($4::bigint IS NULL OR s.id < $4::bigint)
@@ -603,8 +611,10 @@ func (q *Queries) GetLinkTimelineStatusesMinID(ctx context.Context, arg GetLinkT
 const getListTimeline = `-- name: GetListTimeline :many
 SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at, s.quote_approval_policy FROM statuses s
 JOIN list_accounts la ON la.account_id = s.account_id
+JOIN accounts a ON a.id = s.account_id
 WHERE la.list_id = $3
   AND s.deleted_at IS NULL
+  AND a.suspended_at IS NULL
   AND s.reblog_of_id IS NULL
 ORDER BY s.id DESC
 LIMIT $1 OFFSET $2
@@ -716,13 +726,15 @@ func (q *Queries) GetPinnedStatuses(ctx context.Context, accountID int64) ([]Sta
 }
 
 const getPublicTimeline = `-- name: GetPublicTimeline :many
-SELECT id, uri, text, created_at, updated_at, in_reply_to_id, reblog_of_id, url, sensitive, visibility, spoiler_text, reply, language, conversation_id, local, account_id, application_id, in_reply_to_account_id, poll_id, deleted_at, edited_at, trendable, ordered_media_attachment_ids, fetched_replies_at, quote_approval_policy FROM statuses
-WHERE deleted_at IS NULL
-  AND visibility = 0  -- public
-  AND reblog_of_id IS NULL
-  AND (NOT reply OR in_reply_to_account_id = account_id)
-  AND ($3::boolean = false OR local = true)
-ORDER BY id DESC
+SELECT s.id, s.uri, s.text, s.created_at, s.updated_at, s.in_reply_to_id, s.reblog_of_id, s.url, s.sensitive, s.visibility, s.spoiler_text, s.reply, s.language, s.conversation_id, s.local, s.account_id, s.application_id, s.in_reply_to_account_id, s.poll_id, s.deleted_at, s.edited_at, s.trendable, s.ordered_media_attachment_ids, s.fetched_replies_at, s.quote_approval_policy FROM statuses s
+JOIN accounts a ON a.id = s.account_id
+WHERE s.deleted_at IS NULL
+  AND a.suspended_at IS NULL
+  AND s.visibility = 0  -- public
+  AND s.reblog_of_id IS NULL
+  AND (NOT s.reply OR s.in_reply_to_account_id = s.account_id)
+  AND ($3::boolean = false OR s.local = true)
+ORDER BY s.id DESC
 LIMIT $1 OFFSET $2
 `
 

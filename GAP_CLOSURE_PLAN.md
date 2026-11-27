@@ -1,6 +1,6 @@
 # Gotodon Port Status & Gap-Closure Plan
 
-Last updated: 2026-11-19
+Last updated: 2026-11-27
 Target: Mastodon 4.5.3 (server-side compatibility)
 Supersedes: `PLAN.md` (last updated 2026-01-30; its subsystem ratings are stale)
 
@@ -97,9 +97,14 @@ Admin suspend currently sets `suspended_at` + audit log only. Mastodon's
 `SuspendAccountService` / `DeleteAccountService` / `UnsuspendAccountService` do much
 more, and self-service deletion doesn't exist.
 
-- [ ] G3.1 Implement `internal/services` account suspension: unmerge from timelines,
+- [x] G3.1 Implement `internal/services` account suspension: unmerge from timelines,
       reject pending follow requests, deliver `Update` (suspended actor) or `Delete`
       activity to followers' inboxes, strip from directory/search.
+      `AccountSuspensionService` delivers the suspended-actor `Update` of a local
+      account to its remote followers, rejects a remote account's follows and pending
+      follow requests of local accounts (`Reject`, then delete), and drops the
+      account's status trends. Timelines, status search and trending statuses leave
+      out suspended authors where they are read, so unsuspension restores them.
 - [ ] G3.2 Implement account deletion service (used by admin and by federated `Delete`
       of local-account targets is N/A — admin + self): purge statuses (batched, with
       federated `Delete`), media, notifications, follows; keep tombstone per Mastodon.
