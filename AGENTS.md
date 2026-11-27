@@ -21,15 +21,16 @@ This applies to all code: API handlers, database queries, tests, and documentati
 - `go run . migrate up` / `... down|status|reset` runs goose migrations from `db/migrations`.
 - `sqlc generate` regenerates the typed DB client in `internal/db` from `db/queries`.
 - `go test ./...` exercises unit tests; some admin/federation cases are skipped without backing DB/Redis. Add focused runs with `go test ./internal/api/v1 -run TestStatusesHandler`.
+- CI (`.github/workflows/ci.yml`) runs `go build ./...`, `go vet ./...` and `go test -short ./...`, then every test against PostgreSQL and Redis with `GOTODON_TEST_REQUIRE_SERVICES=1`; `docs/testing.md` gives the commands to reproduce both jobs locally.
 
 ## Coding Style & Naming Conventions
-- Target Go 1.25; format with `gofmt` (or `goimports`) before submitting; tab indentation.
+- Target the Go version in `go.mod` (CI installs that one); format with `gofmt` (or `goimports`) before submitting; tab indentation.
 - Keep packages cohesive; prefer small interfaces and table-driven tests. Follow Cobra `Use`/`Short` patterns for CLI flags.
 - Migrations use zero-padded numeric prefixes (`001_initial_schema.sql`); keep names descriptive and additive.
 
 ## Testing Guidelines
 - Place tests beside code as `_test.go`; favor table-driven cases and HTTP handler tests using `httptest`.
-- When tests need Postgres/Redis, set `DB_*`/`REDIS_*` env vars or skip with `-short`; ensure new queries include coverage in `internal/db` and higher-level handlers.
+- When tests need Postgres/Redis, set `DB_*`/`REDIS_*` env vars or skip with `-short`; skip such tests only through `testenv.SkipService`, so a run with `GOTODON_TEST_REQUIRE_SERVICES=1` fails rather than skips them; ensure new queries include coverage in `internal/db` and higher-level handlers.
 
 ## Commit & Pull Request Guidelines
 - Commit history follows conventional commits (`feat:`, `docs:`, `fix:`). Use imperative scope-aware messages.

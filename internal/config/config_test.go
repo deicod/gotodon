@@ -39,14 +39,22 @@ func TestRedisConfigAddr(t *testing.T) {
 }
 
 func TestLoadDefaults(t *testing.T) {
-	// Clear any existing env vars that might interfere
+	// Clear every variable that sets a value checked below, as a run against
+	// real PostgreSQL and Redis sets some of them; t.Setenv restores them
+	// after the test.
 	envVars := []string{
+		"GOTODON_SERVER_HOST",
 		"GOTODON_SERVER_PORT",
 		"GOTODON_DATABASE_HOST",
+		"GOTODON_DATABASE_PORT",
 		"DB_HOST",
+		"DB_PORT",
+		"GOTODON_REDIS_HOST",
+		"REDIS_HOST",
 		"LOCAL_DOMAIN",
 	}
 	for _, v := range envVars {
+		t.Setenv(v, "")
 		_ = os.Unsetenv(v)
 	}
 

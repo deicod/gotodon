@@ -9,15 +9,20 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"github.com/deicod/gotodon/internal/testenv"
 )
 
 // newTestRedisReplayStore returns a store on the Redis at REDIS_HOST and
 // REDIS_PORT under a prefix unique to the test, and the client behind it.
 func newTestRedisReplayStore(t *testing.T) (*RedisInboxReplayStore, *redis.Client, string) {
 	t.Helper()
+	if testing.Short() {
+		testenv.SkipService(t, "skipping Redis replay store test in -short mode")
+	}
 	host := os.Getenv("REDIS_HOST")
 	if host == "" {
-		t.Skip("REDIS_HOST not set; skipping Redis replay store test")
+		testenv.SkipService(t, "REDIS_HOST not set; skipping Redis replay store test")
 	}
 	port := os.Getenv("REDIS_PORT")
 	if port == "" {

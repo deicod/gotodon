@@ -13,6 +13,7 @@ import (
 
 	"github.com/deicod/gotodon/db/migrations"
 	"github.com/deicod/gotodon/internal/config"
+	"github.com/deicod/gotodon/internal/testenv"
 )
 
 // openMigratedDB connects to a new database with every migration applied
@@ -72,7 +73,7 @@ func testDSN(t *testing.T) string {
 	t.Helper()
 
 	if testing.Short() {
-		t.Skip("skipping database-backed query test in -short mode")
+		testenv.SkipService(t, "skipping database-backed query test in -short mode")
 	}
 	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
 		return dsn
@@ -90,6 +91,6 @@ func testDSN(t *testing.T) string {
 			return cfg.Database.DSN()
 		}
 	}
-	t.Skip("skipping database-backed query test; set DATABASE_URL, DB_* or GOTODON_DATABASE_* env vars")
+	testenv.SkipService(t, "skipping database-backed query test; set DATABASE_URL, DB_* or GOTODON_DATABASE_* env vars")
 	return ""
 }
