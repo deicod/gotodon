@@ -1,4 +1,4 @@
-package services
+package workers
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
@@ -16,9 +17,12 @@ import (
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/federation"
+	"github.com/deicod/gotodon/internal/services"
 	"github.com/deicod/gotodon/internal/testenv"
 	"github.com/deicod/gotodon/pkg/activitypub"
 )
+
+var _ DeliveryStore = (*db.Queries)(nil)
 
 // openMigratedTestDB connects to a new database with every migration
 // applied and drops it when the test ends. Like the query tests in
@@ -59,7 +63,7 @@ func openMigratedTestDB(t *testing.T) *pgx.Conn {
 	if err != nil {
 		t.Fatalf("connect db: %v", err)
 	}
-	name := fmt.Sprintf("gotodon_services_test_%d", time.Now().UnixNano())
+	name := fmt.Sprintf("gotodon_workers_test_%d", time.Now().UnixNano())
 	if _, err := base.Exec(ctx, "CREATE DATABASE "+name); err != nil {
 		_ = base.Close(ctx)
 		t.Fatalf("create database: %v", err)
@@ -90,22 +94,37 @@ func openMigratedTestDB(t *testing.T) *pgx.Conn {
 	return conn
 }
 
-type enqueuedDelivery struct {
-	signer   string
-	inbox    string
-	activity *activitypub.Activity
+// taskEnqueuer builds each delivery's task as DeliveryEnqueuer.Enqueue
+// does, and keeps it for the test to process instead of handing it to
+// Asynq.
+type taskEnqueuer struct {
+	tasks []*asynq.Task
 }
 
-type recordingDeliveryEnqueuer struct {
-	deliveries []enqueuedDelivery
-}
-
-func (r *recordingDeliveryEnqueuer) Enqueue(localActor db.Account, inbox string, activity *activitypub.Activity) error {
-	r.deliveries = append(r.deliveries, enqueuedDelivery{signer: localActor.Username, inbox: inbox, activity: activity})
+func (e *taskEnqueuer) Enqueue(localActor db.Account, inbox string, activity *activitypub.Activity) error {
+	task, err := NewDeliverActivityTask(localActor.ID, inbox, activity)
+	if err != nil {
+		return err
+	}
+	e.tasks = append(e.tasks, task)
 	return nil
 }
 
-func TestAccountSuspensionWithDatabase(t *testing.T) {
+// delivered is what DeliveryHandler hands the HTTP delivery for one task.
+type delivered struct {
+	signer    string
+	suspended bool
+	inbox     string
+	activity  *activitypub.Activity
+}
+
+// TestAccountSuspensionDeliveredByWorker suspends a remote and a local
+// account with AccountSuspensionService and runs every task it queues
+// through DeliveryHandler against the database, as the delivery worker
+// does: the Rejects and the suspended actor's Update reach the HTTP
+// delivery, signed by the accounts the worker loads, and a repeated
+// suspension changes nothing more.
+func TestAccountSuspensionDeliveredByWorker(t *testing.T) {
 	conn := openMigratedTestDB(t)
 	queries := db.New(conn)
 	ctx := context.Background()
@@ -151,25 +170,44 @@ func TestAccountSuspensionWithDatabase(t *testing.T) {
 	trend(bob)
 	trend(carol)
 
-	enqueuer := &recordingDeliveryEnqueuer{}
-	service := NewAccountSuspensionService(queries, federation.NewOutgoingService(queries, "local.test", enqueuer))
+	enqueuer := &taskEnqueuer{}
+	service := services.NewAccountSuspensionService(queries, federation.NewOutgoingService(queries, "local.test", enqueuer))
+	var deliveries []delivered
+	handler := &DeliveryHandler{
+		store: queries,
+		deliver: func(_ context.Context, actor db.Account, inbox string, activity *activitypub.Activity) error {
+			deliveries = append(deliveries, delivered{signer: actor.Username, suspended: actor.SuspendedAt.Valid, inbox: inbox, activity: activity})
+			return nil
+		},
+	}
+	// suspend runs the suspension of accountID and then every task it
+	// queued through the delivery worker.
+	suspend := func(t *testing.T, accountID int64) []delivered {
+		t.Helper()
+		enqueuer.tasks, deliveries = nil, nil
+		if err := service.Suspend(ctx, accountID); err != nil {
+			t.Fatalf("Suspend: %v", err)
+		}
+		for _, task := range enqueuer.tasks {
+			if err := handler.ProcessTask(ctx, task); err != nil {
+				t.Fatalf("ProcessTask: %v", err)
+			}
+		}
+		if len(deliveries) != len(enqueuer.tasks) {
+			t.Fatalf("worker delivered %d of %d tasks", len(deliveries), len(enqueuer.tasks))
+		}
+		return deliveries
+	}
 
 	t.Run("remote account", func(t *testing.T) {
 		if err := queries.AdminSuspendAccount(ctx, bob); err != nil {
 			t.Fatalf("suspend bob: %v", err)
 		}
 		for run := 1; run <= 2; run++ {
-			enqueuer.deliveries = nil
-			if err := service.Suspend(ctx, bob); err != nil {
-				t.Fatalf("Suspend run %d: %v", run, err)
-			}
 			var got []string
-			for _, d := range enqueuer.deliveries {
-				follow, _ := d.activity.ActivityObject.(*activitypub.Activity)
-				if follow == nil {
-					t.Fatalf("run %d: %s has no Follow object", run, d.activity.Type)
-				}
-				got = append(got, fmt.Sprintf("%s by %s to %s of %v", d.activity.Type, d.signer, d.inbox, follow.ID))
+			for _, d := range suspend(t, bob) {
+				follow, _ := d.activity.ActivityObject.(map[string]any)
+				got = append(got, fmt.Sprintf("%s by %s to %s of %v", d.activity.Type, d.signer, d.inbox, follow["id"]))
 			}
 			sort.Strings(got)
 			var want []string
@@ -206,15 +244,12 @@ func TestAccountSuspensionWithDatabase(t *testing.T) {
 		}
 		var firstIDs []string
 		for run := 1; run <= 2; run++ {
-			enqueuer.deliveries = nil
-			if err := service.Suspend(ctx, alice); err != nil {
-				t.Fatalf("Suspend run %d: %v", run, err)
-			}
 			var inboxes, ids []string
-			for _, d := range enqueuer.deliveries {
-				actor, ok := d.activity.ActivityObject.(activitypub.Actor)
-				if d.activity.Type != activitypub.TypeUpdate || d.signer != "alice" || !ok || !actor.Suspended || actor.ID != "https://local.test/users/alice" {
-					t.Fatalf("run %d: delivery = %s by %s of %+v", run, d.activity.Type, d.signer, d.activity.ActivityObject)
+			for _, d := range suspend(t, alice) {
+				actor, _ := d.activity.ActivityObject.(map[string]any)
+				if d.activity.Type != activitypub.TypeUpdate || d.signer != "alice" || !d.suspended ||
+					actor["id"] != "https://local.test/users/alice" || actor["suspended"] != true {
+					t.Fatalf("run %d: delivery = %s by %s (suspended %v) of %v", run, d.activity.Type, d.signer, d.suspended, d.activity.ActivityObject)
 				}
 				inboxes = append(inboxes, d.inbox)
 				ids = append(ids, d.activity.ID)
@@ -237,12 +272,8 @@ func TestAccountSuspensionWithDatabase(t *testing.T) {
 	})
 
 	t.Run("account that is not suspended", func(t *testing.T) {
-		enqueuer.deliveries = nil
-		if err := service.Suspend(ctx, carol); err != nil {
-			t.Fatalf("Suspend carol: %v", err)
-		}
-		if len(enqueuer.deliveries) != 0 {
-			t.Fatalf("delivered %d activities for an active account", len(enqueuer.deliveries))
+		if got := suspend(t, carol); len(got) != 0 {
+			t.Fatalf("delivered %d activities for an active account", len(got))
 		}
 		if n := count(`SELECT count(*) FROM status_trends WHERE account_id = $1`, carol); n != 1 {
 			t.Fatalf("carol's trending statuses = %d, want 1", n)

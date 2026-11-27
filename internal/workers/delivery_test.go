@@ -26,7 +26,7 @@ type stubDeliveryStore struct {
 	called  bool
 }
 
-func (s *stubDeliveryStore) GetAccountByID(ctx context.Context, id int64) (db.Account, error) {
+func (s *stubDeliveryStore) GetAccountByIDAllowSuspended(ctx context.Context, id int64) (db.Account, error) {
 	s.called = true
 	return s.account, s.err
 }
@@ -113,7 +113,7 @@ func TestDeliveryHandlerSkipsMissingActor(t *testing.T) {
 		t.Fatalf("ProcessTask missing actor error = %v, want SkipRetry", err)
 	}
 	if !store.called {
-		t.Fatalf("GetAccountByID was not called")
+		t.Fatalf("GetAccountByIDAllowSuspended was not called")
 	}
 }
 
@@ -246,5 +246,37 @@ func TestDeliveryHandlerRefusesPrivateInbox(t *testing.T) {
 	}
 	if got := hits.Load(); got != 0 {
 		t.Fatalf("private inbox received %d requests, want 0", got)
+	}
+}
+
+// A suspended account still signs what its suspension sends, so the
+// handler delivers for it rather than dropping the task.
+func TestDeliveryHandlerDeliversForSuspendedActor(t *testing.T) {
+	store := &stubDeliveryStore{
+		account: db.Account{
+			ID:          7,
+			Uri:         "https://local.example/users/alice",
+			PrivateKey:  pgtype.Text{String: "key", Valid: true},
+			SuspendedAt: pgtype.Timestamptz{Valid: true},
+		},
+	}
+	var signer db.Account
+	handler := &DeliveryHandler{
+		store: store,
+		deliver: func(_ context.Context, actor db.Account, _ string, _ *activitypub.Activity) error {
+			signer = actor
+			return nil
+		},
+	}
+	task := newDeliverTask(t, DeliverActivityPayload{
+		LocalAccountID: 7,
+		Inbox:          "https://remote.example/inbox",
+		Activity:       mustMarshalActivity(t, &activitypub.Activity{Type: activitypub.TypeUpdate}),
+	})
+	if err := handler.ProcessTask(context.Background(), task); err != nil {
+		t.Fatalf("ProcessTask: %v", err)
+	}
+	if signer.ID != 7 || !signer.SuspendedAt.Valid {
+		t.Fatalf("delivered as %+v, want the suspended account 7", signer)
 	}
 }
