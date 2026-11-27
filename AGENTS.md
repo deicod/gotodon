@@ -4,7 +4,7 @@
 - `main.go` boots the Cobra CLI; commands live in `cmd/` (`serve`, `migrate up/down/status/reset`) and drive server startup and migrations.
 - Application logic sits in `internal/` (API handlers in `internal/api/v1` and `v2`, plus auth, config, media, streaming, services, workers, and ActivityPub helpers). Shared utilities are in `pkg/` (activitypub, oauth, snowflake).
 - Database SQL lives in `db/migrations` (goose-numbered files) and `db/queries` (sqlc inputs) that generate the typed client in `internal/db`.
-- `mastodon/` contains the upstream Mastodon reference/frontend; change it only when syncing UI assets. Runtime uploads default to `./uploads` (`media.storage_path`) and are served at `/files/`; build their URLs only with `media.FileURL` (see `docs/media-files.md`).
+- `mastodon/` contains the upstream Mastodon reference/frontend; change it only when syncing UI assets. Runtime uploads default to `./uploads` (`media.storage_path`) and are served at `/files/`; build their URLs only with `media.FileURL` (see `docs/media-files.md`). Read client addresses only with `middleware.ClientIP`, which believes forwarding headers from trusted proxies alone (see `docs/rate-limits.md`).
 
 ## Implementation Quality
 **Critical: No MVP or deferred implementations.** When implementing a feature:

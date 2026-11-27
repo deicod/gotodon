@@ -72,3 +72,6 @@ compatible with them:
 - A proxy that buffers request bodies before forwarding them (nginx does by
   default) delivers uploads to gotodon quickly. Its own client timeouts then
   govern slow uploaders.
+- The proxy must report client addresses in `X-Forwarded-For`, and its own
+  address must be trusted. Otherwise every client shares the proxy's address
+  for rate limits. See [Rate limits and client addresses](rate-limits.md).

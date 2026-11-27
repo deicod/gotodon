@@ -4,7 +4,6 @@ package middleware
 import (
 	"context"
 	"errors"
-	"net"
 	"net/http"
 	"strings"
 
@@ -126,7 +125,7 @@ func Authenticate(validator TokenValidator) func(http.Handler) http.Handler {
 				return
 			}
 
-			ctx := context.WithValue(r.Context(), ContextKeyClientIP, clientIP(r))
+			ctx := context.WithValue(r.Context(), ContextKeyClientIP, ClientIP(r))
 			info, err := validator.ValidateToken(ctx, token)
 			if err != nil {
 				web.JSONError(w, http.StatusUnauthorized, authErrorMessage(err))
@@ -228,31 +227,6 @@ func queryAccessToken(r *http.Request) string {
 		return token
 	}
 	return ""
-}
-
-// ClientIP resolves the originating client IP, honoring proxy headers.
-func ClientIP(r *http.Request) string {
-	return clientIP(r)
-}
-
-func clientIP(r *http.Request) string {
-	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		parts := strings.Split(forwarded, ",")
-		if len(parts) > 0 {
-			ip := strings.TrimSpace(parts[0])
-			if ip != "" {
-				return ip
-			}
-		}
-	}
-	if realIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); realIP != "" {
-		return realIP
-	}
-	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
-	if err == nil && host != "" {
-		return host
-	}
-	return strings.TrimSpace(r.RemoteAddr)
 }
 
 func authErrorMessage(err error) string {

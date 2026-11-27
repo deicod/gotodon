@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/deicod/gotodon/internal/api/middleware"
 	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
@@ -45,6 +46,7 @@ type Handler struct {
 	queries Querier
 	cfg     *config.Config
 	mail    mailer.Deliverer
+	limiter *middleware.RateLimiter
 	now     func() time.Time
 }
 
@@ -54,6 +56,12 @@ func NewHandler(queries Querier, cfg *config.Config, mail mailer.Deliverer) *Han
 		cfg = &config.Config{}
 	}
 	return &Handler{queries: queries, cfg: cfg, mail: mail, now: time.Now}
+}
+
+// SetRateLimiter limits password reset and confirmation requests per client
+// network and per email address.
+func (h *Handler) SetRateLimiter(limiter *middleware.RateLimiter) {
+	h.limiter = limiter
 }
 
 // RegisterRoutes registers the auth web routes.
@@ -135,6 +143,12 @@ func (h *Handler) ResendConfirmation(w http.ResponseWriter, r *http.Request) {
 		h.renderMessage(w, http.StatusOK, "Check your inbox",
 			"If your email address exists in our database and is awaiting confirmation, you will receive an email with confirmation instructions in a few minutes.")
 	}
+	if !h.allow(w, r,
+		middleware.RateLimitCheck{Limit: middleware.EmailConfirmationsByIP, Key: middleware.RateLimitClientKey(r)},
+		middleware.RateLimitCheck{Limit: middleware.EmailConfirmationsByEmail, Key: middleware.RateLimitEmailKey(email)},
+	) {
+		return
+	}
 	if email == "" || h.queries == nil {
 		neutral()
 		return
@@ -203,6 +217,12 @@ func (h *Handler) requestPasswordReset(w http.ResponseWriter, r *http.Request) {
 		h.renderMessage(w, http.StatusOK, "Check your inbox",
 			"If your email address exists in our database, you will receive a password recovery link at your email address in a few minutes.")
 	}
+	if !h.allow(w, r,
+		middleware.RateLimitCheck{Limit: middleware.PasswordResetsByIP, Key: middleware.RateLimitClientKey(r)},
+		middleware.RateLimitCheck{Limit: middleware.PasswordResetsByEmail, Key: middleware.RateLimitEmailKey(email)},
+	) {
+		return
+	}
 	if email == "" || h.queries == nil {
 		neutral()
 		return
@@ -267,6 +287,9 @@ func (h *Handler) UpdatePassword(w http.ResponseWriter, r *http.Request) {
 		h.renderMessage(w, http.StatusBadRequest, "Invalid request", "The submitted form was invalid.")
 		return
 	}
+	if !h.allow(w, r, middleware.RateLimitCheck{Limit: middleware.PasswordResetsByIP, Key: middleware.RateLimitClientKey(r)}) {
+		return
+	}
 	token := strings.TrimSpace(r.PostFormValue("reset_password_token"))
 	password := r.PostFormValue("password")
 	confirmation := r.PostFormValue("password_confirmation")
@@ -328,6 +351,30 @@ func (h *Handler) UpdatePassword(w http.ResponseWriter, r *http.Request) {
 
 	h.renderMessage(w, http.StatusOK, "Password changed",
 		"Your password has been changed successfully. You can now log in with your new password.")
+}
+
+// allow counts an attempt against checks and answers it when they refuse it
+// or it cannot be counted. Callers check before looking up any account, so
+// the answer is the same whether or not one has the submitted email address.
+func (h *Handler) allow(w http.ResponseWriter, r *http.Request, checks ...middleware.RateLimitCheck) bool {
+	if h.limiter == nil {
+		return true
+	}
+	decision, err := h.limiter.Check(r.Context(), checks...)
+	if err != nil {
+		slog.Error("Failed to count rate limited attempt", "error", err)
+		middleware.SetRateLimitUnavailableHeaders(w)
+		h.renderMessage(w, http.StatusServiceUnavailable, "Please try again later",
+			"Your request cannot be processed right now. Please try again in a minute.")
+		return false
+	}
+	if !decision.Allowed {
+		middleware.SetRateLimitHeaders(w, decision, h.now())
+		h.renderMessage(w, http.StatusTooManyRequests, "Too many requests",
+			"Too many attempts have been made. Please wait a while before trying again.")
+		return false
+	}
+	return true
 }
 
 func (h *Handler) notifyStaffAboutPendingAccount(ctx context.Context, user db.User) {

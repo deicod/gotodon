@@ -65,6 +65,7 @@ type Handler struct {
 	cfg         *config.Config
 	killEmitter tokenKillPublisher
 	mail        mailer.Deliverer
+	limiter     *middleware.RateLimiter
 }
 
 type tokenKillPublisher interface {
@@ -475,6 +476,9 @@ func (h *Handler) AuthorizePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.allowLoginAttempt(w, r, email) {
+		return
+	}
 	user, failureReason, err := h.authenticateUser(ctx, email, password)
 	if err != nil {
 		h.recordLoginFailure(ctx, r, user, failureReason)
