@@ -468,15 +468,29 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	webPushSubscriptionsHandler := webapi.NewPushSubscriptionsHandler(queries, cfg)
 	webPushSubscriptionsHandler.RegisterRoutes(mux)
 
+	// Password sign-ins, password resets and confirmation mail requests are
+	// rate limited per client network and per email address. The limits are
+	// shared through Redis by all instances.
+	var rateLimitStore middleware.RateLimitStore
+	if rdb != nil {
+		rateLimitStore = middleware.NewRedisRateLimitStore(rdb, "")
+	} else {
+		logger.Warn("Redis unavailable, rate limits apply to each instance separately")
+		rateLimitStore = middleware.NewMemoryRateLimitStore(0)
+	}
+	rateLimiter := middleware.NewRateLimiter(rateLimitStore)
+
 	// Register OAuth handlers
 	oauthHandler := oauthapi.NewHandler(queries, cfg, streamingHub)
 	if mailDeliverer != nil {
 		oauthHandler.SetMailDeliverer(mailDeliverer)
 	}
+	oauthHandler.SetRateLimiter(rateLimiter)
 	oauthHandler.RegisterRoutes(mux)
 
 	// Browser-facing confirmation and password reset flows.
 	authwebHandler := authwebapi.NewHandler(queries, cfg, mailDeliverer)
+	authwebHandler.SetRateLimiter(rateLimiter)
 	authwebHandler.RegisterRoutes(mux)
 
 	oembedHandler := oembedapi.NewHandler(queries, cfg)
@@ -681,10 +695,19 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	// Setup middleware chain
 	tokenValidator := oauthapi.NewTokenValidator(queries)
 
+	// Forwarding headers are believed only from the trusted proxies, so
+	// clients cannot choose the address they are rate limited and logged by.
+	trustedProxies, err := cfg.Server.TrustedProxyPrefixes()
+	if err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
+	}
+
 	handler := middleware.Recover(logger)(
-		middleware.Logger(logger)(
-			middleware.CORS(
-				middleware.Authenticate(tokenValidator)(mux),
+		middleware.ResolveClientIP(middleware.NewClientIPResolver(trustedProxies))(
+			middleware.Logger(logger)(
+				middleware.CORS(
+					middleware.Authenticate(tokenValidator)(mux),
+				),
 			),
 		),
 	)

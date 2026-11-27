@@ -32,6 +32,39 @@ func (h *Handler) SetMailDeliverer(deliverer mailer.Deliverer) {
 	h.mail = deliverer
 }
 
+// SetRateLimiter limits password sign-ins per client network and per email
+// address.
+func (h *Handler) SetRateLimiter(limiter *middleware.RateLimiter) {
+	if h == nil {
+		return
+	}
+	h.limiter = limiter
+}
+
+// allowLoginAttempt counts a password sign-in against the login limits and
+// answers it when they refuse it or it cannot be counted. Attempts are
+// counted before the account is looked up, so the answer is the same whether
+// or not an account has the email address.
+func (h *Handler) allowLoginAttempt(w http.ResponseWriter, r *http.Request, email string) bool {
+	if h.limiter == nil {
+		return true
+	}
+	decision, err := h.limiter.Check(r.Context(),
+		middleware.RateLimitCheck{Limit: middleware.LoginAttemptsByIP, Key: middleware.RateLimitClientKey(r)},
+		middleware.RateLimitCheck{Limit: middleware.LoginAttemptsByEmail, Key: middleware.RateLimitEmailKey(email)},
+	)
+	if err != nil {
+		slog.Error("Failed to count login attempt", "error", err)
+		middleware.WriteRateLimitUnavailable(w)
+		return false
+	}
+	if !decision.Allowed {
+		middleware.WriteRateLimited(w, decision)
+		return false
+	}
+	return true
+}
+
 // recordLoginSuccess persists a successful login activity, updates the user's
 // sign-in bookkeeping, and notifies the user when the IP is unfamiliar.
 func (h *Handler) recordLoginSuccess(ctx context.Context, r *http.Request, user db.User) {

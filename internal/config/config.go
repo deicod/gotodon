@@ -3,9 +3,11 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/spf13/viper"
 )
@@ -26,10 +28,72 @@ type Config struct {
 
 // ServerConfig holds HTTP server configuration.
 type ServerConfig struct {
-	Host           string `mapstructure:"host"`
-	Port           int    `mapstructure:"port"`
-	StreamingPort  int    `mapstructure:"streaming_port"`
+	Host          string `mapstructure:"host"`
+	Port          int    `mapstructure:"port"`
+	StreamingPort int    `mapstructure:"streaming_port"`
+	// TrustedProxies lists the reverse proxies whose X-Forwarded-For and
+	// X-Real-IP headers are believed, as IP addresses or CIDR ranges
+	// separated by commas or white space, like Mastodon's TRUSTED_PROXY_IP.
+	// Empty selects DefaultTrustedProxies. A list replaces the defaults.
 	TrustedProxies string `mapstructure:"trusted_proxies"`
+}
+
+// DefaultTrustedProxies are the proxies trusted when
+// ServerConfig.TrustedProxies is empty: loopback, private and link-local
+// networks, the defaults Rails applies for Mastodon.
+var DefaultTrustedProxies = []string{
+	"127.0.0.0/8",
+	"::1/128",
+	"fc00::/7",
+	"10.0.0.0/8",
+	"172.16.0.0/12",
+	"192.168.0.0/16",
+	"169.254.0.0/16",
+	"fe80::/10",
+}
+
+// TrustedProxyPrefixes parses TrustedProxies into networks; a bare address
+// is a single-address network. Empty selects DefaultTrustedProxies.
+func (c ServerConfig) TrustedProxyPrefixes() ([]netip.Prefix, error) {
+	entries := strings.FieldsFunc(c.TrustedProxies, func(r rune) bool {
+		return r == ',' || unicode.IsSpace(r)
+	})
+	if len(entries) == 0 {
+		entries = DefaultTrustedProxies
+	}
+	prefixes := make([]netip.Prefix, 0, len(entries))
+	for _, entry := range entries {
+		prefix, err := parseTrustedProxy(entry)
+		if err != nil {
+			return nil, err
+		}
+		prefixes = append(prefixes, prefix)
+	}
+	return prefixes, nil
+}
+
+func parseTrustedProxy(entry string) (netip.Prefix, error) {
+	invalid := fmt.Errorf("server.trusted_proxies entry %q must be an IP address or CIDR range", entry)
+	if strings.Contains(entry, "/") {
+		prefix, err := netip.ParsePrefix(entry)
+		if err != nil {
+			return netip.Prefix{}, invalid
+		}
+		if prefix.Addr().Is4In6() {
+			// 4in6 client addresses are unmapped before matching.
+			if prefix.Bits() < 96 {
+				return netip.Prefix{}, invalid
+			}
+			prefix = netip.PrefixFrom(prefix.Addr().Unmap(), prefix.Bits()-96)
+		}
+		return prefix.Masked(), nil
+	}
+	addr, err := netip.ParseAddr(entry)
+	if err != nil || addr.Zone() != "" {
+		return netip.Prefix{}, invalid
+	}
+	addr = addr.Unmap()
+	return netip.PrefixFrom(addr, addr.BitLen()), nil
 }
 
 // DatabaseConfig holds PostgreSQL configuration.
@@ -303,6 +367,7 @@ func Load() (*Config, error) {
 	_ = v.BindEnv("database.user", "DB_USER")
 	_ = v.BindEnv("database.password", "DB_PASS")
 	_ = v.BindEnv("database.database", "DB_NAME")
+	_ = v.BindEnv("server.trusted_proxies", "GOTODON_SERVER_TRUSTED_PROXIES", "TRUSTED_PROXY_IP")
 	_ = v.BindEnv("redis.host", "REDIS_HOST")
 	_ = v.BindEnv("redis.port", "REDIS_PORT")
 	_ = v.BindEnv("redis.password", "REDIS_PASSWORD")
@@ -345,6 +410,10 @@ func Load() (*Config, error) {
 	// Mastodon expresses TLS verification as SMTP_OPENSSL_VERIFY_MODE=none|peer.
 	if strings.EqualFold(cfg.Mail.SMTPVerifyMode, "none") {
 		cfg.Mail.SMTPNoVerify = true
+	}
+
+	if _, err := cfg.Server.TrustedProxyPrefixes(); err != nil {
+		return nil, err
 	}
 
 	if cfg.Federation.InboxMaxBodyBytes <= 0 {

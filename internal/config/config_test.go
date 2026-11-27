@@ -271,3 +271,90 @@ func TestInstanceConfigValidate(t *testing.T) {
 		})
 	}
 }
+
+func TestServerConfigTrustedProxyPrefixes(t *testing.T) {
+	defaults := strings.Join(DefaultTrustedProxies, ",")
+	tests := []struct {
+		name    string
+		raw     string
+		want    string
+		wantErr bool
+	}{
+		{name: "empty selects defaults", raw: "", want: defaults},
+		{name: "blank selects defaults", raw: " ,\t ", want: defaults},
+		{name: "single address", raw: "203.0.113.7", want: "203.0.113.7/32"},
+		{name: "IPv6 address", raw: "2001:db8::1", want: "2001:db8::1/128"},
+		{name: "comma and space separated", raw: "10.1.0.0/16, 192.0.2.10 2001:db8::/32", want: "10.1.0.0/16,192.0.2.10/32,2001:db8::/32"},
+		{name: "range is masked", raw: "10.1.2.3/16", want: "10.1.0.0/16"},
+		{name: "4in6 address is unmapped", raw: "::ffff:192.0.2.1", want: "192.0.2.1/32"},
+		{name: "4in6 range is unmapped", raw: "::ffff:10.0.0.0/104", want: "10.0.0.0/8"},
+		{name: "list replaces defaults", raw: "127.0.0.1", want: "127.0.0.1/32"},
+		{name: "host name", raw: "proxy.example", wantErr: true},
+		{name: "bad range", raw: "10.0.0.0/33", wantErr: true},
+		{name: "zone", raw: "fe80::1%eth0", wantErr: true},
+		{name: "4in6 range wider than IPv4", raw: "::ffff:0.0.0.0/80", wantErr: true},
+		{name: "one bad entry", raw: "10.0.0.1,nope", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prefixes, err := ServerConfig{TrustedProxies: tt.raw}.TrustedProxyPrefixes()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("TrustedProxyPrefixes(%q) = %v, want an error", tt.raw, prefixes)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("TrustedProxyPrefixes(%q) error = %v", tt.raw, err)
+			}
+			got := make([]string, len(prefixes))
+			for i, prefix := range prefixes {
+				got[i] = prefix.String()
+			}
+			if strings.Join(got, ",") != tt.want {
+				t.Errorf("TrustedProxyPrefixes(%q) = %s, want %s", tt.raw, strings.Join(got, ","), tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadTrustedProxies(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     map[string]string
+		want    string
+		wantErr bool
+	}{
+		{name: "default", want: ""},
+		{name: "Mastodon variable", env: map[string]string{"TRUSTED_PROXY_IP": "10.0.0.5, 10.0.0.6"}, want: "10.0.0.5, 10.0.0.6"},
+		{name: "gotodon variable", env: map[string]string{"GOTODON_SERVER_TRUSTED_PROXIES": "192.0.2.0/24"}, want: "192.0.2.0/24"},
+		{name: "gotodon variable wins", env: map[string]string{"GOTODON_SERVER_TRUSTED_PROXIES": "192.0.2.0/24", "TRUSTED_PROXY_IP": "10.0.0.5"}, want: "192.0.2.0/24"},
+		{name: "invalid", env: map[string]string{"TRUSTED_PROXY_IP": "proxy.internal"}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// t.Setenv restores the variables after the test.
+			for _, key := range []string{"GOTODON_SERVER_TRUSTED_PROXIES", "TRUSTED_PROXY_IP"} {
+				t.Setenv(key, "")
+				_ = os.Unsetenv(key)
+			}
+			for key, value := range tt.env {
+				t.Setenv(key, value)
+			}
+
+			cfg, err := Load()
+			if tt.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "server.trusted_proxies") {
+					t.Fatalf("Load() error = %v, want a server.trusted_proxies error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.Server.TrustedProxies != tt.want {
+				t.Errorf("Server.TrustedProxies = %q, want %q", cfg.Server.TrustedProxies, tt.want)
+			}
+		})
+	}
+}
