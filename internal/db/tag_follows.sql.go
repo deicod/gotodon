@@ -73,6 +73,15 @@ func (q *Queries) DeleteStatusTrend(ctx context.Context, statusID int64) error {
 	return err
 }
 
+const deleteStatusTrendsByAccount = `-- name: DeleteStatusTrendsByAccount :exec
+DELETE FROM status_trends WHERE account_id = $1
+`
+
+func (q *Queries) DeleteStatusTrendsByAccount(ctx context.Context, accountID int64) error {
+	_, err := q.db.Exec(ctx, deleteStatusTrendsByAccount, accountID)
+	return err
+}
+
 const deleteTagFollow = `-- name: DeleteTagFollow :exec
 DELETE FROM tag_follows WHERE account_id = $1 AND tag_id = $2
 `

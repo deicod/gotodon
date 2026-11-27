@@ -25,6 +25,7 @@ JOIN status_stats ss ON s.id = ss.status_id
 JOIN accounts a ON s.account_id = a.id
 WHERE s.created_at > NOW() - INTERVAL '24 hours'
   AND s.visibility = 0 -- Public only
+  AND a.suspended_at IS NULL
 ORDER BY (ss.favourites_count + ss.reblogs_count) DESC
 LIMIT $1;
 

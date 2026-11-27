@@ -1523,6 +1523,54 @@ func (q *Queries) ListFollowRequests(ctx context.Context, arg ListFollowRequests
 	return items, nil
 }
 
+const listFollowRequestsByAccountToLocal = `-- name: ListFollowRequestsByAccountToLocal :many
+SELECT fr.id, fr.created_at, fr.updated_at, fr.account_id, fr.target_account_id, fr.show_reblogs, fr.uri, fr.notify, fr.languages FROM follow_requests fr
+JOIN accounts t ON t.id = fr.target_account_id
+WHERE fr.account_id = $1
+  AND t.domain IS NULL
+  AND fr.id > $2
+ORDER BY fr.id
+LIMIT $3
+`
+
+type ListFollowRequestsByAccountToLocalParams struct {
+	AccountID int64 `db:"account_id" json:"account_id"`
+	AfterID   int64 `db:"after_id" json:"after_id"`
+	Limit     int32 `db:"limit" json:"limit"`
+}
+
+// The pending follow requests that an account has made of local accounts,
+// in id order after after_id.
+func (q *Queries) ListFollowRequestsByAccountToLocal(ctx context.Context, arg ListFollowRequestsByAccountToLocalParams) ([]FollowRequest, error) {
+	rows, err := q.db.Query(ctx, listFollowRequestsByAccountToLocal, arg.AccountID, arg.AfterID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []FollowRequest{}
+	for rows.Next() {
+		var i FollowRequest
+		if err := rows.Scan(
+			&i.ID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.AccountID,
+			&i.TargetAccountID,
+			&i.ShowReblogs,
+			&i.Uri,
+			&i.Notify,
+			&i.Languages,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listFollowerURIsByPrefix = `-- name: ListFollowerURIsByPrefix :many
 SELECT a.uri FROM accounts a
 JOIN follows f ON f.account_id = a.id
@@ -1551,6 +1599,54 @@ func (q *Queries) ListFollowerURIsByPrefix(ctx context.Context, arg ListFollower
 			return nil, err
 		}
 		items = append(items, uri)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listFollowsByAccountToLocal = `-- name: ListFollowsByAccountToLocal :many
+SELECT f.id, f.created_at, f.updated_at, f.account_id, f.target_account_id, f.show_reblogs, f.uri, f.notify, f.languages FROM follows f
+JOIN accounts t ON t.id = f.target_account_id
+WHERE f.account_id = $1
+  AND t.domain IS NULL
+  AND f.id > $2
+ORDER BY f.id
+LIMIT $3
+`
+
+type ListFollowsByAccountToLocalParams struct {
+	AccountID int64 `db:"account_id" json:"account_id"`
+	AfterID   int64 `db:"after_id" json:"after_id"`
+	Limit     int32 `db:"limit" json:"limit"`
+}
+
+// The follows that an account has of local accounts, in id order after
+// after_id.
+func (q *Queries) ListFollowsByAccountToLocal(ctx context.Context, arg ListFollowsByAccountToLocalParams) ([]Follow, error) {
+	rows, err := q.db.Query(ctx, listFollowsByAccountToLocal, arg.AccountID, arg.AfterID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Follow{}
+	for rows.Next() {
+		var i Follow
+		if err := rows.Scan(
+			&i.ID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.AccountID,
+			&i.TargetAccountID,
+			&i.ShowReblogs,
+			&i.Uri,
+			&i.Notify,
+			&i.Languages,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

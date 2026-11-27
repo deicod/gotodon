@@ -308,6 +308,7 @@ type Querier interface {
 	DeleteStatus(ctx context.Context, id int64) error
 	DeleteStatusEditsForStatus(ctx context.Context, statusID int64) error
 	DeleteStatusTrend(ctx context.Context, statusID int64) error
+	DeleteStatusTrendsByAccount(ctx context.Context, accountID int64) error
 	DeleteTagFollow(ctx context.Context, arg DeleteTagFollowParams) error
 	DeleteTagTrend(ctx context.Context, arg DeleteTagTrendParams) error
 	DeleteTombstone(ctx context.Context, id int64) error
@@ -551,9 +552,15 @@ type Querier interface {
 	ListFilterStatuses(ctx context.Context, customFilterID int64) ([]CustomFilterStatus, error)
 	ListFilters(ctx context.Context, accountID int64) ([]CustomFilter, error)
 	ListFollowRequests(ctx context.Context, arg ListFollowRequestsParams) ([]Account, error)
+	// The pending follow requests that an account has made of local accounts,
+	// in id order after after_id.
+	ListFollowRequestsByAccountToLocal(ctx context.Context, arg ListFollowRequestsByAccountToLocalParams) ([]FollowRequest, error)
 	ListFollowedTagIDs(ctx context.Context, arg ListFollowedTagIDsParams) ([]int64, error)
 	ListFollowedTags(ctx context.Context, arg ListFollowedTagsParams) ([]Tag, error)
 	ListFollowerURIsByPrefix(ctx context.Context, arg ListFollowerURIsByPrefixParams) ([]string, error)
+	// The follows that an account has of local accounts, in id order after
+	// after_id.
+	ListFollowsByAccountToLocal(ctx context.Context, arg ListFollowsByAccountToLocalParams) ([]Follow, error)
 	ListLists(ctx context.Context, accountID int64) ([]List, error)
 	ListLocalAccounts(ctx context.Context, arg ListLocalAccountsParams) ([]Account, error)
 	ListLoginActivitiesByUser(ctx context.Context, arg ListLoginActivitiesByUserParams) ([]LoginActivity, error)

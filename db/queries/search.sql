@@ -16,6 +16,7 @@ JOIN accounts a ON s.account_id = a.id
 WHERE s.search_index @@ websearch_to_tsquery('english', sqlc.arg(query))
   AND (s.visibility = 0 OR s.visibility = 1) -- Public or Unlisted
   AND s.deleted_at IS NULL
+  AND a.suspended_at IS NULL
 ORDER BY ts_rank(s.search_index, websearch_to_tsquery('english', sqlc.arg(query))) DESC
 LIMIT $1 OFFSET $2;
 

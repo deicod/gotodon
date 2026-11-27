@@ -38,9 +38,13 @@ type DeliverActivityPayload struct {
 	Activity       json.RawMessage `json:"activity"`
 }
 
-// DeliveryStore loads local actors for delivery.
+// DeliveryStore loads local actors for delivery. It loads an actor whether
+// or not it is suspended, as Mastodon's ActivityPub::DeliveryWorker does: a
+// suspended account still signs what its suspension sends, such as the
+// Update of its actor. The outgoing service queues nothing else for a
+// suspended account.
 type DeliveryStore interface {
-	GetAccountByID(ctx context.Context, id int64) (db.Account, error)
+	GetAccountByIDAllowSuspended(ctx context.Context, id int64) (db.Account, error)
 }
 
 // DeliveryRegistrar registers the delivery job handler.
@@ -157,7 +161,7 @@ func (h *DeliveryHandler) ProcessTask(ctx context.Context, task *asynq.Task) err
 		return fmt.Errorf("decode activity: %w", asynq.SkipRetry)
 	}
 
-	localActor, err := h.store.GetAccountByID(ctx, payload.LocalAccountID)
+	localActor, err := h.store.GetAccountByIDAllowSuspended(ctx, payload.LocalAccountID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("local actor missing: %w", asynq.SkipRetry)

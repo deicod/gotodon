@@ -61,6 +61,28 @@ SELECT COUNT(*) FROM follow_requests WHERE target_account_id = $1;
 -- name: DeleteFollowRequest :exec
 DELETE FROM follow_requests WHERE account_id = $1 AND target_account_id = $2;
 
+-- name: ListFollowsByAccountToLocal :many
+-- The follows that an account has of local accounts, in id order after
+-- after_id.
+SELECT f.* FROM follows f
+JOIN accounts t ON t.id = f.target_account_id
+WHERE f.account_id = sqlc.arg('account_id')
+  AND t.domain IS NULL
+  AND f.id > sqlc.arg('after_id')
+ORDER BY f.id
+LIMIT sqlc.arg('limit');
+
+-- name: ListFollowRequestsByAccountToLocal :many
+-- The pending follow requests that an account has made of local accounts,
+-- in id order after after_id.
+SELECT fr.* FROM follow_requests fr
+JOIN accounts t ON t.id = fr.target_account_id
+WHERE fr.account_id = sqlc.arg('account_id')
+  AND t.domain IS NULL
+  AND fr.id > sqlc.arg('after_id')
+ORDER BY fr.id
+LIMIT sqlc.arg('limit');
+
 -- name: CreateFavourite :one
 INSERT INTO favourites (account_id, status_id)
 VALUES ($1, $2)
