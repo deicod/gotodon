@@ -22,9 +22,9 @@ func (q *Queries) AdminApproveAccount(ctx context.Context, accountID int64) erro
 	return err
 }
 
-const adminDeleteAccount = `-- name: AdminDeleteAccount :exec
+const adminDisableAccount = `-- name: AdminDisableAccount :exec
 
-DELETE FROM accounts WHERE id = $1
+UPDATE users SET disabled = true, updated_at = now() WHERE account_id = $1
 `
 
 // Note: Cascades to accounts usually, or we should delete account separately? Schema has fk_users_account -> accounts(id).
@@ -34,15 +34,6 @@ DELETE FROM accounts WHERE id = $1
 // So deleting account deletes user. Deleting user does NOT delete account automatically unless we do it manually.
 // For rejection, we usually want to delete the account entirely.
 // Let's change this to delete from accounts.
-func (q *Queries) AdminDeleteAccount(ctx context.Context, id int64) error {
-	_, err := q.db.Exec(ctx, adminDeleteAccount, id)
-	return err
-}
-
-const adminDisableAccount = `-- name: AdminDisableAccount :exec
-UPDATE users SET disabled = true, updated_at = now() WHERE account_id = $1
-`
-
 func (q *Queries) AdminDisableAccount(ctx context.Context, accountID int64) error {
 	_, err := q.db.Exec(ctx, adminDisableAccount, accountID)
 	return err

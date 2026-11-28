@@ -91,17 +91,23 @@ func (s *MediaCleanupService) Run(ctx context.Context) error {
 
 func (s *MediaCleanupService) cleanupAttachment(ctx context.Context, attachment db.MediaAttachment) error {
 	if s.storage != nil {
-		if err := s.deleteStoredFile(ctx, attachment, attachment.FileFileName); err != nil {
-			return err
-		}
-		if err := s.deleteStoredFile(ctx, attachment, attachment.ThumbnailFileName); err != nil {
+		if err := deleteMediaAttachmentFiles(ctx, s.storage, attachment); err != nil {
 			return err
 		}
 	}
 	return s.store.DeleteMediaAttachmentByID(ctx, attachment.ID)
 }
 
-func (s *MediaCleanupService) deleteStoredFile(ctx context.Context, attachment db.MediaAttachment, filename pgtype.Text) error {
+// deleteMediaAttachmentFiles deletes the stored file and thumbnail of
+// attachment. A file that is already gone is no error.
+func deleteMediaAttachmentFiles(ctx context.Context, storage media.Storage, attachment db.MediaAttachment) error {
+	if err := deleteStoredFile(ctx, storage, attachment, attachment.FileFileName); err != nil {
+		return err
+	}
+	return deleteStoredFile(ctx, storage, attachment, attachment.ThumbnailFileName)
+}
+
+func deleteStoredFile(ctx context.Context, storage media.Storage, attachment db.MediaAttachment, filename pgtype.Text) error {
 	if !filename.Valid {
 		return nil
 	}
@@ -109,7 +115,7 @@ func (s *MediaCleanupService) deleteStoredFile(ctx context.Context, attachment d
 	if len(paths) == 0 {
 		return nil
 	}
-	if err := s.storage.Delete(ctx, paths[0]); err != nil {
+	if err := storage.Delete(ctx, paths[0]); err != nil {
 		if !os.IsNotExist(err) {
 			return err
 		}
@@ -117,7 +123,7 @@ func (s *MediaCleanupService) deleteStoredFile(ctx context.Context, attachment d
 			if path == "" || path == paths[0] {
 				continue
 			}
-			if err := s.storage.Delete(ctx, path); err != nil && !os.IsNotExist(err) {
+			if err := storage.Delete(ctx, path); err != nil && !os.IsNotExist(err) {
 				return err
 			}
 		}

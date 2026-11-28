@@ -166,6 +166,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		linkCrawlerEnqueuer     *workers.LinkCrawlerEnqueuer
 		statusCleanupEnqueuer   *workers.StatusCleanupEnqueuer
 		mediaCleanupEnqueuer    *workers.MediaCleanupEnqueuer
+		accountDeletionEnqueuer *workers.AccountDeletionEnqueuer
 	)
 	if cfg.Workers.Enabled && rdb != nil {
 		workerManager, err = workers.NewManager(cfg, logger)
@@ -180,6 +181,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		linkCrawlerEnqueuer = workers.NewLinkCrawlerEnqueuer(workerManager.Client())
 		statusCleanupEnqueuer = workers.NewStatusCleanupEnqueuer(workerManager.Client())
 		mediaCleanupEnqueuer = workers.NewMediaCleanupEnqueuer(workerManager.Client())
+		accountDeletionEnqueuer = workers.NewAccountDeletionEnqueuer(workerManager.Client())
 	} else {
 		if !cfg.Workers.Enabled {
 			logger.Warn("Workers disabled by config; using in-process delivery queue")
@@ -341,6 +343,11 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	linkCrawler := services.NewLinkCrawler(queries, mediaStorage)
 	statusCleanup := services.NewStatusCleanupService(queries, rdb, outgoingService, streamingHub)
 	mediaCleanup := services.NewMediaCleanupService(queries, mediaStorage, logger)
+	var deletionPublisher streaming.Publisher
+	if streamingHub != nil {
+		deletionPublisher = streamingHub
+	}
+	accountDeletion := services.NewAccountDeletionService(queries, services.DBTransactor{DB: pool, Queries: queries}, outgoingService, mediaStorage, deletionPublisher, logger)
 	if linkCrawlerEnqueuer != nil {
 		statusesHandler.SetLinkCrawler(linkCrawlerEnqueuer)
 	} else {
@@ -574,6 +581,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 			&workers.LinkCrawlerRegistrar{Crawler: linkCrawler},
 			&workers.StatusCleanupRegistrar{Runner: statusCleanup},
 			&workers.MediaCleanupRegistrar{Runner: mediaCleanup},
+			&workers.AccountDeletionRegistrar{Deleter: accountDeletion},
 		}
 		if mailService != nil {
 			registrars = append(registrars, &workers.MailRegistrar{Service: mailService})
@@ -625,6 +633,11 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	adminAccountsHandler := admin.NewAccountsHandler(queries, pool, cfg)
 	if mailDeliverer != nil {
 		adminAccountsHandler.SetMailDeliverer(mailDeliverer)
+	}
+	if accountDeletionEnqueuer != nil {
+		adminAccountsHandler.SetAccountDeletionScheduler(accountDeletionEnqueuer)
+	} else {
+		adminAccountsHandler.SetAccountDeletionScheduler(&services.InProcessAccountDeletion{Deleter: accountDeletion, Logger: logger})
 	}
 	{
 		// Without Redis there is no streaming hub, and the notifications

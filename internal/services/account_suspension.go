@@ -109,6 +109,15 @@ func (s *AccountSuspensionService) Suspend(ctx context.Context, accountID int64)
 		return nil
 	}
 
+	return s.rejectRemoteFollows(ctx, account)
+}
+
+// rejectRemoteFollows rejects and deletes each follow and each pending follow
+// request that account, a remote account, has of a local account
+// (reject_remote_follows!). A follow it can't deliver the Reject for,
+// because the account has no inbox, it deletes all the same. A failure of
+// one follow doesn't stop the others; it returns all failures joined.
+func (s *AccountSuspensionService) rejectRemoteFollows(ctx context.Context, account db.Account) error {
 	return errors.Join(
 		s.rejectFollows(ctx, account, false, s.listFollows, s.deleteFollow),
 		s.rejectFollows(ctx, account, true, s.listFollowRequests, s.deleteFollowRequest),

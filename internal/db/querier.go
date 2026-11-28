@@ -23,6 +23,10 @@ type Querier interface {
 	AdminCreateDomainBlock(ctx context.Context, arg AdminCreateDomainBlockParams) (DomainBlock, error)
 	AdminCreateEmailDomainBlock(ctx context.Context, arg AdminCreateEmailDomainBlockParams) (AdminCreateEmailDomainBlockRow, error)
 	AdminCreateIpBlock(ctx context.Context, arg AdminCreateIpBlockParams) (AdminCreateIpBlockRow, error)
+	AdminDeleteCanonicalEmailBlock(ctx context.Context, id int64) error
+	AdminDeleteDomainBlock(ctx context.Context, id int64) error
+	AdminDeleteEmailDomainBlock(ctx context.Context, id int64) error
+	AdminDeleteIpBlock(ctx context.Context, id int64) error
 	// Note: Cascades to accounts usually, or we should delete account separately? Schema has fk_users_account -> accounts(id).
 	// Accounts table is the parent. FK is in users pointing to accounts.
 	// Actually, deleting the USER might not delete the ACCOUNT if the FK is ON DELETE CASCADE on the user side?
@@ -30,11 +34,6 @@ type Querier interface {
 	// So deleting account deletes user. Deleting user does NOT delete account automatically unless we do it manually.
 	// For rejection, we usually want to delete the account entirely.
 	// Let's change this to delete from accounts.
-	AdminDeleteAccount(ctx context.Context, id int64) error
-	AdminDeleteCanonicalEmailBlock(ctx context.Context, id int64) error
-	AdminDeleteDomainBlock(ctx context.Context, id int64) error
-	AdminDeleteEmailDomainBlock(ctx context.Context, id int64) error
-	AdminDeleteIpBlock(ctx context.Context, id int64) error
 	AdminDisableAccount(ctx context.Context, accountID int64) error
 	AdminEnableAccount(ctx context.Context, accountID int64) error
 	// The account that Api::V1::Admin::AccountsController#show renders, with
@@ -157,6 +156,16 @@ type Querier interface {
 	AttachPreviewCardToStatus(ctx context.Context, arg AttachPreviewCardToStatusParams) error
 	BulkAcceptNotificationRequests(ctx context.Context, arg BulkAcceptNotificationRequestsParams) error
 	BulkDismissNotificationRequests(ctx context.Context, arg BulkDismissNotificationRequestsParams) error
+	// Queries of the account deletion service (Mastodon's DeleteAccountService).
+	// Each delete takes at most sqlc.arg('limit') rows, so a large account is
+	// purged in short statements, and each can be run again: a run that stops
+	// part way leaves only rows that a later run deletes.
+	// The account, if its deletion is still asked for: it is suspended and has
+	// its deletion request. Each step of a deletion runs it first, in its
+	// transaction. It locks the account and the request until the transaction
+	// ends, so an unsuspension, which updates the account and deletes the
+	// request, waits for the step, and the next step finds no row.
+	ClaimAccountDeletion(ctx context.Context, id int64) (int64, error)
 	ClearAccountAvatar(ctx context.Context, id int64) (Account, error)
 	ClearAccountHeader(ctx context.Context, id int64) (Account, error)
 	ClearNotifications(ctx context.Context, accountID int64) error
@@ -258,14 +267,51 @@ type Querier interface {
 	CreateTombstone(ctx context.Context, arg CreateTombstoneParams) (Tombstone, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	CreateWebAuthnCredential(ctx context.Context, arg CreateWebAuthnCredentialParams) (WebauthnCredential, error)
+	// Takes the live replies among the account's statuses ids out of the
+	// replies_count of the statuses of other accounts that they answer. A
+	// discarded reply was taken out when it was discarded.
+	DecrementRepliesOfDeletedStatuses(ctx context.Context, arg DecrementRepliesOfDeletedStatusesParams) error
 	DecrementStatusFavourites(ctx context.Context, statusID int64) error
 	DecrementStatusReblogs(ctx context.Context, statusID int64) error
 	DecrementStatusReplies(ctx context.Context, statusID int64) error
+	// Deletes an account's record and, by foreign key, everything that is left
+	// of it: its user, statuses, reports about it and moderation history.
+	DeleteAccount(ctx context.Context, id int64) error
 	DeleteAccountAlias(ctx context.Context, id int64) error
 	DeleteAccountAliasesByAccountID(ctx context.Context, accountID int64) error
+	// Blocks by the account and of it.
+	DeleteAccountBlocksBatch(ctx context.Context, arg DeleteAccountBlocksBatchParams) (int64, error)
+	DeleteAccountBookmarksBatch(ctx context.Context, arg DeleteAccountBookmarksBatchParams) (int64, error)
 	DeleteAccountConversation(ctx context.Context, arg DeleteAccountConversationParams) (int64, error)
+	// The account's own direct conversations.
+	DeleteAccountConversationsBatch(ctx context.Context, arg DeleteAccountConversationsBatchParams) (int64, error)
+	DeleteAccountDeletionRequest(ctx context.Context, accountID int64) error
+	// Deletes favourites of the account and takes them out of the
+	// favourites_count of the statuses (DeleteAccountService#purge_favourites!).
+	// It returns how many it deleted.
+	DeleteAccountFavouritesBatch(ctx context.Context, arg DeleteAccountFavouritesBatchParams) (int64, error)
+	// Follow requests by the account and of it.
+	DeleteAccountFollowRequestsBatch(ctx context.Context, arg DeleteAccountFollowRequestsBatchParams) (int64, error)
+	// Follows by the account and of it.
+	DeleteAccountFollowsBatch(ctx context.Context, arg DeleteAccountFollowsBatchParams) (int64, error)
+	// Mentions of the account in other statuses, but in keep_status_ids.
+	DeleteAccountMentionsBatch(ctx context.Context, arg DeleteAccountMentionsBatchParams) (int64, error)
+	// Mutes by the account and of it.
+	DeleteAccountMutesBatch(ctx context.Context, arg DeleteAccountMutesBatchParams) (int64, error)
 	DeleteAccountNote(ctx context.Context, arg DeleteAccountNoteParams) error
+	// The account's notification requests and those about it.
+	DeleteAccountNotificationRequestsBatch(ctx context.Context, arg DeleteAccountNotificationRequestsBatchParams) (int64, error)
+	// The account's notifications and the notifications it caused.
+	DeleteAccountNotificationsBatch(ctx context.Context, arg DeleteAccountNotificationsBatchParams) (int64, error)
 	DeleteAccountPin(ctx context.Context, arg DeleteAccountPinParams) error
+	// The account's polls, but those of keep_status_ids. The polls of deleted
+	// statuses are gone with them; this takes the rest.
+	DeleteAccountPollsBatch(ctx context.Context, arg DeleteAccountPollsBatchParams) (int64, error)
+	// Deletes the account's statuses ids. Reblogs of them, their stats, pins,
+	// favourites, bookmarks, mentions, tags, polls, edits and trends go with
+	// them by foreign key; their media attachments are kept, unattached, for
+	// the media purge.
+	DeleteAccountStatusesByIDs(ctx context.Context, arg DeleteAccountStatusesByIDsParams) (int64, error)
 	DeleteAnnualReport(ctx context.Context, id int64) error
 	DeleteBlock(ctx context.Context, arg DeleteBlockParams) error
 	DeleteBookmark(ctx context.Context, arg DeleteBookmarkParams) error
@@ -313,10 +359,16 @@ type Querier interface {
 	DeleteTagTrend(ctx context.Context, arg DeleteTagTrendParams) error
 	DeleteTombstone(ctx context.Context, id int64) error
 	DeleteTombstoneByURI(ctx context.Context, uri string) error
+	DeleteUserByAccountID(ctx context.Context, accountID int64) error
 	DeleteWebAuthnCredential(ctx context.Context, id int64) error
 	DetachMediaFromScheduledStatus(ctx context.Context, arg DetachMediaFromScheduledStatusParams) (int64, error)
 	DetachMediaFromStatus(ctx context.Context, arg DetachMediaFromStatusParams) (int64, error)
 	DetachPreviewCardFromStatus(ctx context.Context, arg DetachPreviewCardFromStatusParams) error
+	// Disables the user of a local account that is being deleted, deletes its
+	// unused invites (User#disable!, invites.where(uses: 0).destroy_all) and
+	// ends its sign-ins: its access tokens and grants are revoked, its sessions
+	// and Web Push subscriptions deleted.
+	DisableAccountDeletionUser(ctx context.Context, accountID int64) error
 	DismissAnnouncement(ctx context.Context, arg DismissAnnouncementParams) error
 	DismissNotificationRequest(ctx context.Context, arg DismissNotificationRequestParams) error
 	ExistsTombstone(ctx context.Context, uri string) (bool, error)
@@ -520,9 +572,15 @@ type Querier interface {
 	IsFollowRecommendationSuppressed(ctx context.Context, accountID int64) (bool, error)
 	IsFollowingTag(ctx context.Context, arg IsFollowingTagParams) (bool, error)
 	ListAccountConversations(ctx context.Context, arg ListAccountConversationsParams) ([]AccountConversation, error)
+	// The account's media attachments, in id order after after_id, but those of
+	// keep_status_ids.
+	ListAccountMediaAttachmentsForDeletion(ctx context.Context, arg ListAccountMediaAttachmentsForDeletionParams) ([]MediaAttachment, error)
 	ListAccountPins(ctx context.Context, accountID int64) ([]ListAccountPinsRow, error)
 	ListAccountStatsByAccountIDs(ctx context.Context, accountIds []int64) ([]AccountStat, error)
 	ListAccountStatusesCleanupPolicies(ctx context.Context, arg ListAccountStatusesCleanupPoliciesParams) ([]AccountStatusesCleanupPolicy, error)
+	// An account's statuses, discarded ones included, in id order after after_id,
+	// leaving out keep_ids.
+	ListAccountStatusesForDeletion(ctx context.Context, arg ListAccountStatusesForDeletionParams) ([]Status, error)
 	ListAccountsInList(ctx context.Context, arg ListAccountsInListParams) ([]Account, error)
 	ListAllTrendingTags(ctx context.Context, arg ListAllTrendingTagsParams) ([]ListAllTrendingTagsRow, error)
 	ListAnnouncementReactions(ctx context.Context, announcementID int64) ([]AnnouncementReaction, error)
@@ -563,6 +621,9 @@ type Querier interface {
 	ListFollowsByAccountToLocal(ctx context.Context, arg ListFollowsByAccountToLocalParams) ([]Follow, error)
 	ListLists(ctx context.Context, accountID int64) ([]List, error)
 	ListLocalAccounts(ctx context.Context, arg ListLocalAccountsParams) ([]Account, error)
+	// The follows that local accounts have of an account, in id order after
+	// after_id.
+	ListLocalFollowsOfAccount(ctx context.Context, arg ListLocalFollowsOfAccountParams) ([]Follow, error)
 	ListLoginActivitiesByUser(ctx context.Context, arg ListLoginActivitiesByUserParams) ([]LoginActivity, error)
 	ListMediaAttachmentsByStatus(ctx context.Context, statusID pgtype.Int8) ([]MediaAttachment, error)
 	ListMutes(ctx context.Context, arg ListMutesParams) ([]Account, error)
@@ -579,6 +640,9 @@ type Querier interface {
 	ListPublicDomainBlocks(ctx context.Context) ([]DomainBlock, error)
 	ListPushSubscriptionsByUserID(ctx context.Context, userID pgtype.Int8) ([]WebPushSubscription, error)
 	ListRebloggedStatusIDs(ctx context.Context, arg ListRebloggedStatusIDsParams) ([]pgtype.Int8, error)
+	// Every inbox of a remote account that isn't suspended, a shared inbox in
+	// place of the inboxes it serves (Account.inboxes), in order after after.
+	ListRemoteInboxes(ctx context.Context, arg ListRemoteInboxesParams) ([]string, error)
 	ListRuleTranslations(ctx context.Context, ruleID int64) ([]RuleTranslation, error)
 	ListRules(ctx context.Context) ([]Rule, error)
 	ListScheduledStatuses(ctx context.Context, arg ListScheduledStatusesParams) ([]ScheduledStatus, error)
@@ -591,6 +655,10 @@ type Querier interface {
 	ListTrendingStatuses(ctx context.Context, arg ListTrendingStatusesParams) ([]Status, error)
 	ListTrendingTags(ctx context.Context, arg ListTrendingTagsParams) ([]ListTrendingTagsRow, error)
 	ListUnattachedMedia(ctx context.Context, arg ListUnattachedMediaParams) ([]MediaAttachment, error)
+	// The statuses that unresolved reports about an account name
+	// (DeleteAccountService#reported_status_ids). Deletion keeps them, with
+	// their mentions, media and polls, for the moderators handling the reports.
+	ListUnresolvedReportedStatusIDs(ctx context.Context, targetAccountID int64) ([]int64, error)
 	ListUserOAuthTokens(ctx context.Context, resourceOwnerID pgtype.Int8) ([]ListUserOAuthTokensRow, error)
 	ListUserRolesByAccountIDs(ctx context.Context, accountIds []int64) ([]ListUserRolesByAccountIDsRow, error)
 	ListUserSettingsByAccountIDs(ctx context.Context, accountIds []int64) ([]ListUserSettingsByAccountIDsRow, error)
@@ -603,6 +671,21 @@ type Querier interface {
 	MarkConversationUnread(ctx context.Context, arg MarkConversationUnreadParams) (int64, error)
 	MarkNotificationsRead(ctx context.Context, accountID int64) error
 	PinStatus(ctx context.Context, arg PinStatusParams) (StatusPin, error)
+	// Deletes what else the account owns and its own server keeps of it
+	// (DeleteAccountService::ASSOCIATIONS_ON_SUSPEND): its notes about other
+	// accounts, endorsements, aliases, conversation mutes, filters, domain
+	// blocks, featured tags, list memberships, migrations, lists, report notes,
+	// scheduled statuses, status pins, followed tags, notification permissions
+	// and status trends. Its status cleanup policy goes too, so the cleanup
+	// worker can't delete the reported statuses that deletion keeps. Notes,
+	// endorsements and lists of other accounts about it are theirs and are
+	// kept. These are short per account, so one statement takes them all.
+	PurgeAccountAssociations(ctx context.Context, accountID int64) error
+	// Empties the profile of an account whose record deletion keeps
+	// (DeleteAccountService#purge_profile!): the account stays, suspended
+	// by this server, under its username, URI and keys, with no profile, no
+	// images and no counts.
+	PurgeAccountProfile(ctx context.Context, id int64) error
 	RemoveAccountFromList(ctx context.Context, arg RemoveAccountFromListParams) error
 	RemoveAnnouncementReaction(ctx context.Context, arg RemoveAnnouncementReactionParams) error
 	RemoveMentions(ctx context.Context, arg RemoveMentionsParams) error
