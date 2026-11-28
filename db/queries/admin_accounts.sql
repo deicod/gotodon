@@ -204,15 +204,31 @@ WHERE NOT EXISTS (
     SELECT 1 FROM account_deletion_requests WHERE account_id = suspended.account_id
 );
 
--- name: AdminUnsuspendAccount :exec
-WITH unsuspended AS (
-    UPDATE accounts
-    SET suspended_at = NULL, suspension_origin = NULL, updated_at = now()
+-- name: AdminUnsuspendAccount :execrows
+-- Lifts a suspension that this server made of an account whose deletion
+-- hasn't finished (Account#unsuspend!): it deletes the deletion request and
+-- clears the suspension. It changes no row, and reports 0, for an account
+-- that isn't suspended, that its own server suspended or deleted, or whose
+-- deletion has finished, which leaves it suspended without its deletion
+-- request: a deleted account stays deleted. Locking the account first, as
+-- every step of a deletion does (ClaimAccountDeletion), waits for a step
+-- that is running; a deletion that finishes meanwhile has deleted the
+-- request, so this deletes none and unsuspends nothing.
+WITH target AS (
+    SELECT accounts.id FROM accounts
     WHERE accounts.id = $1
-    RETURNING accounts.id AS account_id
+      AND accounts.suspended_at IS NOT NULL
+      AND accounts.suspension_origin = 0
+    FOR UPDATE
+), withdrawn AS (
+    DELETE FROM account_deletion_requests
+    USING target
+    WHERE account_deletion_requests.account_id = target.id
+    RETURNING account_deletion_requests.account_id
 )
-DELETE FROM account_deletion_requests
-WHERE account_id IN (SELECT unsuspended.account_id FROM unsuspended);
+UPDATE accounts
+SET suspended_at = NULL, suspension_origin = NULL, updated_at = now()
+WHERE accounts.id IN (SELECT withdrawn.account_id FROM withdrawn);
 
 -- name: AdminSensitizeAccount :exec
 UPDATE accounts SET sensitized_at = now(), updated_at = now() WHERE id = $1;

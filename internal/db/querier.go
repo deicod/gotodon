@@ -143,7 +143,16 @@ type Querier interface {
 	AdminUnresolveReport(ctx context.Context, id int64) error
 	AdminUnsensitizeAccount(ctx context.Context, id int64) error
 	AdminUnsilenceAccount(ctx context.Context, id int64) error
-	AdminUnsuspendAccount(ctx context.Context, id int64) error
+	// Lifts a suspension that this server made of an account whose deletion
+	// hasn't finished (Account#unsuspend!): it deletes the deletion request and
+	// clears the suspension. It changes no row, and reports 0, for an account
+	// that isn't suspended, that its own server suspended or deleted, or whose
+	// deletion has finished, which leaves it suspended without its deletion
+	// request: a deleted account stays deleted. Locking the account first, as
+	// every step of a deletion does (ClaimAccountDeletion), waits for a step
+	// that is running; a deletion that finishes meanwhile has deleted the
+	// request, so this deletes none and unsuspends nothing.
+	AdminUnsuspendAccount(ctx context.Context, id int64) (int64, error)
 	AdminUpdateDomainBlock(ctx context.Context, arg AdminUpdateDomainBlockParams) (DomainBlock, error)
 	AdminUpdateIpBlock(ctx context.Context, arg AdminUpdateIpBlockParams) (AdminUpdateIpBlockRow, error)
 	AdminUpdatePreviewCardTrendable(ctx context.Context, arg AdminUpdatePreviewCardTrendableParams) (PreviewCard, error)
@@ -377,6 +386,12 @@ type Querier interface {
 	GetAccountAliases(ctx context.Context, accountID int64) ([]AccountAlias, error)
 	GetAccountByID(ctx context.Context, id int64) (Account, error)
 	GetAccountByIDAllowSuspended(ctx context.Context, id int64) (Account, error)
+	// The account, suspended or not, as last committed. FOR SHARE waits for a
+	// transaction that is changing it, such as an unsuspension that queues its
+	// side effects before it commits, and then reads what that transaction
+	// left: the account unsuspended if it committed, still suspended if it
+	// rolled back.
+	GetAccountByIDForShare(ctx context.Context, id int64) (Account, error)
 	GetAccountByURI(ctx context.Context, uri string) (Account, error)
 	GetAccountByUsername(ctx context.Context, username string) (Account, error)
 	GetAccountByUsernameAndDomain(ctx context.Context, arg GetAccountByUsernameAndDomainParams) (Account, error)
@@ -707,6 +722,8 @@ type Querier interface {
 	SearchHashtags(ctx context.Context, arg SearchHashtagsParams) ([]Tag, error)
 	SearchStatuses(ctx context.Context, arg SearchStatusesParams) ([]SearchStatusesRow, error)
 	SumNotificationRequestNotifications(ctx context.Context, accountID int64) (int64, error)
+	// Suspends an account with the given origin. An account that is suspended
+	// already keeps the time of its suspension.
 	SuspendAccount(ctx context.Context, arg SuspendAccountParams) error
 	UnpinStatus(ctx context.Context, arg UnpinStatusParams) error
 	UnsuspendAccount(ctx context.Context, id int64) error

@@ -57,6 +57,8 @@ type stubAccountsStore struct {
 	// failOn makes a call fail with its error: a method name, or
 	// CreateAdminActionLog:<action> for the log entry of one action.
 	failOn map[string]error
+	// unsuspendsNothing makes AdminUnsuspendAccount change no row.
+	unsuspendsNothing bool
 
 	changes       []string
 	logs          []db.CreateAdminActionLogParams
@@ -184,6 +186,18 @@ func (d *stubDeletionScheduler) ScheduleAccountDeletion(_ context.Context, accou
 	return d.store.change("ScheduleAccountDeletion", accountID)
 }
 
+// stubUnsuspensionScheduler records the unsuspensions it is asked to carry
+// out, and fails each with err.
+type stubUnsuspensionScheduler struct {
+	scheduled []int64
+	err       error
+}
+
+func (u *stubUnsuspensionScheduler) ScheduleAccountUnsuspension(_ context.Context, accountID int64) error {
+	u.scheduled = append(u.scheduled, accountID)
+	return u.err
+}
+
 func (s *stubAccountsStore) AdminDisableAccount(_ context.Context, id int64) error {
 	return s.change("AdminDisableAccount", id)
 }
@@ -204,8 +218,17 @@ func (s *stubAccountsStore) AdminSuspendAccount(_ context.Context, id int64) err
 	return s.change("AdminSuspendAccount", id)
 }
 
-func (s *stubAccountsStore) AdminUnsuspendAccount(_ context.Context, id int64) error {
-	return s.change("AdminUnsuspendAccount", id)
+// AdminUnsuspendAccount reports the account unsuspended, or, with
+// unsuspendsNothing, changes nothing, as the real query does when the
+// account's deletion finished after the target lookup.
+func (s *stubAccountsStore) AdminUnsuspendAccount(_ context.Context, id int64) (int64, error) {
+	if s.unsuspendsNothing {
+		return 0, nil
+	}
+	if err := s.change("AdminUnsuspendAccount", id); err != nil {
+		return 0, err
+	}
+	return 1, nil
 }
 
 func (s *stubAccountsStore) AdminSensitizeAccount(_ context.Context, id int64) error {
@@ -401,9 +424,11 @@ type accountsFixture struct {
 	mux       *http.ServeMux
 	tx        *stubTransactor
 	deletions *stubDeletionScheduler
-	mail      *stubMail
-	streamer  *stubStreamer
-	pusher    *stubPusher
+	// unsuspensions records the unsuspensions that were scheduled.
+	unsuspensions *stubUnsuspensionScheduler
+	mail          *stubMail
+	streamer      *stubStreamer
+	pusher        *stubPusher
 }
 
 func newAccountsFixture(a actor) *accountsFixture {
@@ -420,16 +445,18 @@ func newAccountsFixtureFor(a actor, domain string) *accountsFixture {
 		roles:          map[int64]db.UserRole{20: {ID: 3, Name: a.name, Permissions: a.permissions, Position: a.position}},
 	}
 	f := &accountsFixture{
-		store:     store,
-		mux:       http.NewServeMux(),
-		tx:        &stubTransactor{store: store},
-		deletions: &stubDeletionScheduler{store: store},
-		mail:      &stubMail{},
-		streamer:  &stubStreamer{},
-		pusher:    &stubPusher{},
+		store:         store,
+		mux:           http.NewServeMux(),
+		tx:            &stubTransactor{store: store},
+		deletions:     &stubDeletionScheduler{store: store},
+		unsuspensions: &stubUnsuspensionScheduler{},
+		mail:          &stubMail{},
+		streamer:      &stubStreamer{},
+		pusher:        &stubPusher{},
 	}
 	h.actions = f.tx
 	h.SetAccountDeletionScheduler(f.deletions)
+	h.SetAccountUnsuspensionScheduler(f.unsuspensions)
 	h.SetMailDeliverer(f.mail)
 	h.SetNotificationPublishers(f.streamer, f.pusher)
 	h.RegisterRoutes(f.mux)
@@ -505,6 +532,9 @@ func assertNothingDone(t *testing.T, f *accountsFixture) {
 	}
 	if len(f.store.strikes) != 0 || len(f.store.resolutions) != 0 {
 		t.Fatalf("refused request created strikes %v and resolved reports %v", f.store.strikes, f.store.resolutions)
+	}
+	if f.unsuspensions != nil && len(f.unsuspensions.scheduled) != 0 {
+		t.Fatalf("refused request scheduled the unsuspension of %v", f.unsuspensions.scheduled)
 	}
 	if len(f.store.notifications) != 0 {
 		t.Fatalf("refused request notified %v", f.store.notifications)
@@ -777,12 +807,13 @@ func TestAccountsStateConditions(t *testing.T) {
 		{name: "delete a temporarily suspended account", actor: adminActor, method: http.MethodDelete, account: targetSuspended, wantChange: "ScheduleAccountDeletion"},
 		{name: "delete a temporarily suspended remote account", actor: ownerActor, method: http.MethodDelete, account: targetSuspendedRemotely, wantChange: "ScheduleAccountDeletion"},
 
-		// AccountPolicy#unsuspend?: a local-origin suspension.
+		// AccountPolicy#unsuspend?: a local-origin suspension, of an
+		// account whose deletion hasn't finished.
 		{name: "unsuspend a remote-origin suspension", actor: ownerActor, method: http.MethodPost, route: "unsuspend", account: targetSuspendedRemotely, wantStatus: http.StatusForbidden, wantMessage: notAllowed},
 		{name: "unsuspend an account that isn't suspended", actor: ownerActor, method: http.MethodPost, route: "unsuspend", account: targetNoRole, wantStatus: http.StatusForbidden, wantMessage: notAllowed},
 		{name: "unsuspend a remote account that isn't suspended", actor: ownerActor, method: http.MethodPost, route: "unsuspend", account: targetRemote, wantStatus: http.StatusForbidden, wantMessage: notAllowed},
 		{name: "unsuspend a temporary suspension", actor: moderatorActor, method: http.MethodPost, route: "unsuspend", account: targetSuspended, wantChange: "AdminUnsuspendAccount", wantLog: "unsuspend:Account", wantRendered: true},
-		{name: "unsuspend a local suspension without a deletion request", actor: moderatorActor, method: http.MethodPost, route: "unsuspend", account: targetSuspendedNoRequest, wantChange: "AdminUnsuspendAccount", wantLog: "unsuspend:Account", wantRendered: true},
+		{name: "unsuspend an account whose deletion has finished", actor: ownerActor, method: http.MethodPost, route: "unsuspend", account: targetSuspendedNoRequest, wantStatus: http.StatusForbidden, wantMessage: notAllowed},
 
 		// UserPolicy#approve? and #reject?: not approved yet, and
 		// require_local_account!.
@@ -850,6 +881,123 @@ func TestAccountsStateConditions(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestUnsuspendSchedulesSideEffects checks that a lifted suspension, and
+// only one, has its side effects scheduled in the transaction that lifts
+// it, and that the action is logged once it has committed. A failure to
+// schedule them, or to commit, rolls the suspension back and answers 500,
+// so the request can be sent again.
+func TestUnsuspendSchedulesSideEffects(t *testing.T) {
+	path := "/api/v1/admin/accounts/" + idOf(targetSuspended) + "/unsuspend"
+	lifted := []string{fmt.Sprintf("AdminUnsuspendAccount(%d)", targetSuspended)}
+	logged := []string{fmt.Sprintf("unsuspend:Account:%d", targetSuspended)}
+
+	// assertRolledBack checks a 500 with message after which the
+	// suspension stands and nothing is logged.
+	assertRolledBack := func(t *testing.T, f *accountsFixture, rec *httptest.ResponseRecorder, message string) {
+		t.Helper()
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d (%s), want %d", rec.Code, strings.TrimSpace(rec.Body.String()), http.StatusInternalServerError)
+		}
+		if got := errorMessage(t, rec); got != message {
+			t.Fatalf("error = %q, want %q", got, message)
+		}
+		if len(f.store.changes) != 0 || len(f.store.loggedActions()) != 0 {
+			t.Fatalf("changes = %v, logged = %v; want the unsuspension rolled back, unlogged", f.store.changes, f.store.loggedActions())
+		}
+		if f.tx.commits != 0 || f.tx.rollbacks != 1 {
+			t.Fatalf("commits = %d, rollbacks = %d; want one rollback", f.tx.commits, f.tx.rollbacks)
+		}
+	}
+
+	t.Run("scheduled", func(t *testing.T) {
+		f := newAccountsFixture(moderatorActor)
+		rec := f.serve(http.MethodPost, path, "")
+		assertAllowed(t, f, rec, lifted, logged)
+		if !slices.Equal(f.unsuspensions.scheduled, []int64{targetSuspended}) {
+			t.Fatalf("scheduled %v, want the unsuspension of %d", f.unsuspensions.scheduled, targetSuspended)
+		}
+		if f.tx.commits != 1 {
+			t.Fatalf("commits = %d, want 1", f.tx.commits)
+		}
+	})
+
+	t.Run("scheduling fails", func(t *testing.T) {
+		f := newAccountsFixture(moderatorActor)
+		f.unsuspensions.err = errors.New("redis down")
+		rec := f.serve(http.MethodPost, path, "")
+		assertRolledBack(t, f, rec, "Failed to schedule account unsuspension")
+
+		// The suspension still stands, so the request can be sent again.
+		f.unsuspensions.err = nil
+		rec = f.serve(http.MethodPost, path, "")
+		assertAllowed(t, f, rec, lifted, logged)
+		if !slices.Equal(f.unsuspensions.scheduled, []int64{targetSuspended, targetSuspended}) {
+			t.Fatalf("scheduled %v, want the failed attempt and the retry", f.unsuspensions.scheduled)
+		}
+	})
+
+	// The side effects were queued, but find the account still suspended
+	// once the transaction has rolled back, and do nothing.
+	t.Run("commit fails", func(t *testing.T) {
+		f := newAccountsFixture(moderatorActor)
+		f.tx.commitErr = errDatabase
+		rec := f.serve(http.MethodPost, path, "")
+		assertRolledBack(t, f, rec, "Database error")
+	})
+
+	for name, configure := range map[string]func(h *AccountsHandler, f *accountsFixture){
+		"no scheduler":    func(h *AccountsHandler, f *accountsFixture) { h.actions = f.tx },
+		"no transactions": func(h *AccountsHandler, f *accountsFixture) { h.SetAccountUnsuspensionScheduler(f.unsuspensions) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newAccountsFixture(moderatorActor)
+			h := NewAccountsHandler(nil, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: localDomain}})
+			h.store = f.store
+			h.roles = &stubRoles{
+				usersByAccount: map[int64]db.User{actingAccount: {ID: 20, AccountID: actingAccount}},
+				roles:          map[int64]db.UserRole{20: {ID: 3, Name: moderatorActor.name, Permissions: moderatorActor.permissions, Position: moderatorActor.position}},
+			}
+			configure(h, f)
+			f.mux = http.NewServeMux()
+			h.RegisterRoutes(f.mux)
+			rec := f.serve(http.MethodPost, path, "")
+			assertRefused(t, f, rec, http.StatusInternalServerError, "Account unsuspension unavailable")
+		})
+	}
+}
+
+// TestUnsuspendRefusesWhatTheQueryLeaves checks that an unsuspension that
+// the query refuses, because the account's deletion finished after the
+// lookup, answers 403 and logs nothing, and that a failed query answers 500.
+func TestUnsuspendRefusesWhatTheQueryLeaves(t *testing.T) {
+	path := "/api/v1/admin/accounts/" + idOf(targetSuspended) + "/unsuspend"
+
+	t.Run("deletion finished first", func(t *testing.T) {
+		f := newAccountsFixture(ownerActor)
+		f.store.unsuspendsNothing = true
+		rec := f.serve(http.MethodPost, path, "")
+		assertRefused(t, f, rec, http.StatusForbidden, "This action is not allowed")
+	})
+
+	t.Run("query fails", func(t *testing.T) {
+		f := newAccountsFixture(ownerActor)
+		f.store.failOn = map[string]error{"AdminUnsuspendAccount": errDatabase}
+		rec := f.serve(http.MethodPost, path, "")
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d (%s), want %d", rec.Code, strings.TrimSpace(rec.Body.String()), http.StatusInternalServerError)
+		}
+		if got := errorMessage(t, rec); got != "Database error" {
+			t.Fatalf("error = %q, want %q", got, "Database error")
+		}
+		if got := f.store.loggedActions(); len(got) != 0 {
+			t.Fatalf("logged %v for a failed unsuspension", got)
+		}
+		if len(f.unsuspensions.scheduled) != 0 {
+			t.Fatalf("scheduled %v for a failed unsuspension", f.unsuspensions.scheduled)
+		}
+	})
 }
 
 // TestAccountsWriteRoutesNotFound checks that every write route answers 404

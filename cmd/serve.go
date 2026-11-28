@@ -167,6 +167,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		statusCleanupEnqueuer   *workers.StatusCleanupEnqueuer
 		mediaCleanupEnqueuer    *workers.MediaCleanupEnqueuer
 		accountDeletionEnqueuer *workers.AccountDeletionEnqueuer
+		// accountUnsuspensionEnqueuer queues the side effects of
+		// unsuspensions.
+		accountUnsuspensionEnqueuer *workers.AccountUnsuspensionEnqueuer
 	)
 	if cfg.Workers.Enabled && rdb != nil {
 		workerManager, err = workers.NewManager(cfg, logger)
@@ -182,6 +185,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		statusCleanupEnqueuer = workers.NewStatusCleanupEnqueuer(workerManager.Client())
 		mediaCleanupEnqueuer = workers.NewMediaCleanupEnqueuer(workerManager.Client())
 		accountDeletionEnqueuer = workers.NewAccountDeletionEnqueuer(workerManager.Client())
+		accountUnsuspensionEnqueuer = workers.NewAccountUnsuspensionEnqueuer(workerManager.Client())
 	} else {
 		if !cfg.Workers.Enabled {
 			logger.Warn("Workers disabled by config; using in-process delivery queue")
@@ -348,6 +352,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		deletionPublisher = streamingHub
 	}
 	accountDeletion := services.NewAccountDeletionService(queries, services.DBTransactor{DB: pool, Queries: queries}, outgoingService, mediaStorage, deletionPublisher, logger)
+	accountUnsuspension := services.NewAccountUnsuspensionService(queries, outgoingService)
 	if linkCrawlerEnqueuer != nil {
 		statusesHandler.SetLinkCrawler(linkCrawlerEnqueuer)
 	} else {
@@ -582,6 +587,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 			&workers.StatusCleanupRegistrar{Runner: statusCleanup},
 			&workers.MediaCleanupRegistrar{Runner: mediaCleanup},
 			&workers.AccountDeletionRegistrar{Deleter: accountDeletion},
+			&workers.AccountUnsuspensionRegistrar{Unsuspender: accountUnsuspension},
 		}
 		if mailService != nil {
 			registrars = append(registrars, &workers.MailRegistrar{Service: mailService})
@@ -638,6 +644,11 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		adminAccountsHandler.SetAccountDeletionScheduler(accountDeletionEnqueuer)
 	} else {
 		adminAccountsHandler.SetAccountDeletionScheduler(&services.InProcessAccountDeletion{Deleter: accountDeletion, Logger: logger})
+	}
+	if accountUnsuspensionEnqueuer != nil {
+		adminAccountsHandler.SetAccountUnsuspensionScheduler(accountUnsuspensionEnqueuer)
+	} else {
+		adminAccountsHandler.SetAccountUnsuspensionScheduler(&services.InProcessAccountUnsuspension{Unsuspender: accountUnsuspension, Logger: logger})
 	}
 	{
 		// Without Redis there is no streaming hub, and the notifications

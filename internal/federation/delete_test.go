@@ -302,3 +302,57 @@ func TestDeleteService_DeletePerson(t *testing.T) {
 		t.Fatalf("account not suspended")
 	}
 }
+
+// TestDeleteService_DeletePersonSuspendedHere checks that the Delete of a
+// remote actor that this server suspended is recorded, so that lifting the
+// local suspension can't bring the deleted actor back, and that the Delete
+// of an actor already deleted changes nothing.
+func TestDeleteService_DeletePersonSuspendedHere(t *testing.T) {
+	suspendedAt := pgtype.Timestamptz{Time: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC), Valid: true}
+	tests := []struct {
+		name       string
+		origin     pgtype.Int4
+		wantOrigin pgtype.Int4
+		wantChange bool
+	}{
+		{name: "suspended by this server", origin: pgtype.Int4{Int32: 0, Valid: true}, wantChange: true},
+		{name: "already deleted by its server", origin: pgtype.Int4{}},
+		{name: "suspended by its own server", origin: pgtype.Int4{Int32: 1, Valid: true}, wantOrigin: pgtype.Int4{Int32: 1, Valid: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newDeleteStore()
+			actorURI := "https://remote.example/users/alice"
+			account := db.Account{
+				ID:               1,
+				Uri:              actorURI,
+				Domain:           pgtype.Text{String: "remote.example", Valid: true},
+				SuspendedAt:      suspendedAt,
+				SuspensionOrigin: tt.origin,
+			}
+			store.accountsByURI[actorURI] = account
+			store.accountsByID[account.ID] = account
+
+			service := NewDeleteService(store, "local.test")
+			activity := &activitypub.Activity{
+				Type:           activitypub.TypeDelete,
+				Actor:          actorURI,
+				ActivityObject: map[string]any{"id": actorURI, "type": activitypub.TypePerson},
+			}
+			if err := service.HandleDelete(context.Background(), activity); err != nil {
+				t.Fatalf("HandleDelete error: %v", err)
+			}
+
+			updated := store.accountsByURI[actorURI]
+			if !updated.SuspendedAt.Valid {
+				t.Fatal("account not suspended")
+			}
+			if updated.SuspensionOrigin != tt.wantOrigin {
+				t.Fatalf("suspension origin = %+v, want %+v", updated.SuspensionOrigin, tt.wantOrigin)
+			}
+			if changed := updated.SuspendedAt != suspendedAt; changed != tt.wantChange {
+				t.Fatalf("account changed = %v, want %v", changed, tt.wantChange)
+			}
+		})
+	}
+}

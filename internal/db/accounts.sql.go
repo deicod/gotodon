@@ -389,6 +389,72 @@ func (q *Queries) GetAccountByIDAllowSuspended(ctx context.Context, id int64) (A
 	return i, err
 }
 
+const getAccountByIDForShare = `-- name: GetAccountByIDForShare :one
+SELECT id, username, domain, private_key, public_key, created_at, updated_at, note, display_name, uri, url, avatar_file_name, avatar_content_type, avatar_file_size, avatar_updated_at, header_file_name, header_content_type, header_file_size, header_updated_at, avatar_remote_url, locked, header_remote_url, last_webfingered_at, inbox_url, outbox_url, shared_inbox_url, followers_url, following_url, protocol, memorial, moved_to_account_id, featured_collection_url, fields, actor_type, discoverable, also_known_as, silenced_at, suspended_at, hide_collections, avatar_storage_schema_version, header_storage_schema_version, suspension_origin, sensitized_at, trendable, reviewed_at, requested_review_at, indexable, attribution_domains, id_scheme FROM accounts WHERE id = $1 FOR SHARE
+`
+
+// The account, suspended or not, as last committed. FOR SHARE waits for a
+// transaction that is changing it, such as an unsuspension that queues its
+// side effects before it commits, and then reads what that transaction
+// left: the account unsuspended if it committed, still suspended if it
+// rolled back.
+func (q *Queries) GetAccountByIDForShare(ctx context.Context, id int64) (Account, error) {
+	row := q.db.QueryRow(ctx, getAccountByIDForShare, id)
+	var i Account
+	err := row.Scan(
+		&i.ID,
+		&i.Username,
+		&i.Domain,
+		&i.PrivateKey,
+		&i.PublicKey,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Note,
+		&i.DisplayName,
+		&i.Uri,
+		&i.Url,
+		&i.AvatarFileName,
+		&i.AvatarContentType,
+		&i.AvatarFileSize,
+		&i.AvatarUpdatedAt,
+		&i.HeaderFileName,
+		&i.HeaderContentType,
+		&i.HeaderFileSize,
+		&i.HeaderUpdatedAt,
+		&i.AvatarRemoteUrl,
+		&i.Locked,
+		&i.HeaderRemoteUrl,
+		&i.LastWebfingeredAt,
+		&i.InboxUrl,
+		&i.OutboxUrl,
+		&i.SharedInboxUrl,
+		&i.FollowersUrl,
+		&i.FollowingUrl,
+		&i.Protocol,
+		&i.Memorial,
+		&i.MovedToAccountID,
+		&i.FeaturedCollectionUrl,
+		&i.Fields,
+		&i.ActorType,
+		&i.Discoverable,
+		&i.AlsoKnownAs,
+		&i.SilencedAt,
+		&i.SuspendedAt,
+		&i.HideCollections,
+		&i.AvatarStorageSchemaVersion,
+		&i.HeaderStorageSchemaVersion,
+		&i.SuspensionOrigin,
+		&i.SensitizedAt,
+		&i.Trendable,
+		&i.ReviewedAt,
+		&i.RequestedReviewAt,
+		&i.Indexable,
+		&i.AttributionDomains,
+		&i.IDScheme,
+	)
+	return i, err
+}
+
 const getAccountByURI = `-- name: GetAccountByURI :one
 SELECT id, username, domain, private_key, public_key, created_at, updated_at, note, display_name, uri, url, avatar_file_name, avatar_content_type, avatar_file_size, avatar_updated_at, header_file_name, header_content_type, header_file_size, header_updated_at, avatar_remote_url, locked, header_remote_url, last_webfingered_at, inbox_url, outbox_url, shared_inbox_url, followers_url, following_url, protocol, memorial, moved_to_account_id, featured_collection_url, fields, actor_type, discoverable, also_known_as, silenced_at, suspended_at, hide_collections, avatar_storage_schema_version, header_storage_schema_version, suspension_origin, sensitized_at, trendable, reviewed_at, requested_review_at, indexable, attribution_domains, id_scheme FROM accounts WHERE uri = $1
 `
@@ -1188,7 +1254,7 @@ func (q *Queries) SearchAccountsFollowing(ctx context.Context, arg SearchAccount
 }
 
 const suspendAccount = `-- name: SuspendAccount :exec
-UPDATE accounts SET suspended_at = now(), suspension_origin = $2, updated_at = now()
+UPDATE accounts SET suspended_at = COALESCE(suspended_at, now()), suspension_origin = $2, updated_at = now()
 WHERE id = $1
 `
 
@@ -1197,6 +1263,8 @@ type SuspendAccountParams struct {
 	SuspensionOrigin pgtype.Int4 `db:"suspension_origin" json:"suspension_origin"`
 }
 
+// Suspends an account with the given origin. An account that is suspended
+// already keeps the time of its suspension.
 func (q *Queries) SuspendAccount(ctx context.Context, arg SuspendAccountParams) error {
 	_, err := q.db.Exec(ctx, suspendAccount, arg.ID, arg.SuspensionOrigin)
 	return err

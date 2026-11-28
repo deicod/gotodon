@@ -386,7 +386,11 @@ func TestAccountDeletionStopsWhenUnsuspended(t *testing.T) {
 		r.hooks.afterStatuses = nil
 		go func() {
 			defer close(unsuspended)
-			unsuspendErr = db.New(moderator).AdminUnsuspendAccount(w.ctx, w.alice)
+			var n int64
+			n, unsuspendErr = db.New(moderator).AdminUnsuspendAccount(w.ctx, w.alice)
+			if unsuspendErr == nil && n != 1 {
+				unsuspendErr = fmt.Errorf("unsuspended %d accounts, want 1", n)
+			}
 		}()
 		// The unsuspension waits for the batch's lock on alice.
 		deadline := time.Now().Add(10 * time.Second)
