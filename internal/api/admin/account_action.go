@@ -33,7 +33,9 @@ type accountActionStore interface {
 	AdminDisableAccount(ctx context.Context, accountID int64) error
 	AdminSensitizeAccount(ctx context.Context, id int64) error
 	AdminSilenceAccount(ctx context.Context, id int64) error
-	AdminSuspendAccount(ctx context.Context, id int64) error
+	// AdminSuspendAccount reports whether it suspended the account, which
+	// it doesn't when the account is suspended already.
+	AdminSuspendAccount(ctx context.Context, id int64) (int64, error)
 	// AdminUnsuspendAccount is the unsuspend route's change, which runs in
 	// a transaction with the queueing of its side effects.
 	AdminUnsuspendAccount(ctx context.Context, id int64) (int64, error)
@@ -166,6 +168,9 @@ var (
 	errActionRecordNotFound = errors.New("admin: account action record not found")
 	// errActionReportsNotPermitted is a refused ReportPolicy#update?.
 	errActionReportsNotPermitted = errors.New("admin: account action may not resolve reports")
+	// errSuspensionNotScheduled wraps the failure to queue the side effects
+	// of a suspension.
+	errSuspensionNotScheduled = errors.New("admin: account suspension not scheduled")
 )
 
 // accountAction is one Admin::AccountAction.
@@ -188,7 +193,22 @@ type accountAction struct {
 //  3. logs the strike as create, for type none with custom text only;
 //  4. resolves reports (process_reports!), logging each: for type none the
 //     given report only, for every other type every unresolved report about
-//     the target, whether or not a report is given.
+//     the target, whether or not a report is given;
+//  5. for a suspension it made, queues the suspension's side effects in the
+//     background (services.AccountSuspensionService), as
+//     Admin::AccountAction#process_queue! queues Admin::SuspensionWorker.
+//
+// The side effects are queued before the transaction commits. If they can't
+// be queued, the transaction rolls back and the request answers 500: the
+// account stays unsuspended, nothing is logged, struck or resolved, nobody
+// is warned, and the request can be sent again. The side effects wait for
+// the transaction to end and do nothing if it rolled back.
+//
+// Suspending an account that is suspended already, here or by its own
+// server, leaves its suspension as it was and queues nothing, so a repeated
+// request federates nothing more and a deleted account stays deleted. The
+// action is logged, struck and resolves reports all the same, as Mastodon's
+// does.
 //
 // After the transaction it sends a local target's user the warning e-mail
 // and a moderation_warning notification, unless send_email_notification is
@@ -197,8 +217,9 @@ type accountAction struct {
 // It refuses with 403 an action that Mastodon's policies refuse for the
 // target (see accountActionAllowed), and one that would resolve reports when
 // the acting role can't manage them (ReportPolicy#update?). A report_id or
-// warning_preset_id that names nothing gets 404. A refusal or failure
-// changes nothing.
+// warning_preset_id that names nothing gets 404. Without a suspension
+// scheduler, a suspension answers 500 before changing anything. A refusal or
+// failure changes nothing.
 func (h *AccountsHandler) TakeAction(w http.ResponseWriter, r *http.Request) {
 	target, ok := h.actionTarget(w, r)
 	if !ok {
@@ -231,6 +252,11 @@ func (h *AccountsHandler) TakeAction(w http.ResponseWriter, r *http.Request) {
 		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
 		return
 	}
+	if actionType == "suspend" && h.suspensions == nil {
+		slog.ErrorContext(ctx, "Account suspension without a scheduler", "account_id", target.ID)
+		web.JSONError(w, http.StatusInternalServerError, "Account suspension unavailable")
+		return
+	}
 
 	action := accountAction{actionType: actionType, target: target, acting: acting, actingID: actingID, req: req}
 	var warning db.AccountWarning
@@ -245,6 +271,10 @@ func (h *AccountsHandler) TakeAction(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, errActionReportsNotPermitted):
 		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
+		return
+	case errors.Is(err, errSuspensionNotScheduled):
+		slog.ErrorContext(ctx, "Scheduling account suspension failed; the account stays unsuspended", "account_id", target.ID, "error", err)
+		web.JSONError(w, http.StatusInternalServerError, "Failed to schedule account suspension")
 		return
 	case err != nil:
 		slog.ErrorContext(ctx, "Admin account action failed", "account_id", target.ID, "type", actionType, "error", err)
@@ -262,7 +292,8 @@ func (h *AccountsHandler) TakeAction(w http.ResponseWriter, r *http.Request) {
 // processAccountAction does the database work of action in store, the
 // action's transaction, and returns the strike it created. It finds the
 // report and warning preset and the reports to resolve, and checks that the
-// acting role may resolve them, before it changes anything.
+// acting role may resolve them, before it changes anything. Its last step
+// queues the side effects of a suspension it made.
 func (h *AccountsHandler) processAccountAction(ctx context.Context, store accountActionStore, action accountAction) (db.AccountWarning, error) {
 	report, hasReport, err := findActionRecord(ctx, action.req.ReportID, store.AdminGetReport)
 	if err != nil {
@@ -289,7 +320,8 @@ func (h *AccountsHandler) processAccountAction(ctx context.Context, store accoun
 		return db.AccountWarning{}, errActionReportsNotPermitted
 	}
 
-	if err := h.applyActionType(ctx, store, action); err != nil {
+	suspended, err := h.applyActionType(ctx, store, action)
+	if err != nil {
 		return db.AccountWarning{}, err
 	}
 
@@ -336,14 +368,23 @@ func (h *AccountsHandler) processAccountAction(ctx context.Context, store accoun
 		}
 	}
 
+	if suspended {
+		if err := h.suspensions.ScheduleAccountSuspension(ctx, action.target.ID); err != nil {
+			return db.AccountWarning{}, fmt.Errorf("%w: %w", errSuspensionNotScheduled, err)
+		}
+	}
+
 	return warning, nil
 }
 
 // applyActionType is Admin::AccountAction#process_action!: it logs and
-// applies the action's type. none changes nothing. disable logs the user,
-// which accountActionAllowed made sure exists, the other types the account.
-func (h *AccountsHandler) applyActionType(ctx context.Context, store accountActionStore, action accountAction) error {
+// applies the action's type, and reports whether it suspended the account.
+// none changes nothing. disable logs the user, which accountActionAllowed
+// made sure exists, the other types the account. suspend suspends only an
+// account that isn't suspended yet.
+func (h *AccountsHandler) applyActionType(ctx context.Context, store accountActionStore, action accountAction) (bool, error) {
 	var apply func(context.Context, int64) error
+	suspended := false
 	targetType, targetID := adminActionTargetAccount, action.target.ID
 	routeParam := ""
 	switch action.actionType {
@@ -356,19 +397,23 @@ func (h *AccountsHandler) applyActionType(ctx context.Context, store accountActi
 	case "silence":
 		apply = store.AdminSilenceAccount
 	case "suspend":
-		apply = store.AdminSuspendAccount
+		apply = func(ctx context.Context, id int64) error {
+			n, err := store.AdminSuspendAccount(ctx, id)
+			suspended = n > 0
+			return err
+		}
 	default:
-		return nil
+		return false, nil
 	}
 
 	identifier := accountIdentifierFrom(ctx, store, action.target.ID)
 	if err := createActionLog(ctx, store, action.actingID, action.actionType, targetType, targetID, identifier, routeParam); err != nil {
-		return err
+		return false, err
 	}
 	if err := apply(ctx, action.target.ID); err != nil {
-		return fmt.Errorf("applying %s: %w", action.actionType, err)
+		return false, fmt.Errorf("applying %s: %w", action.actionType, err)
 	}
-	return nil
+	return suspended, nil
 }
 
 // findActionRecord finds the record that id names with find, as

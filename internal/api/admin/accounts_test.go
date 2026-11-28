@@ -186,6 +186,19 @@ func (d *stubDeletionScheduler) ScheduleAccountDeletion(_ context.Context, accou
 	return d.store.change("ScheduleAccountDeletion", accountID)
 }
 
+// stubSuspensionScheduler records the suspensions it is asked to carry out,
+// and fails each with err. A transaction that rolls back doesn't take back
+// what it recorded, as it can't take back a queued task.
+type stubSuspensionScheduler struct {
+	scheduled []int64
+	err       error
+}
+
+func (s *stubSuspensionScheduler) ScheduleAccountSuspension(_ context.Context, accountID int64) error {
+	s.scheduled = append(s.scheduled, accountID)
+	return s.err
+}
+
 // stubUnsuspensionScheduler records the unsuspensions it is asked to carry
 // out, and fails each with err.
 type stubUnsuspensionScheduler struct {
@@ -214,8 +227,16 @@ func (s *stubAccountsStore) AdminUnsilenceAccount(_ context.Context, id int64) e
 	return s.change("AdminUnsilenceAccount", id)
 }
 
-func (s *stubAccountsStore) AdminSuspendAccount(_ context.Context, id int64) error {
-	return s.change("AdminSuspendAccount", id)
+// AdminSuspendAccount reports the account suspended unless its target is
+// suspended already, as the real query does.
+func (s *stubAccountsStore) AdminSuspendAccount(_ context.Context, id int64) (int64, error) {
+	if err := s.change("AdminSuspendAccount", id); err != nil {
+		return 0, err
+	}
+	if s.targets[id].SuspendedAt.Valid {
+		return 0, nil
+	}
+	return 1, nil
 }
 
 // AdminUnsuspendAccount reports the account unsuspended, or, with
@@ -424,6 +445,8 @@ type accountsFixture struct {
 	mux       *http.ServeMux
 	tx        *stubTransactor
 	deletions *stubDeletionScheduler
+	// suspensions records the suspensions that were scheduled.
+	suspensions *stubSuspensionScheduler
 	// unsuspensions records the unsuspensions that were scheduled.
 	unsuspensions *stubUnsuspensionScheduler
 	mail          *stubMail
@@ -449,6 +472,7 @@ func newAccountsFixtureFor(a actor, domain string) *accountsFixture {
 		mux:           http.NewServeMux(),
 		tx:            &stubTransactor{store: store},
 		deletions:     &stubDeletionScheduler{store: store},
+		suspensions:   &stubSuspensionScheduler{},
 		unsuspensions: &stubUnsuspensionScheduler{},
 		mail:          &stubMail{},
 		streamer:      &stubStreamer{},
@@ -456,6 +480,7 @@ func newAccountsFixtureFor(a actor, domain string) *accountsFixture {
 	}
 	h.actions = f.tx
 	h.SetAccountDeletionScheduler(f.deletions)
+	h.SetAccountSuspensionScheduler(f.suspensions)
 	h.SetAccountUnsuspensionScheduler(f.unsuspensions)
 	h.SetMailDeliverer(f.mail)
 	h.SetNotificationPublishers(f.streamer, f.pusher)
@@ -533,6 +558,9 @@ func assertNothingDone(t *testing.T, f *accountsFixture) {
 	if len(f.store.strikes) != 0 || len(f.store.resolutions) != 0 {
 		t.Fatalf("refused request created strikes %v and resolved reports %v", f.store.strikes, f.store.resolutions)
 	}
+	if f.suspensions != nil && len(f.suspensions.scheduled) != 0 {
+		t.Fatalf("refused request scheduled the suspension of %v", f.suspensions.scheduled)
+	}
 	if f.unsuspensions != nil && len(f.unsuspensions.scheduled) != 0 {
 		t.Fatalf("refused request scheduled the unsuspension of %v", f.unsuspensions.scheduled)
 	}
@@ -593,6 +621,7 @@ func TestAccountsTakeActionRoleHierarchy(t *testing.T) {
 						logs = []string{fmt.Sprintf("%s:%d", want.log, logged)}
 					}
 					assertAllowed(t, f, rec, changes, logs)
+					assertSuspensionsScheduled(t, f, actionType, target.account)
 				})
 			}
 		}
@@ -654,7 +683,22 @@ func TestAccountsTakeActionTargets(t *testing.T) {
 				logs = []string{fmt.Sprintf("%s:%d", want.log, tt.target)}
 			}
 			assertAllowed(t, f, rec, changes, logs)
+			assertSuspensionsScheduled(t, f, tt.actionType, tt.target)
 		})
+	}
+}
+
+// assertSuspensionsScheduled checks that an allowed action of actionType
+// against target, which isn't suspended, scheduled the side effects of a
+// suspension exactly when it suspended.
+func assertSuspensionsScheduled(t *testing.T, f *accountsFixture, actionType string, target int64) {
+	t.Helper()
+	var want []int64
+	if actionType == "suspend" {
+		want = []int64{target}
+	}
+	if !slices.Equal(f.suspensions.scheduled, want) {
+		t.Fatalf("scheduled suspensions %v, want %v", f.suspensions.scheduled, want)
 	}
 }
 

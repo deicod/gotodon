@@ -91,7 +91,10 @@ Once the deletion has finished, the account can't be unsuspended:
 the emptied account usable again; gotodon keeps a deleted account deleted. This
 holds when the deletion finishes while the unsuspension runs, too: the
 unsuspension waits for the deletion's last step, finds the deletion request
-gone and changes nothing.
+gone and changes nothing. Suspending the account again, with `type=suspend` on
+`POST /api/v1/admin/accounts/:id/action`, leaves it as it is too: the action
+changes the suspension of an account only when it isn't suspended, so the
+account gets no new deletion request.
 
 ## Failures and retries
 

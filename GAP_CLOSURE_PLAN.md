@@ -131,8 +131,20 @@ more, and self-service deletion doesn't exist.
       even when its deletion finishes during the request, and a remote actor's
       `Delete` received while suspended here is kept. Actor `Update` IDs carry
       microseconds, so a suspension and its lifting within a second differ.
-- [ ] G3.4 Wire into existing admin account action endpoint (`action=suspend`) and add
+- [x] G3.4 Wire into existing admin account action endpoint (`action=suspend`) and add
       side-effects behind the worker queue (long-running).
+      `POST /api/v1/admin/accounts/:id/action` with `type=suspend` queues
+      `AccountSuspensionService` as the `account:suspend` worker task (in process,
+      retried with backoff, without workers) as the last step of the transaction that
+      suspends, logs, strikes and resolves reports: if it can't be queued, nothing is
+      changed, logged or sent and the request answers 500, so it can be sent again; the
+      task reads the account `FOR SHARE`, so it waits for that transaction. Only an
+      account that isn't suspended is suspended and queued: suspending one that is
+      suspended already, here or by its own server, is logged and struck as in Mastodon
+      but keeps its suspension, `updated_at` and deletion requests as they were, so a
+      repeated or concurrent request federates nothing more and a deleted account stays
+      deleted. Unsuspension (G3.3) and deletion (G3.2) were wired already; self-service
+      deletion has no route here yet (see G3.2).
 - [ ] G3.5 Tests for each service incl. federation deliveries enqueued.
 
 ### G4 · Federation completeness — P1

@@ -102,10 +102,11 @@ func openMigratedPool(t *testing.T) *pgxpool.Pool {
 // unresolved reports and a resolved one, a report about someone else, and a
 // warning preset.
 type dbActionFixture struct {
-	pool    *pgxpool.Pool
-	handler *AccountsHandler
-	mux     *http.ServeMux
-	mail    *stubMail
+	pool        *pgxpool.Pool
+	handler     *AccountsHandler
+	mux         *http.ServeMux
+	mail        *stubMail
+	suspensions *stubSuspensionScheduler
 
 	owner, target, other               int64
 	open, openToo, resolved, otherOpen int64
@@ -115,7 +116,7 @@ type dbActionFixture struct {
 func newDBActionFixture(t *testing.T, permissions int64) *dbActionFixture {
 	pool := openMigratedPool(t)
 	ctx := context.Background()
-	f := &dbActionFixture{pool: pool, mail: &stubMail{}}
+	f := &dbActionFixture{pool: pool, mail: &stubMail{}, suspensions: &stubSuspensionScheduler{}}
 
 	scan := func(dest *int64, sql string, args ...any) {
 		t.Helper()
@@ -151,6 +152,7 @@ func newDBActionFixture(t *testing.T, permissions int64) *dbActionFixture {
 		roles:          map[int64]db.UserRole{ownerUser: {ID: 1, Name: "Custom", Permissions: permissions, Position: 1000}},
 	}
 	f.handler.SetMailDeliverer(f.mail)
+	f.handler.SetAccountSuspensionScheduler(f.suspensions)
 	f.mux = http.NewServeMux()
 	f.handler.RegisterRoutes(f.mux)
 	return f
@@ -168,8 +170,11 @@ func (f *dbActionFixture) act(t *testing.T, body string) *httptest.ResponseRecor
 
 // state is what an account action changes in the database.
 type dbActionState struct {
-	silenced, resolvedOpen, resolvedOpenToo, resolvedOther bool
-	strikes, logs, notifications                           int
+	silenced, suspended, resolvedOpen, resolvedOpenToo, resolvedOther bool
+	strikes, logs, notifications, deletionRequests                    int
+	// updatedAt is the target's updated_at, which names the actor Update
+	// that federates its suspension.
+	updatedAt time.Time
 }
 
 func (f *dbActionFixture) state(t *testing.T) dbActionState {
@@ -178,14 +183,18 @@ func (f *dbActionFixture) state(t *testing.T) dbActionState {
 	if err := f.pool.QueryRow(context.Background(), `
 		SELECT
 			(SELECT silenced_at IS NOT NULL FROM accounts WHERE id = $1),
+			(SELECT suspended_at IS NOT NULL FROM accounts WHERE id = $1),
 			(SELECT action_taken_at IS NOT NULL FROM reports WHERE id = $2),
 			(SELECT action_taken_at IS NOT NULL FROM reports WHERE id = $3),
 			(SELECT action_taken_at IS NOT NULL FROM reports WHERE id = $4),
 			(SELECT count(*) FROM account_warnings WHERE target_account_id = $1),
 			(SELECT count(*) FROM admin_action_logs),
-			(SELECT count(*) FROM notifications WHERE account_id = $1)`,
+			(SELECT count(*) FROM notifications WHERE account_id = $1),
+			(SELECT count(*) FROM account_deletion_requests WHERE account_id = $1),
+			(SELECT updated_at FROM accounts WHERE id = $1)`,
 		f.target, f.open, f.openToo, f.otherOpen,
-	).Scan(&s.silenced, &s.resolvedOpen, &s.resolvedOpenToo, &s.resolvedOther, &s.strikes, &s.logs, &s.notifications); err != nil {
+	).Scan(&s.silenced, &s.suspended, &s.resolvedOpen, &s.resolvedOpenToo, &s.resolvedOther, &s.strikes, &s.logs, &s.notifications,
+		&s.deletionRequests, &s.updatedAt); err != nil {
 		t.Fatalf("read state: %v", err)
 	}
 	return s
@@ -198,7 +207,7 @@ func TestAccountsTakeActionDatabase(t *testing.T) {
 	assertOK(t, f.act(t, fmt.Sprintf(`{"type":"silence","warning_preset_id":"%d","text":"Second time."}`, f.preset)))
 
 	got := f.state(t)
-	want := dbActionState{silenced: true, resolvedOpen: true, resolvedOpenToo: true, strikes: 1, logs: before.logs + 3, notifications: 1}
+	want := dbActionState{silenced: true, resolvedOpen: true, resolvedOpenToo: true, strikes: 1, logs: before.logs + 3, notifications: 1, updatedAt: got.updatedAt}
 	if got != want {
 		t.Fatalf("state = %+v, want %+v", got, want)
 	}
@@ -243,6 +252,64 @@ func TestAccountsTakeActionDatabase(t *testing.T) {
 
 	if len(f.mail.mails) != 1 || f.mail.mails[0].To != "alice@example.com" || f.mail.mails[0].Params["Acct"] != "@alice@example.com" {
 		t.Fatalf("mails = %+v, want the warning to alice", f.mail.mails)
+	}
+}
+
+// TestAccountsTakeActionDatabaseSuspend suspends an account twice through
+// the action route: the first request suspends it and queues the
+// suspension's side effects once; the second is logged and struck, but
+// leaves the suspension as it was and queues nothing, so the followers
+// aren't sent the suspended actor again.
+func TestAccountsTakeActionDatabaseSuspend(t *testing.T) {
+	f := newDBActionFixture(t, ownerPermissions)
+	before := f.state(t)
+
+	assertOK(t, f.act(t, `{"type":"suspend"}`))
+	first := f.state(t)
+	want := dbActionState{suspended: true, resolvedOpen: true, resolvedOpenToo: true, strikes: 1, logs: before.logs + 3,
+		deletionRequests: 1, updatedAt: first.updatedAt}
+	if first != want {
+		t.Fatalf("state = %+v, want %+v", first, want)
+	}
+	if !first.updatedAt.After(before.updatedAt) {
+		t.Fatalf("updated_at = %v, want it moved on from %v", first.updatedAt, before.updatedAt)
+	}
+	if want := []int64{f.target}; fmt.Sprint(f.suspensions.scheduled) != fmt.Sprint(want) {
+		t.Fatalf("scheduled %v, want %v", f.suspensions.scheduled, want)
+	}
+
+	assertOK(t, f.act(t, `{"type":"suspend"}`))
+	second := f.state(t)
+	want = first
+	want.strikes, want.logs = 2, first.logs+1
+	if second != want {
+		t.Fatalf("after the repeat state = %+v, want %+v", second, want)
+	}
+	if want := []int64{f.target}; fmt.Sprint(f.suspensions.scheduled) != fmt.Sprint(want) {
+		t.Fatalf("after the repeat scheduled %v, want only the first suspension", f.suspensions.scheduled)
+	}
+	if len(f.mail.mails) != 2 {
+		t.Fatalf("mails = %d, want the warning of each strike", len(f.mail.mails))
+	}
+}
+
+// TestAccountsTakeActionDatabaseSuspendSchedulingFails checks that a
+// suspension whose side effects can't be queued leaves the database as it
+// was.
+func TestAccountsTakeActionDatabaseSuspendSchedulingFails(t *testing.T) {
+	f := newDBActionFixture(t, ownerPermissions)
+	f.suspensions.err = errors.New("redis down")
+	before := f.state(t)
+
+	rec := f.act(t, `{"type":"suspend"}`)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d (%s), want 500", rec.Code, rec.Body.String())
+	}
+	if got := f.state(t); got != before {
+		t.Fatalf("state = %+v, want %+v", got, before)
+	}
+	if len(f.mail.mails) != 0 {
+		t.Fatalf("mails = %v, want none", f.mail.mails)
 	}
 }
 

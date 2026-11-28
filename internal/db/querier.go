@@ -139,7 +139,17 @@ type Querier interface {
 	AdminResolveReport(ctx context.Context, arg AdminResolveReportParams) error
 	AdminSensitizeAccount(ctx context.Context, id int64) error
 	AdminSilenceAccount(ctx context.Context, id int64) error
-	AdminSuspendAccount(ctx context.Context, id int64) error
+	// Suspends an account that isn't suspended (Account#suspend!): it sets a
+	// suspension made on this server and creates the deletion request that lets
+	// the suspension be lifted or the account deleted, and reports 1. It
+	// changes no row, and reports 0, for an account that is suspended already,
+	// here or by its own server, including one whose deletion has finished: its
+	// suspension stays as it was, so its updated_at, and with it the ID of the
+	// actor Update that federates the suspension, stays the same, and a deleted
+	// account gets no deletion request that would let it be unsuspended.
+	// Locking the account first makes a concurrent suspension of it wait, and
+	// then find it suspended.
+	AdminSuspendAccount(ctx context.Context, id int64) (int64, error)
 	AdminUnresolveReport(ctx context.Context, id int64) error
 	AdminUnsensitizeAccount(ctx context.Context, id int64) error
 	AdminUnsilenceAccount(ctx context.Context, id int64) error

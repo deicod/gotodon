@@ -81,7 +81,7 @@ func newAdminAccountsFixture(t *testing.T, conn *pgx.Conn, q *Queries) adminAcco
 	user(local("pete"), "pete", false, false, "")
 	sam := local("sam")
 	user(sam, "sam", true, false, "")
-	if err := q.AdminSuspendAccount(ctx, sam); err != nil {
+	if _, err := q.AdminSuspendAccount(ctx, sam); err != nil {
 		t.Fatalf("suspend sam: %v", err)
 	}
 	moUser := user(local("mo"), "mo", true, false, "Moderator")

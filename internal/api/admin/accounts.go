@@ -37,7 +37,7 @@ type accountsStore interface {
 	AdminEnableAccount(ctx context.Context, accountID int64) error
 	AdminSilenceAccount(ctx context.Context, id int64) error
 	AdminUnsilenceAccount(ctx context.Context, id int64) error
-	AdminSuspendAccount(ctx context.Context, id int64) error
+	AdminSuspendAccount(ctx context.Context, id int64) (int64, error)
 	AdminUnsuspendAccount(ctx context.Context, id int64) (int64, error)
 	AdminSensitizeAccount(ctx context.Context, id int64) error
 	AdminUnsensitizeAccount(ctx context.Context, id int64) error
@@ -73,6 +73,10 @@ type AccountsHandler struct {
 	// deletions runs account deletions in the background. It is nil until
 	// set, and then deleting an account answers 500.
 	deletions AccountDeletionScheduler
+	// suspensions carries out the side effects of suspensions in the
+	// background. It is nil until set, and then the suspend action answers
+	// 500.
+	suspensions AccountSuspensionScheduler
 	// unsuspensions carries out the side effects of unsuspensions in the
 	// background. It is nil until set, and then unsuspending an account
 	// answers 500.
@@ -84,6 +88,13 @@ type AccountsHandler struct {
 // *services.InProcessAccountDeletion satisfy it.
 type AccountDeletionScheduler interface {
 	ScheduleAccountDeletion(ctx context.Context, accountID int64, opts services.AccountDeletionOptions) error
+}
+
+// AccountSuspensionScheduler starts the side effects of an account's
+// suspension in the background. *workers.AccountSuspensionEnqueuer and
+// *services.InProcessAccountSuspension satisfy it.
+type AccountSuspensionScheduler interface {
+	ScheduleAccountSuspension(ctx context.Context, accountID int64) error
 }
 
 // AccountUnsuspensionScheduler starts the side effects of an account's
@@ -132,6 +143,11 @@ func (h *AccountsHandler) SetMailDeliverer(deliverer mailer.Deliverer) {
 // SetAccountDeletionScheduler sets what runs account deletions.
 func (h *AccountsHandler) SetAccountDeletionScheduler(scheduler AccountDeletionScheduler) {
 	h.deletions = scheduler
+}
+
+// SetAccountSuspensionScheduler sets what carries out suspensions.
+func (h *AccountsHandler) SetAccountSuspensionScheduler(scheduler AccountSuspensionScheduler) {
+	h.suspensions = scheduler
 }
 
 // SetAccountUnsuspensionScheduler sets what carries out unsuspensions.
