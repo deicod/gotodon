@@ -178,9 +178,6 @@ DELETE FROM users WHERE account_id = $1;
 -- For rejection, we usually want to delete the account entirely.
 -- Let's change this to delete from accounts.
 
--- name: AdminDeleteAccount :exec
-DELETE FROM accounts WHERE id = $1;
-
 -- name: AdminDisableAccount :exec
 UPDATE users SET disabled = true, updated_at = now() WHERE account_id = $1;
 

@@ -23,6 +23,10 @@ type Querier interface {
 	AdminCreateDomainBlock(ctx context.Context, arg AdminCreateDomainBlockParams) (DomainBlock, error)
 	AdminCreateEmailDomainBlock(ctx context.Context, arg AdminCreateEmailDomainBlockParams) (AdminCreateEmailDomainBlockRow, error)
 	AdminCreateIpBlock(ctx context.Context, arg AdminCreateIpBlockParams) (AdminCreateIpBlockRow, error)
+	AdminDeleteCanonicalEmailBlock(ctx context.Context, id int64) error
+	AdminDeleteDomainBlock(ctx context.Context, id int64) error
+	AdminDeleteEmailDomainBlock(ctx context.Context, id int64) error
+	AdminDeleteIpBlock(ctx context.Context, id int64) error
 	// Note: Cascades to accounts usually, or we should delete account separately? Schema has fk_users_account -> accounts(id).
 	// Accounts table is the parent. FK is in users pointing to accounts.
 	// Actually, deleting the USER might not delete the ACCOUNT if the FK is ON DELETE CASCADE on the user side?
@@ -30,11 +34,6 @@ type Querier interface {
 	// So deleting account deletes user. Deleting user does NOT delete account automatically unless we do it manually.
 	// For rejection, we usually want to delete the account entirely.
 	// Let's change this to delete from accounts.
-	AdminDeleteAccount(ctx context.Context, id int64) error
-	AdminDeleteCanonicalEmailBlock(ctx context.Context, id int64) error
-	AdminDeleteDomainBlock(ctx context.Context, id int64) error
-	AdminDeleteEmailDomainBlock(ctx context.Context, id int64) error
-	AdminDeleteIpBlock(ctx context.Context, id int64) error
 	AdminDisableAccount(ctx context.Context, accountID int64) error
 	AdminEnableAccount(ctx context.Context, accountID int64) error
 	// The account that Api::V1::Admin::AccountsController#show renders, with

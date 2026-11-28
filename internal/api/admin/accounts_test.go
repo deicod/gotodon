@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
+	"github.com/deicod/gotodon/internal/services"
 	"github.com/deicod/gotodon/pkg/activitypub"
 )
 
@@ -170,8 +172,16 @@ func (s *stubAccountsStore) AdminRejectAccount(_ context.Context, id int64) erro
 	return nil
 }
 
-func (s *stubAccountsStore) AdminDeleteAccount(_ context.Context, id int64) error {
-	return s.change("AdminDeleteAccount", id)
+// stubDeletionScheduler records the deletions it is asked to start as
+// changes of the store, with their options.
+type stubDeletionScheduler struct {
+	store   *stubAccountsStore
+	options []services.AccountDeletionOptions
+}
+
+func (d *stubDeletionScheduler) ScheduleAccountDeletion(_ context.Context, accountID int64, opts services.AccountDeletionOptions) error {
+	d.options = append(d.options, opts)
+	return d.store.change("ScheduleAccountDeletion", accountID)
 }
 
 func (s *stubAccountsStore) AdminDisableAccount(_ context.Context, id int64) error {
@@ -387,12 +397,13 @@ var (
 // WithAccess in front as in production. Account actions run in tx, and their
 // warnings go to mail, streamer and pusher.
 type accountsFixture struct {
-	store    *stubAccountsStore
-	mux      *http.ServeMux
-	tx       *stubTransactor
-	mail     *stubMail
-	streamer *stubStreamer
-	pusher   *stubPusher
+	store     *stubAccountsStore
+	mux       *http.ServeMux
+	tx        *stubTransactor
+	deletions *stubDeletionScheduler
+	mail      *stubMail
+	streamer  *stubStreamer
+	pusher    *stubPusher
 }
 
 func newAccountsFixture(a actor) *accountsFixture {
@@ -409,14 +420,16 @@ func newAccountsFixtureFor(a actor, domain string) *accountsFixture {
 		roles:          map[int64]db.UserRole{20: {ID: 3, Name: a.name, Permissions: a.permissions, Position: a.position}},
 	}
 	f := &accountsFixture{
-		store:    store,
-		mux:      http.NewServeMux(),
-		tx:       &stubTransactor{store: store},
-		mail:     &stubMail{},
-		streamer: &stubStreamer{},
-		pusher:   &stubPusher{},
+		store:     store,
+		mux:       http.NewServeMux(),
+		tx:        &stubTransactor{store: store},
+		deletions: &stubDeletionScheduler{store: store},
+		mail:      &stubMail{},
+		streamer:  &stubStreamer{},
+		pusher:    &stubPusher{},
 	}
 	h.actions = f.tx
+	h.SetAccountDeletionScheduler(f.deletions)
 	h.SetMailDeliverer(f.mail)
 	h.SetNotificationPublishers(f.streamer, f.pusher)
 	h.RegisterRoutes(f.mux)
@@ -761,8 +774,8 @@ func TestAccountsStateConditions(t *testing.T) {
 		{name: "delete an account that isn't suspended", actor: adminActor, method: http.MethodDelete, account: targetNoRole, wantStatus: http.StatusForbidden, wantMessage: notAllowed},
 		{name: "delete a suspended account without a deletion request", actor: adminActor, method: http.MethodDelete, account: targetSuspendedNoRequest, wantStatus: http.StatusForbidden, wantMessage: notAllowed},
 		{name: "delete an account with a deletion request that isn't suspended", actor: adminActor, method: http.MethodDelete, account: targetDeletionRequested, wantStatus: http.StatusForbidden, wantMessage: notAllowed},
-		{name: "delete a temporarily suspended account", actor: adminActor, method: http.MethodDelete, account: targetSuspended, wantChange: "AdminDeleteAccount"},
-		{name: "delete a temporarily suspended remote account", actor: ownerActor, method: http.MethodDelete, account: targetSuspendedRemotely, wantChange: "AdminDeleteAccount"},
+		{name: "delete a temporarily suspended account", actor: adminActor, method: http.MethodDelete, account: targetSuspended, wantChange: "ScheduleAccountDeletion"},
+		{name: "delete a temporarily suspended remote account", actor: ownerActor, method: http.MethodDelete, account: targetSuspendedRemotely, wantChange: "ScheduleAccountDeletion"},
 
 		// AccountPolicy#unsuspend?: a local-origin suspension.
 		{name: "unsuspend a remote-origin suspension", actor: ownerActor, method: http.MethodPost, route: "unsuspend", account: targetSuspendedRemotely, wantStatus: http.StatusForbidden, wantMessage: notAllowed},
@@ -797,7 +810,7 @@ func TestAccountsStateConditions(t *testing.T) {
 		{name: "Moderator enables the Owner", actor: moderatorActor, method: http.MethodPost, route: "enable", account: targetOwner, wantChange: "AdminEnableAccount", wantLog: "enable:User", wantRendered: true},
 		{name: "Moderator unsilences the Owner", actor: moderatorActor, method: http.MethodPost, route: "unsilence", account: targetOwner, wantChange: "AdminUnsilenceAccount", wantLog: "unsilence:Account", wantRendered: true},
 		{name: "Moderator unsensitizes the Owner", actor: moderatorActor, method: http.MethodPost, route: "unsensitive", account: targetOwner, wantChange: "AdminUnsensitizeAccount", wantLog: "unsensitive:Account", wantRendered: true},
-		{name: "Admin deletes a temporarily suspended Owner", actor: adminActor, method: http.MethodDelete, account: targetSuspendedOwner, wantChange: "AdminDeleteAccount"},
+		{name: "Admin deletes a temporarily suspended Owner", actor: adminActor, method: http.MethodDelete, account: targetSuspendedOwner, wantChange: "ScheduleAccountDeletion"},
 	}
 
 	for _, tt := range tests {
@@ -897,4 +910,48 @@ func TestAccountsWriteRoutesLookupFails(t *testing.T) {
 			assertRefused(t, f, rec, http.StatusInternalServerError, "Database error")
 		})
 	}
+}
+
+// TestAccountsDeleteSchedulesDeletion checks that deleting a temporarily
+// suspended account starts its deletion in the background with the options
+// of Admin::AccountDeletionWorker, and answers 500 when it can't.
+func TestAccountsDeleteSchedulesDeletion(t *testing.T) {
+	t.Run("keeps the username and the e-mail address", func(t *testing.T) {
+		f := newAccountsFixture(adminActor)
+		rec := f.serve(http.MethodDelete, "/api/v1/admin/accounts/"+idOf(targetSuspended), "")
+		assertAllowed(t, f, rec, []string{fmt.Sprintf("ScheduleAccountDeletion(%d)", targetSuspended)}, nil)
+		want := services.AccountDeletionOptions{ReserveUsername: true, ReserveEmail: true}
+		if len(f.deletions.options) != 1 || f.deletions.options[0] != want {
+			t.Fatalf("options = %+v, want %+v", f.deletions.options, want)
+		}
+		if body := strings.TrimSpace(rec.Body.String()); body != "{}" {
+			t.Fatalf("body = %s, want {}", body)
+		}
+	})
+
+	t.Run("scheduling fails", func(t *testing.T) {
+		f := newAccountsFixture(adminActor)
+		f.store.failOn = map[string]error{"ScheduleAccountDeletion": errors.New("queue down")}
+		rec := f.serve(http.MethodDelete, "/api/v1/admin/accounts/"+idOf(targetSuspended), "")
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d, want 500", rec.Code)
+		}
+		if got := errorMessage(t, rec); got != "Failed to schedule account deletion" {
+			t.Fatalf("error = %q", got)
+		}
+	})
+
+	t.Run("no scheduler", func(t *testing.T) {
+		f := newAccountsFixture(adminActor)
+		h := NewAccountsHandler(nil, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: localDomain}})
+		h.store = f.store
+		h.roles = &stubRoles{
+			usersByAccount: map[int64]db.User{actingAccount: {ID: 20, AccountID: actingAccount}},
+			roles:          map[int64]db.UserRole{20: {ID: 3, Name: adminActor.name, Permissions: adminActor.permissions, Position: adminActor.position}},
+		}
+		f.mux = http.NewServeMux()
+		h.RegisterRoutes(f.mux)
+		rec := f.serve(http.MethodDelete, "/api/v1/admin/accounts/"+idOf(targetSuspended), "")
+		assertRefused(t, f, rec, http.StatusInternalServerError, "Account deletion unavailable")
+	})
 }

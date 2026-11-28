@@ -19,6 +19,7 @@ import (
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/mailer"
+	"github.com/deicod/gotodon/internal/services"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/activitypub"
 	"github.com/deicod/gotodon/pkg/oauth"
@@ -32,7 +33,6 @@ type accountsStore interface {
 	AdminGetAccountActionTarget(ctx context.Context, id int64) (db.AdminGetAccountActionTargetRow, error)
 	AdminApproveAccount(ctx context.Context, accountID int64) error
 	AdminRejectAccount(ctx context.Context, accountID int64) error
-	AdminDeleteAccount(ctx context.Context, id int64) error
 	AdminDisableAccount(ctx context.Context, accountID int64) error
 	AdminEnableAccount(ctx context.Context, accountID int64) error
 	AdminSilenceAccount(ctx context.Context, id int64) error
@@ -69,6 +69,17 @@ type AccountsHandler struct {
 	mail     mailer.Deliverer
 	streamer NotificationStreamer
 	pusher   NotificationPusher
+
+	// deletions runs account deletions in the background. It is nil until
+	// set, and then deleting an account answers 500.
+	deletions AccountDeletionScheduler
+}
+
+// AccountDeletionScheduler starts the deletion of an account's data in the
+// background. *workers.AccountDeletionEnqueuer and
+// *services.InProcessAccountDeletion satisfy it.
+type AccountDeletionScheduler interface {
+	ScheduleAccountDeletion(ctx context.Context, accountID int64, opts services.AccountDeletionOptions) error
 }
 
 // v1AccountsLinkParams are the query parameters that the v1 list's Link
@@ -105,6 +116,11 @@ func NewAccountsHandler(queries *db.Queries, pool *pgxpool.Pool, cfg *config.Con
 // (UserMailer.warning).
 func (h *AccountsHandler) SetMailDeliverer(deliverer mailer.Deliverer) {
 	h.mail = deliverer
+}
+
+// SetAccountDeletionScheduler sets what runs account deletions.
+func (h *AccountsHandler) SetAccountDeletionScheduler(scheduler AccountDeletionScheduler) {
+	h.deletions = scheduler
 }
 
 // SetNotificationPublishers enables streaming and Web Push for the
@@ -508,6 +524,10 @@ func (h *AccountsHandler) Unsensitize(w http.ResponseWriter, r *http.Request) {
 // Delete handles DELETE /api/v1/admin/accounts/:id. Like Mastodon's
 // AccountPolicy#destroy?, it only deletes an account that is suspended
 // temporarily: suspended, with the deletion request that suspending creates.
+// As Api::V1::Admin::AccountsController#destroy queues
+// Admin::AccountDeletionWorker, it starts the deletion in the background,
+// keeping the username and the e-mail address taken; the account is gone
+// for good once its deletion request is.
 func (h *AccountsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	target, ok := h.actionTarget(w, r)
 	if !ok {
@@ -517,9 +537,13 @@ func (h *AccountsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
 		return
 	}
+	if h.deletions == nil {
+		web.JSONError(w, http.StatusInternalServerError, "Account deletion unavailable")
+		return
+	}
 
-	if err := h.store.AdminDeleteAccount(r.Context(), target.ID); err != nil {
-		web.JSONError(w, http.StatusInternalServerError, "Database error")
+	if err := h.deletions.ScheduleAccountDeletion(r.Context(), target.ID, services.AdminAccountDeletionOptions()); err != nil {
+		web.JSONError(w, http.StatusInternalServerError, "Failed to schedule account deletion")
 		return
 	}
 

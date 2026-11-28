@@ -105,9 +105,19 @@ more, and self-service deletion doesn't exist.
       follow requests of local accounts (`Reject`, then delete), and drops the
       account's status trends. Timelines, status search and trending statuses leave
       out suspended authors where they are read, so unsuspension restores them.
-- [ ] G3.2 Implement account deletion service (used by admin and by federated `Delete`
+- [x] G3.2 Implement account deletion service (used by admin and by federated `Delete`
       of local-account targets is N/A — admin + self): purge statuses (batched, with
       federated `Delete`), media, notifications, follows; keep tombstone per Mastodon.
+      `AccountDeletionService` federates the deletion (the actor `Delete` of a local
+      account to its followers and every known inbox; `Reject`/`Undo` of a remote
+      account's follows), then purges its statuses, media, notifications, relationships
+      and other associations in batches. With the username reserved, the account
+      stays suspended without its deletion request, so it answers 410 Gone, and keeps
+      the statuses that unresolved reports name. `DELETE /api/v1/admin/accounts/:id`
+      queues it as the `account:delete` worker task; a failed run keeps the deletion
+      request and the retry goes on where it stopped (`docs/account-deletion.md`).
+      The service takes self-service options (`ReserveEmail` off); Mastodon's
+      password-confirmed settings page that calls it doesn't exist here yet.
 - [ ] G3.3 Unsuspension service restoring visibility and re-delivering profile `Update`.
 - [ ] G3.4 Wire into existing admin account action endpoint (`action=suspend`) and add
       side-effects behind the worker queue (long-running).
