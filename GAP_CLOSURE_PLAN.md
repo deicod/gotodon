@@ -145,7 +145,15 @@ more, and self-service deletion doesn't exist.
       repeated or concurrent request federates nothing more and a deleted account stays
       deleted. Unsuspension (G3.3) and deletion (G3.2) were wired already; self-service
       deletion has no route here yet (see G3.2).
-- [ ] G3.5 Tests for each service incl. federation deliveries enqueued.
+- [x] G3.5 Tests for each service incl. federation deliveries enqueued.
+      Each layer has its own tests (services against stubs, queries and worker tasks
+      against PostgreSQL, routes against stubs). `TestAccountLifecycleAcceptance`
+      (`internal/api/admin`) runs the lifecycle against PostgreSQL through the admin
+      routes, as `serve` wires them without workers: real roles, the in-process runners
+      and the services. Each step, named after its action (suspend, unsuspend, delete),
+      checks the answer, the deliveries it queued, the rows it changed and what the
+      timelines and actor lookup show, covering refusals, retries after a failed
+      delivery queue and repeated requests.
 
 ### G4 · Federation completeness — P1
 
