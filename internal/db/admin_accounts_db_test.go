@@ -200,8 +200,8 @@ func TestAdminGetAccountActionTarget(t *testing.T) {
 	}
 
 	t.Run("unsuspended", func(t *testing.T) {
-		if err := q.AdminUnsuspendAccount(ctx, suspended); err != nil {
-			t.Fatalf("unsuspend erin: %v", err)
+		if n, err := q.AdminUnsuspendAccount(ctx, suspended); err != nil || n != 1 {
+			t.Fatalf("unsuspend erin: %d, %v; want 1 account", n, err)
 		}
 		row, err := q.AdminGetAccountActionTarget(ctx, suspended)
 		if err != nil {

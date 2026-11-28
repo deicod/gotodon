@@ -38,7 +38,7 @@ type accountsStore interface {
 	AdminSilenceAccount(ctx context.Context, id int64) error
 	AdminUnsilenceAccount(ctx context.Context, id int64) error
 	AdminSuspendAccount(ctx context.Context, id int64) error
-	AdminUnsuspendAccount(ctx context.Context, id int64) error
+	AdminUnsuspendAccount(ctx context.Context, id int64) (int64, error)
 	AdminSensitizeAccount(ctx context.Context, id int64) error
 	AdminUnsensitizeAccount(ctx context.Context, id int64) error
 	GetAccountByIDAllowSuspended(ctx context.Context, id int64) (db.Account, error)
@@ -470,19 +470,29 @@ func (h *AccountsHandler) Unsilence(w http.ResponseWriter, r *http.Request) {
 
 // Unsuspend handles POST /api/v1/admin/accounts/:id/unsuspend. It only lifts
 // a suspension made on this server (AccountPolicy#unsuspend?), so an account
-// that its own server suspended, or that isn't suspended, gets 403.
+// that its own server suspended, or that isn't suspended, gets 403. So does
+// an account whose deletion has finished, which stays suspended without its
+// deletion request: Mastodon would make it usable again, empty; gotodon
+// keeps a deleted account deleted. A deletion that finishes while the
+// request runs wins too: the unsuspension then changes nothing and answers
+// 403.
 func (h *AccountsHandler) Unsuspend(w http.ResponseWriter, r *http.Request) {
 	target, ok := h.actionTarget(w, r)
 	if !ok {
 		return
 	}
-	if !suspendedLocally(target) {
+	if !suspendedLocally(target) || !target.DeletionRequested {
 		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
 		return
 	}
 
-	if err := h.store.AdminUnsuspendAccount(r.Context(), target.ID); err != nil {
+	unsuspended, err := h.store.AdminUnsuspendAccount(r.Context(), target.ID)
+	if err != nil {
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if unsuspended == 0 {
+		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
 		return
 	}
 

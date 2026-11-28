@@ -132,8 +132,8 @@ func TestTimelinesLeaveOutSuspendedAccounts(t *testing.T) {
 		"hashtag": only, "link": only, "link min_id": only, "trending": only,
 	})
 
-	if err := q.AdminUnsuspendAccount(ctx, f.sam); err != nil {
-		t.Fatalf("unsuspend sam: %v", err)
+	if n, err := q.AdminUnsuspendAccount(ctx, f.sam); err != nil || n != 1 {
+		t.Fatalf("unsuspend sam: %d, %v; want 1 account", n, err)
 	}
 	back := []int64{alice, sam}
 	check("after unsuspension", map[string][]int64{

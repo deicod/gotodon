@@ -1188,7 +1188,7 @@ func (q *Queries) SearchAccountsFollowing(ctx context.Context, arg SearchAccount
 }
 
 const suspendAccount = `-- name: SuspendAccount :exec
-UPDATE accounts SET suspended_at = now(), suspension_origin = $2, updated_at = now()
+UPDATE accounts SET suspended_at = COALESCE(suspended_at, now()), suspension_origin = $2, updated_at = now()
 WHERE id = $1
 `
 
@@ -1197,6 +1197,8 @@ type SuspendAccountParams struct {
 	SuspensionOrigin pgtype.Int4 `db:"suspension_origin" json:"suspension_origin"`
 }
 
+// Suspends an account with the given origin. An account that is suspended
+// already keeps the time of its suspension.
 func (q *Queries) SuspendAccount(ctx context.Context, arg SuspendAccountParams) error {
 	_, err := q.db.Exec(ctx, suspendAccount, arg.ID, arg.SuspensionOrigin)
 	return err

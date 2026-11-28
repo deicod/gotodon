@@ -140,7 +140,10 @@ func (s *DeleteService) handleDeletePerson(ctx context.Context, actorURI, object
 	if !account.Domain.Valid {
 		return nil
 	}
-	if account.SuspendedAt.Valid {
+	// The Delete of an account that this server suspended is recorded all
+	// the same, as a suspension by its own server, so that lifting the
+	// local suspension can't bring back an actor that was deleted.
+	if account.SuspendedAt.Valid && !suspendedHere(account) {
 		return nil
 	}
 
@@ -148,6 +151,12 @@ func (s *DeleteService) handleDeletePerson(ctx context.Context, actorURI, object
 		ID:               account.ID,
 		SuspensionOrigin: pgtype.Int4{Valid: false},
 	})
+}
+
+// suspendedHere reports whether account's suspension was made by this
+// server: its suspension_origin is Mastodon's :local, 0.
+func suspendedHere(account db.Account) bool {
+	return account.SuspensionOrigin.Valid && account.SuspensionOrigin.Int32 == 0
 }
 
 func (s *DeleteService) loadActiveMentionAccounts(ctx context.Context, statusID int64) ([]db.Account, error) {

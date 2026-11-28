@@ -72,7 +72,9 @@ WHERE id = $1
 RETURNING *;
 
 -- name: SuspendAccount :exec
-UPDATE accounts SET suspended_at = now(), suspension_origin = $2, updated_at = now()
+-- Suspends an account with the given origin. An account that is suspended
+-- already keeps the time of its suspension.
+UPDATE accounts SET suspended_at = COALESCE(suspended_at, now()), suspension_origin = $2, updated_at = now()
 WHERE id = $1;
 
 -- name: UnsuspendAccount :exec

@@ -86,6 +86,13 @@ What the deletion did before the unsuspension stays done. For example, a
 local account's actor `Delete` may already have gone out, and some of its
 statuses may already be gone.
 
+Once the deletion has finished, the account can't be unsuspended:
+`POST /api/v1/admin/accounts/:id/unsuspend` answers `403`. Mastodon would make
+the emptied account usable again; gotodon keeps a deleted account deleted. This
+holds when the deletion finishes while the unsuspension runs, too: the
+unsuspension waits for the deletion's last step, finds the deletion request
+gone and changes nothing.
+
 ## Failures and retries
 
 The service stops at the first failure and returns it. It keeps the deletion

@@ -57,6 +57,8 @@ type stubAccountsStore struct {
 	// failOn makes a call fail with its error: a method name, or
 	// CreateAdminActionLog:<action> for the log entry of one action.
 	failOn map[string]error
+	// unsuspendsNothing makes AdminUnsuspendAccount change no row.
+	unsuspendsNothing bool
 
 	changes       []string
 	logs          []db.CreateAdminActionLogParams
@@ -204,8 +206,17 @@ func (s *stubAccountsStore) AdminSuspendAccount(_ context.Context, id int64) err
 	return s.change("AdminSuspendAccount", id)
 }
 
-func (s *stubAccountsStore) AdminUnsuspendAccount(_ context.Context, id int64) error {
-	return s.change("AdminUnsuspendAccount", id)
+// AdminUnsuspendAccount reports the account unsuspended, or, with
+// unsuspendsNothing, changes nothing, as the real query does when the
+// account's deletion finished after the target lookup.
+func (s *stubAccountsStore) AdminUnsuspendAccount(_ context.Context, id int64) (int64, error) {
+	if s.unsuspendsNothing {
+		return 0, nil
+	}
+	if err := s.change("AdminUnsuspendAccount", id); err != nil {
+		return 0, err
+	}
+	return 1, nil
 }
 
 func (s *stubAccountsStore) AdminSensitizeAccount(_ context.Context, id int64) error {
@@ -777,12 +788,13 @@ func TestAccountsStateConditions(t *testing.T) {
 		{name: "delete a temporarily suspended account", actor: adminActor, method: http.MethodDelete, account: targetSuspended, wantChange: "ScheduleAccountDeletion"},
 		{name: "delete a temporarily suspended remote account", actor: ownerActor, method: http.MethodDelete, account: targetSuspendedRemotely, wantChange: "ScheduleAccountDeletion"},
 
-		// AccountPolicy#unsuspend?: a local-origin suspension.
+		// AccountPolicy#unsuspend?: a local-origin suspension, of an
+		// account whose deletion hasn't finished.
 		{name: "unsuspend a remote-origin suspension", actor: ownerActor, method: http.MethodPost, route: "unsuspend", account: targetSuspendedRemotely, wantStatus: http.StatusForbidden, wantMessage: notAllowed},
 		{name: "unsuspend an account that isn't suspended", actor: ownerActor, method: http.MethodPost, route: "unsuspend", account: targetNoRole, wantStatus: http.StatusForbidden, wantMessage: notAllowed},
 		{name: "unsuspend a remote account that isn't suspended", actor: ownerActor, method: http.MethodPost, route: "unsuspend", account: targetRemote, wantStatus: http.StatusForbidden, wantMessage: notAllowed},
 		{name: "unsuspend a temporary suspension", actor: moderatorActor, method: http.MethodPost, route: "unsuspend", account: targetSuspended, wantChange: "AdminUnsuspendAccount", wantLog: "unsuspend:Account", wantRendered: true},
-		{name: "unsuspend a local suspension without a deletion request", actor: moderatorActor, method: http.MethodPost, route: "unsuspend", account: targetSuspendedNoRequest, wantChange: "AdminUnsuspendAccount", wantLog: "unsuspend:Account", wantRendered: true},
+		{name: "unsuspend an account whose deletion has finished", actor: ownerActor, method: http.MethodPost, route: "unsuspend", account: targetSuspendedNoRequest, wantStatus: http.StatusForbidden, wantMessage: notAllowed},
 
 		// UserPolicy#approve? and #reject?: not approved yet, and
 		// require_local_account!.
@@ -850,6 +862,35 @@ func TestAccountsStateConditions(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestUnsuspendRefusesWhatTheQueryLeaves checks that an unsuspension that
+// the query refuses, because the account's deletion finished after the
+// lookup, answers 403 and logs nothing, and that a failed query answers 500.
+func TestUnsuspendRefusesWhatTheQueryLeaves(t *testing.T) {
+	path := "/api/v1/admin/accounts/" + idOf(targetSuspended) + "/unsuspend"
+
+	t.Run("deletion finished first", func(t *testing.T) {
+		f := newAccountsFixture(ownerActor)
+		f.store.unsuspendsNothing = true
+		rec := f.serve(http.MethodPost, path, "")
+		assertRefused(t, f, rec, http.StatusForbidden, "This action is not allowed")
+	})
+
+	t.Run("query fails", func(t *testing.T) {
+		f := newAccountsFixture(ownerActor)
+		f.store.failOn = map[string]error{"AdminUnsuspendAccount": errDatabase}
+		rec := f.serve(http.MethodPost, path, "")
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d (%s), want %d", rec.Code, strings.TrimSpace(rec.Body.String()), http.StatusInternalServerError)
+		}
+		if got := errorMessage(t, rec); got != "Database error" {
+			t.Fatalf("error = %q, want %q", got, "Database error")
+		}
+		if got := f.store.loggedActions(); len(got) != 0 {
+			t.Fatalf("logged %v for a failed unsuspension", got)
+		}
+	})
 }
 
 // TestAccountsWriteRoutesNotFound checks that every write route answers 404
