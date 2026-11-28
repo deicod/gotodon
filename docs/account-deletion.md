@@ -38,8 +38,8 @@ through these steps in order:
    - follows, follow requests, blocks and mutes, in both directions;
    - conversations, notes, endorsements, aliases, filters, domain blocks,
      featured tags, list memberships, lists, migrations, report notes,
-     scheduled statuses, pins, followed tags, notification permissions and
-     trends.
+     scheduled statuses, pins, followed tags, notification permissions,
+     trends and its status cleanup policy.
 
    Each of these deletes takes at most 1,000 rows per statement.
 5. **Finish.** The deletion request is deleted last.
@@ -53,7 +53,8 @@ A moderator's deletion keeps both the username and the e-mail address:
 - **The user record.** It stays disabled, so the e-mail address can't sign up
   again.
 - **Reported statuses.** Statuses named by unresolved reports about the
-  account are kept, with their mentions, media and polls.
+  account are kept, with their mentions, media and polls. Deleting the
+  account's status cleanup policy keeps the cleanup worker away from them.
 - **Moderation history.** Reports, moderation notes, warnings, appeals and
   the admin action log about the account are kept.
 - **Others' data about the account.** Other accounts' notes about it,

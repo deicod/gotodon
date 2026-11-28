@@ -194,6 +194,11 @@ func newDeletionWorld(t *testing.T) *deletionWorld {
 	w.id(`INSERT INTO list_accounts (account_id, list_id) VALUES ($1, $2) RETURNING id`, w.alice, carolList)
 	w.id(`INSERT INTO reports (account_id, target_account_id, status_ids) VALUES ($1, $2, ARRAY[$3::bigint]) RETURNING id`, w.carol, w.alice, w.reported)
 	w.id(`INSERT INTO reports (account_id, target_account_id, status_ids, action_taken_at) VALUES ($1, $2, ARRAY[$3::bigint], now()) RETURNING id`, w.carol, w.alice, w.public)
+	// Both have status cleanup policies that would delete the reported
+	// status once it is old enough.
+	for _, account := range []int64{w.alice, w.carol} {
+		w.id(`INSERT INTO account_statuses_cleanup_policies (account_id, enabled, min_status_age, keep_pinned, keep_self_fav, keep_self_bookmark) VALUES ($1, true, 86400, false, false, false) RETURNING id`, account)
+	}
 
 	if err := w.queries.AdminSuspendAccount(w.ctx, w.alice); err != nil {
 		t.Fatalf("suspend alice: %v", err)
@@ -475,6 +480,17 @@ func (w *deletionWorld) assertAliceDeleted() {
 	if n := w.count(`SELECT count(*) FROM statuses WHERE id = $1`, w.reported); n != 1 {
 		w.t.Fatal("the reported status is gone")
 	}
+	// The status cleanup worker no longer sees alice, so it can't delete
+	// the reported status later.
+	policies, err := w.queries.ListAccountStatusesCleanupPolicies(w.ctx, db.ListAccountStatusesCleanupPoliciesParams{Limit: 10})
+	if err != nil {
+		w.t.Fatalf("ListAccountStatusesCleanupPolicies: %v", err)
+	}
+	for _, policy := range policies {
+		if policy.AccountID == w.alice {
+			w.t.Fatal("alice's status cleanup policy would still run over the reported status")
+		}
+	}
 	if n := w.count(`SELECT count(*) FROM media_attachments WHERE account_id = $1`, w.alice); n != 1 || !w.exists(w.reportedMedia) {
 		w.t.Fatalf("alice has %d attachments, want the reported status's, with its file", n)
 	}
@@ -540,6 +556,9 @@ func (w *deletionWorld) assertOthersIntact() {
 	}
 	if n := w.count(`SELECT count(*) FROM lists WHERE account_id = $1`, w.carol); n != 1 {
 		w.t.Fatal("carol's list is gone")
+	}
+	if n := w.count(`SELECT count(*) FROM account_statuses_cleanup_policies WHERE account_id = $1 AND enabled`, w.carol); n != 1 {
+		w.t.Fatal("carol's status cleanup policy is gone")
 	}
 	if n := w.count(`SELECT count(*) FROM oauth_access_tokens WHERE token = 'carol-token' AND revoked_at IS NULL`); n != 1 {
 		w.t.Fatal("carol's token was revoked")

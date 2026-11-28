@@ -179,9 +179,10 @@ WHERE id IN (
 -- accounts, endorsements, aliases, conversation mutes, filters, domain
 -- blocks, featured tags, list memberships, migrations, lists, report notes,
 -- scheduled statuses, status pins, followed tags, notification permissions
--- and status trends. Notes, endorsements and lists of other accounts about
--- it are theirs and are kept. These are short per account, so one statement
--- takes them all.
+-- and status trends. Its status cleanup policy goes too, so the cleanup
+-- worker can't delete the reported statuses that deletion keeps. Notes,
+-- endorsements and lists of other accounts about it are theirs and are
+-- kept. These are short per account, so one statement takes them all.
 WITH account_notes_deleted AS (
     DELETE FROM account_notes WHERE account_notes.account_id = $1 RETURNING 1
 ), account_pins_deleted AS (
@@ -210,6 +211,10 @@ WITH account_notes_deleted AS (
     DELETE FROM status_pins WHERE status_pins.account_id = $1 RETURNING 1
 ), tag_follows_deleted AS (
     DELETE FROM tag_follows WHERE tag_follows.account_id = $1 RETURNING 1
+), cleanup_policies_deleted AS (
+    DELETE FROM account_statuses_cleanup_policies
+    WHERE account_statuses_cleanup_policies.account_id = $1
+    RETURNING 1
 ), notification_permissions_deleted AS (
     DELETE FROM notification_permissions
     WHERE notification_permissions.account_id = $1 OR notification_permissions.from_account_id = $1

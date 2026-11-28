@@ -670,9 +670,10 @@ type Querier interface {
 	// accounts, endorsements, aliases, conversation mutes, filters, domain
 	// blocks, featured tags, list memberships, migrations, lists, report notes,
 	// scheduled statuses, status pins, followed tags, notification permissions
-	// and status trends. Notes, endorsements and lists of other accounts about
-	// it are theirs and are kept. These are short per account, so one statement
-	// takes them all.
+	// and status trends. Its status cleanup policy goes too, so the cleanup
+	// worker can't delete the reported statuses that deletion keeps. Notes,
+	// endorsements and lists of other accounts about it are theirs and are
+	// kept. These are short per account, so one statement takes them all.
 	PurgeAccountAssociations(ctx context.Context, accountID int64) error
 	// Empties the profile of an account whose record deletion keeps
 	// (DeleteAccountService#purge_profile!): the account stays, suspended

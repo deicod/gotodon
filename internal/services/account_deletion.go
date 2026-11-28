@@ -199,9 +199,11 @@ func NewAccountDeletionService(store AccountDeletionStore, tx AccountDeletionTra
 //     and mutes either way, conversations, and what else it owns: notes,
 //     endorsements, aliases, filters, domain blocks, featured tags, list
 //     memberships, lists, migrations, report notes, scheduled statuses,
-//     pins, followed tags, notification permissions and trends. With
-//     opts.ReserveUsername, the statuses that unresolved reports name are
-//     kept, with their mentions, media and polls, for the moderators.
+//     pins, followed tags, notification permissions, trends and its
+//     status cleanup policy. With opts.ReserveUsername, the statuses that
+//     unresolved reports name are kept, with their mentions, media and
+//     polls, for the moderators; with the cleanup policy gone, the cleanup
+//     worker leaves them alone too.
 //  5. Without opts.ReserveEmail, a local account's user is deleted.
 //  6. Without opts.ReserveUsername the account's record is deleted, and by
 //     foreign key everything left of it. With it, the deletion request is
