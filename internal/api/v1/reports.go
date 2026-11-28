@@ -2,7 +2,6 @@ package v1
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -10,10 +9,10 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/deicod/gotodon/internal/api/middleware"
-	"github.com/deicod/gotodon/internal/auth"
 	"github.com/deicod/gotodon/internal/config"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/internal/mailer"
+	"github.com/deicod/gotodon/internal/moderation"
 	"github.com/deicod/gotodon/internal/web"
 	"github.com/deicod/gotodon/pkg/oauth"
 )
@@ -125,7 +124,7 @@ func (h *ReportsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.notifyModerators(r.Context(), report)
+	moderation.NotifyNewReport(r.Context(), h.queries, h.mail, report)
 
 	// Return response
 	resp := Report{
@@ -142,51 +141,6 @@ func (h *ReportsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	web.JSON(w, http.StatusOK, resp)
-}
-
-// notifyModerators emails every user who can manage reports about the new report.
-func (h *ReportsHandler) notifyModerators(ctx context.Context, report db.Report) {
-	if h.mail == nil {
-		return
-	}
-	staff, err := h.queries.ListUsersWithPermission(ctx, auth.PermissionManageReports)
-	if err != nil {
-		slog.Error("Failed to load staff for report mail", "error", err)
-		return
-	}
-	reporter := h.accountHandle(ctx, report.AccountID)
-	target := h.accountHandle(ctx, report.TargetAccountID)
-	for _, member := range staff {
-		locale := ""
-		if member.Locale.Valid {
-			locale = member.Locale.String
-		}
-		mail := mailer.Mail{
-			Kind:   mailer.KindAdminNewReport,
-			To:     member.Email,
-			Locale: locale,
-			Params: map[string]string{
-				"ReportID": strconv.FormatInt(report.ID, 10),
-				"Reporter": reporter,
-				"Target":   target,
-			},
-		}
-		if err := h.mail.Deliver(ctx, mail); err != nil {
-			slog.Error("Failed to enqueue report mail", "error", err)
-		}
-	}
-}
-
-func (h *ReportsHandler) accountHandle(ctx context.Context, accountID int64) string {
-	account, err := h.queries.GetAccountByID(ctx, accountID)
-	if err != nil {
-		return "#" + strconv.FormatInt(accountID, 10)
-	}
-	handle := "@" + account.Username
-	if account.Domain.Valid && account.Domain.String != "" {
-		handle += "@" + account.Domain.String
-	}
-	return handle
 }
 
 // RegisterRoutes registers the report route with the scopes of Mastodon's

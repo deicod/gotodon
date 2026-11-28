@@ -274,6 +274,12 @@ type Querier interface {
 	CreatePushSubscription(ctx context.Context, arg CreatePushSubscriptionParams) (WebPushSubscription, error)
 	CreateQuote(ctx context.Context, arg CreateQuoteParams) (Quote, error)
 	CreateRemoteMediaAttachment(ctx context.Context, arg CreateRemoteMediaAttachmentParams) (MediaAttachment, error)
+	// CreateRemoteReport files the report of a remote account that an inbound
+	// Flag activity, whose id is uri, makes, as Mastodon's ReportService does for
+	// a remote reporter: category other, not forwarded. It returns no row when
+	// the account's report of the target under uri exists already, so a Flag
+	// delivered twice files its report once.
+	CreateRemoteReport(ctx context.Context, arg CreateRemoteReportParams) (Report, error)
 	CreateReport(ctx context.Context, arg CreateReportParams) (Report, error)
 	CreateRule(ctx context.Context, arg CreateRuleParams) (Rule, error)
 	CreateScheduledStatus(ctx context.Context, arg CreateScheduledStatusParams) (ScheduledStatus, error)
@@ -390,6 +396,11 @@ type Querier interface {
 	DisableAccountDeletionUser(ctx context.Context, accountID int64) error
 	DismissAnnouncement(ctx context.Context, arg DismissAnnouncementParams) error
 	DismissNotificationRequest(ctx context.Context, arg DismissNotificationRequestParams) error
+	// DomainRejectsReports reports whether the most specific domain block among
+	// domains, a domain followed by its parent domains, rejects reports, as
+	// Mastodon's DomainBlock.reject_reports? decides. It is false when no block
+	// covers the domain.
+	DomainRejectsReports(ctx context.Context, domains []string) (bool, error)
 	ExistsTombstone(ctx context.Context, uri string) (bool, error)
 	GetAccountAliasByURI(ctx context.Context, arg GetAccountAliasByURIParams) (AccountAlias, error)
 	// Account Aliases queries (for account migration)
@@ -668,6 +679,13 @@ type Querier interface {
 	// Every inbox of a remote account that isn't suspended, a shared inbox in
 	// place of the inboxes it serves (Account.inboxes), in order after after.
 	ListRemoteInboxes(ctx context.Context, arg ListRemoteInboxesParams) ([]string, error)
+	// ListReportableStatusIDs returns, in id order, the statuses among status_ids
+	// that account_id wrote, that are not deleted, and that the server at domain
+	// could have received: public and unlisted ones, private ones when an account
+	// of domain follows the author, and any that mention an account of domain.
+	// Mastodon's ReportService#reported_status_ids attaches only these to the
+	// report of a remote reporter, whose server cannot know of others.
+	ListReportableStatusIDs(ctx context.Context, arg ListReportableStatusIDsParams) ([]int64, error)
 	ListRuleTranslations(ctx context.Context, ruleID int64) ([]RuleTranslation, error)
 	ListRules(ctx context.Context) ([]Rule, error)
 	ListScheduledStatuses(ctx context.Context, arg ListScheduledStatusesParams) ([]ScheduledStatus, error)

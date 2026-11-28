@@ -91,6 +91,9 @@ type Activity struct {
 	Target         any      `json:"target,omitempty"`
 	Result         any      `json:"result,omitempty"`
 	Origin         any      `json:"origin,omitempty"`
+	// Content is the text a Flag carries as its report comment. It is any
+	// so that an activity whose content is not a string still parses.
+	Content any `json:"content,omitempty"`
 }
 
 // Actor represents an ActivityPub actor (Person, Application, etc.)

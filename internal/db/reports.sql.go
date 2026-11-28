@@ -211,6 +211,58 @@ func (q *Queries) AdminUpdateReport(ctx context.Context, arg AdminUpdateReportPa
 	return i, err
 }
 
+const createRemoteReport = `-- name: CreateRemoteReport :one
+INSERT INTO reports (
+    account_id, target_account_id, status_ids, comment, category, forwarded, uri, created_at, updated_at
+) VALUES (
+    $1, $2, $3, $4, 0, false, $5::varchar, now(), now()
+)
+ON CONFLICT (account_id, target_account_id, uri) WHERE uri IS NOT NULL DO NOTHING
+RETURNING id, status_ids, comment, created_at, updated_at, account_id, action_taken_by_account_id, target_account_id, action_taken_at, forwarded, category, assigned_account_id, rule_ids, uri, application_id
+`
+
+type CreateRemoteReportParams struct {
+	AccountID       int64   `db:"account_id" json:"account_id"`
+	TargetAccountID int64   `db:"target_account_id" json:"target_account_id"`
+	StatusIds       []int64 `db:"status_ids" json:"status_ids"`
+	Comment         string  `db:"comment" json:"comment"`
+	Uri             string  `db:"uri" json:"uri"`
+}
+
+// CreateRemoteReport files the report of a remote account that an inbound
+// Flag activity, whose id is uri, makes, as Mastodon's ReportService does for
+// a remote reporter: category other, not forwarded. It returns no row when
+// the account's report of the target under uri exists already, so a Flag
+// delivered twice files its report once.
+func (q *Queries) CreateRemoteReport(ctx context.Context, arg CreateRemoteReportParams) (Report, error) {
+	row := q.db.QueryRow(ctx, createRemoteReport,
+		arg.AccountID,
+		arg.TargetAccountID,
+		arg.StatusIds,
+		arg.Comment,
+		arg.Uri,
+	)
+	var i Report
+	err := row.Scan(
+		&i.ID,
+		&i.StatusIds,
+		&i.Comment,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AccountID,
+		&i.ActionTakenByAccountID,
+		&i.TargetAccountID,
+		&i.ActionTakenAt,
+		&i.Forwarded,
+		&i.Category,
+		&i.AssignedAccountID,
+		&i.RuleIds,
+		&i.Uri,
+		&i.ApplicationID,
+	)
+	return i, err
+}
+
 const createReport = `-- name: CreateReport :one
 INSERT INTO reports (
     account_id, target_account_id, status_ids, comment, category, forwarded, created_at, updated_at
@@ -257,4 +309,59 @@ func (q *Queries) CreateReport(ctx context.Context, arg CreateReportParams) (Rep
 		&i.ApplicationID,
 	)
 	return i, err
+}
+
+const listReportableStatusIDs = `-- name: ListReportableStatusIDs :many
+SELECT s.id FROM statuses s
+WHERE s.account_id = $1
+  AND s.id = ANY($2::bigint[])
+  AND s.deleted_at IS NULL
+  AND (
+    s.visibility IN (0, 1)
+    OR (s.visibility = 2 AND EXISTS (
+        SELECT 1 FROM follows f
+        JOIN accounts fa ON fa.id = f.account_id
+        WHERE f.target_account_id = s.account_id
+          AND lower(fa.domain) = lower($3::text)
+    ))
+    OR EXISTS (
+        SELECT 1 FROM mentions m
+        JOIN accounts ma ON ma.id = m.account_id
+        WHERE m.status_id = s.id
+          AND lower(ma.domain) = lower($3::text)
+    )
+  )
+ORDER BY s.id
+`
+
+type ListReportableStatusIDsParams struct {
+	AccountID int64   `db:"account_id" json:"account_id"`
+	StatusIds []int64 `db:"status_ids" json:"status_ids"`
+	Domain    string  `db:"domain" json:"domain"`
+}
+
+// ListReportableStatusIDs returns, in id order, the statuses among status_ids
+// that account_id wrote, that are not deleted, and that the server at domain
+// could have received: public and unlisted ones, private ones when an account
+// of domain follows the author, and any that mention an account of domain.
+// Mastodon's ReportService#reported_status_ids attaches only these to the
+// report of a remote reporter, whose server cannot know of others.
+func (q *Queries) ListReportableStatusIDs(ctx context.Context, arg ListReportableStatusIDsParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listReportableStatusIDs, arg.AccountID, arg.StatusIds, arg.Domain)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

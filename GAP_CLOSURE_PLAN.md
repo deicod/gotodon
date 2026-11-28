@@ -26,7 +26,7 @@ Supersedes: `PLAN.md` (last updated 2026-01-30; its subsystem ratings are stale)
 | OAuth | **High** | PKCE, token reuse, scope enforcement, revoke semantics, userinfo, AS metadata; refresh/password grants disabled to match Doorkeeper config. PLAN.md's "Low" rating is obsolete. |
 | Discovery / well-known | **High** | webfinger, host-meta (XML+JSON), nodeinfo, manifest, redirects, authorize_interaction, public web pages for accounts/statuses. |
 | ActivityPub serving | **High** | Outbox with paging, featured/tags collections, contexts, instance actor, followers sync endpoint, quote authorizations, `/ap/` aliases, replies/likes/shares. |
-| Federation (inbound) | **Medium** | 10/15 activity types handled. Missing: `Flag`, `Move`, `Add`, `Remove`, `QuoteRequest` (see G4). |
+| Federation (inbound) | **Medium** | 11/15 activity types handled. Missing: `Move`, `Add`, `Remove`, `QuoteRequest` (see G4). |
 | Federation (outbound) | **Medium** | Status Create/Delete/Like/Announce/Undo/Update delivered via worker queue. Poll votes and reports do **not** federate (G4). No relays (G10). |
 | Streaming | **High** | SSE/WS, wildcard route, multistream, full event set incl. `status.update`, `filters_changed`, `announcement.*`, `conversation`. |
 | Search | **Done (by design)** | Postgres FTS (`websearch_to_tsquery`) instead of Elasticsearch. |
@@ -157,11 +157,11 @@ more, and self-service deletion doesn't exist.
 
 ### G4 · Federation completeness — P1
 
-Inbound: 10/15 activity types are handled. Outbound: several interactions never leave
+Inbound: 11/15 activity types are handled. Outbound: several interactions never leave
 the instance. References: `mastodon/app/lib/activitypub/activity/*.rb`,
 `app/services/activitypub/*`.
 
-- [ ] G4.1 Inbound `Flag` → create remote-origin reports (maps to existing reports
+- [x] G4.1 Inbound `Flag` → create remote-origin reports (maps to existing reports
       tables; actor = remote instance actor).
 - [ ] G4.2 Inbound `Move` → account migration handling: update `moved_to_account_id`,
       enqueue refollow of target for local followers (Mastodon `MoveWorker`), create

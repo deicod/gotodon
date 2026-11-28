@@ -558,6 +558,10 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	blockService := federation.NewBlockService(queries, cfg.FederationDomain(), federationHandler.ActorFetcher())
 	updateService := federation.NewUpdateService(queries, cfg.FederationDomain(), federationHandler.ActorFetcher())
 	deleteService := federation.NewDeleteService(queries, cfg.FederationDomain())
+	flagService := federation.NewFlagService(queries, cfg.FederationDomain(), federationHandler.ActorFetcher())
+	if mailDeliverer != nil {
+		flagService.SetMailDeliverer(mailDeliverer)
+	}
 	if pushPublisher != nil {
 		statusesHandler.SetPushPublisher(pushPublisher)
 		createService.SetPushPublisher(pushPublisher)
@@ -575,6 +579,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	federationHandler.RegisterInboxHandler(activitypub.TypeBlock, blockService.HandleBlock)
 	federationHandler.RegisterInboxHandler(activitypub.TypeUpdate, updateService.HandleUpdate)
 	federationHandler.RegisterInboxHandler(activitypub.TypeDelete, deleteService.HandleDelete)
+	federationHandler.RegisterInboxHandler(activitypub.TypeFlag, flagService.HandleFlag)
 	federationHandler.RegisterRoutes(mux)
 
 	compatHandler := compatapi.NewHandler(queries, cfg, federationHandler)
