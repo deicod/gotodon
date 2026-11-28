@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -21,7 +23,6 @@ import (
 
 var (
 	_ AccountDeletionStore      = (*db.Queries)(nil)
-	_ AccountDeletionBatchStore = (*db.Queries)(nil)
 	_ AccountDeletionDeliverer  = (*federation.OutgoingService)(nil)
 	_ AccountDeletionTransactor = DBTransactor{}
 	_ streaming.Publisher       = (*recordingPublisher)(nil)
@@ -42,8 +43,29 @@ type deletionStore struct {
 	media    []db.MediaAttachment
 	rows     map[string]int64
 	fail     map[string]error
+	// withdrawAfter, once a call of that name is logged, removes the
+	// deletion request, as an unsuspension between two steps does.
+	withdrawAfter string
 
-	log []string
+	// log holds the calls made, in order, and committed those of them
+	// that ran in a committed transaction.
+	log       []string
+	committed map[string]bool
+	rollbacks int
+}
+
+func (s *deletionStore) ClaimAccountDeletion(ctx context.Context, id int64) (int64, error) {
+	if s.withdrawAfter != "" && slices.Contains(s.log, s.withdrawAfter) {
+		delete(s.pending, id)
+	}
+	if err := s.fail["ClaimAccountDeletion"]; err != nil {
+		return 0, err
+	}
+	account, ok := s.accounts[id]
+	if !ok || !account.SuspendedAt.Valid || !s.pending[id] {
+		return 0, pgx.ErrNoRows
+	}
+	return id, nil
 }
 
 func (s *deletionStore) record(call string) error {
@@ -256,19 +278,25 @@ func (s *deletionStore) DeleteAccountStatusesByIDs(ctx context.Context, arg db.D
 	return int64(len(arg.Ids)), nil
 }
 
-// deletionTransactor runs a transaction on the store, logging its
-// outcome. It keeps no rollback: a failing call fails before it changes
-// anything.
+// deletionTransactor runs a transaction on the store and records which
+// logged calls it committed. It keeps no rollback: a failing call fails
+// before it changes anything.
 type deletionTransactor struct {
 	store *deletionStore
 }
 
-func (t deletionTransactor) InTx(ctx context.Context, fn func(AccountDeletionBatchStore) error) error {
+func (t deletionTransactor) InTx(ctx context.Context, fn func(AccountDeletionStore) error) error {
+	start := len(t.store.log)
 	if err := fn(t.store); err != nil {
-		t.store.log = append(t.store.log, "rollback")
+		t.store.rollbacks++
 		return err
 	}
-	t.store.log = append(t.store.log, "commit")
+	if t.store.committed == nil {
+		t.store.committed = map[string]bool{}
+	}
+	for _, call := range t.store.log[start:] {
+		t.store.committed[call] = true
+	}
 	return nil
 }
 
@@ -391,8 +419,8 @@ var adminDeletionLog = []string{
 	"ListRemoteInboxes ", "ListRemoteInboxes https://b.example/inbox",
 	"PurgeAccountProfile",
 	"ListUnresolvedReportedStatusIDs",
-	"DecrementRepliesOfDeletedStatuses [101 103]", "DeleteAccountStatusesByIDs [101 103]", "commit",
-	"DecrementRepliesOfDeletedStatuses [104]", "DeleteAccountStatusesByIDs [104]", "commit",
+	"DecrementRepliesOfDeletedStatuses [101 103]", "DeleteAccountStatusesByIDs [101 103]",
+	"DecrementRepliesOfDeletedStatuses [104]", "DeleteAccountStatusesByIDs [104]",
 	"DeleteMediaAttachmentByID 201",
 	"mentions", "mentions",
 	"polls",
@@ -643,8 +671,8 @@ func TestAccountDeletionService_DeleteResumesAfterFailure(t *testing.T) {
 		{"delivering the actor Delete", func(f *deletionFixture) { f.outgoing.err = boom }, "ListRemoteInboxes https://b.example/inbox"},
 		{"purging the profile", func(f *deletionFixture) { f.store.fail["PurgeAccountProfile"] = boom }, "PurgeAccountProfile"},
 		{"deleting the profile images", func(f *deletionFixture) { f.storage.fail = map[string]error{"accounts/avatars/1/a.png": boom} }, "ListRemoteInboxes https://b.example/inbox"},
-		{"deleting the second batch of statuses", func(f *deletionFixture) { f.store.fail["DeleteAccountStatusesByIDs [104]"] = boom }, "rollback"},
-		{"deleting a media file", func(f *deletionFixture) { f.storage.fail = map[string]error{"media/201.png": boom} }, "commit"},
+		{"deleting the second batch of statuses", func(f *deletionFixture) { f.store.fail["DeleteAccountStatusesByIDs [104]"] = boom }, "DeleteAccountStatusesByIDs [104]"},
+		{"deleting a media file", func(f *deletionFixture) { f.storage.fail = map[string]error{"media/201.png": boom} }, "DeleteAccountStatusesByIDs [104]"},
 		{"deleting a media attachment", func(f *deletionFixture) { f.store.fail["DeleteMediaAttachmentByID 201"] = boom }, "DeleteMediaAttachmentByID 201"},
 		{"deleting a batch of follows", func(f *deletionFixture) { f.store.fail["follows"] = boom }, "follows"},
 		{"deleting other associations", func(f *deletionFixture) { f.store.fail["PurgeAccountAssociations"] = boom }, "PurgeAccountAssociations"},
@@ -665,6 +693,7 @@ func TestAccountDeletionService_DeleteResumesAfterFailure(t *testing.T) {
 				t.Fatal("a failed deletion dropped its deletion request")
 			}
 			firstRun := len(f.store.log)
+			committed := maps.Clone(f.store.committed)
 
 			f.store.fail = map[string]error{}
 			f.storage.fail = nil
@@ -685,12 +714,6 @@ func TestAccountDeletionService_DeleteResumesAfterFailure(t *testing.T) {
 			}
 			// The second run deletes no batch of statuses that the first
 			// committed.
-			committed := map[string]bool{}
-			for i, call := range f.store.log[:firstRun] {
-				if call == "commit" {
-					committed[f.store.log[i-1]] = true
-				}
-			}
 			for _, call := range f.store.log[firstRun:] {
 				if strings.HasPrefix(call, "DeleteAccountStatusesByIDs") && committed[call] {
 					t.Fatalf("second run repeated %s", call)
@@ -764,4 +787,63 @@ func TestAccountDeletionService_DeleteStopsWhenCancelled(t *testing.T) {
 	if !f.store.pending[1] {
 		t.Fatal("a cancelled deletion dropped its deletion request")
 	}
+}
+
+// TestAccountDeletionService_DeleteStopsWhenWithdrawn removes the deletion
+// request between two steps, as an unsuspension does: the deletion stops at
+// its next step, changes and sends nothing more, and reports no failure.
+func TestAccountDeletionService_DeleteStopsWhenWithdrawn(t *testing.T) {
+	// reads are the calls that change nothing.
+	reads := map[string]bool{
+		"ListRemoteInboxes ":                        true,
+		"ListRemoteInboxes https://b.example/inbox": true,
+		"ListUnresolvedReportedStatusIDs":           true,
+	}
+	tests := []struct {
+		after         string
+		wantDeletes   int
+		wantStatuses  int
+		wantMediaLeft int
+	}{
+		{after: "DisableAccountDeletionUser", wantDeletes: 0, wantStatuses: 4, wantMediaLeft: 2},
+		{after: "PurgeAccountProfile", wantDeletes: 1, wantStatuses: 4, wantMediaLeft: 2},
+		{after: "DeleteAccountStatusesByIDs [101 103]", wantDeletes: 1, wantStatuses: 2, wantMediaLeft: 2},
+		{after: "notifications", wantDeletes: 1, wantStatuses: 1, wantMediaLeft: 1},
+	}
+	for _, tt := range tests {
+		t.Run("after "+tt.after, func(t *testing.T) {
+			f := newDeletionFixture()
+			f.store.withdrawAfter = tt.after
+			if err := f.service.Delete(context.Background(), 1, AdminAccountDeletionOptions()); err != nil {
+				t.Fatalf("Delete: %v, want a withdrawn deletion to end quietly", err)
+			}
+			at := slices.Index(f.store.log, tt.after)
+			for _, call := range f.store.log[at+1:] {
+				if !reads[call] {
+					t.Fatalf("withdrawn deletion went on to %s; calls %v", call, f.store.log)
+				}
+			}
+			if len(f.outgoing.deletions) != tt.wantDeletes {
+				t.Fatalf("sent %d actor Deletes, want %d", len(f.outgoing.deletions), tt.wantDeletes)
+			}
+			if len(f.store.statuses) != tt.wantStatuses || len(f.store.media) != tt.wantMediaLeft {
+				t.Fatalf("left %d statuses and %d attachments, want %d and %d", len(f.store.statuses), len(f.store.media), tt.wantStatuses, tt.wantMediaLeft)
+			}
+			if slices.Contains(f.store.log, "DeleteAccountDeletionRequest") {
+				t.Fatal("a withdrawn deletion finished")
+			}
+		})
+	}
+
+	t.Run("claim fails", func(t *testing.T) {
+		f := newDeletionFixture()
+		boom := errors.New("boom")
+		f.store.fail["ClaimAccountDeletion"] = boom
+		if err := f.service.Delete(context.Background(), 1, AdminAccountDeletionOptions()); !errors.Is(err, boom) {
+			t.Fatalf("err = %v, want boom", err)
+		}
+		if len(f.store.log) != 0 || !f.store.pending[1] {
+			t.Fatalf("calls %v, pending %v; want nothing done and the request kept", f.store.log, f.store.pending[1])
+		}
+	})
 }

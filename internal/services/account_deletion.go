@@ -57,7 +57,9 @@ func AdminAccountDeletionOptions() AccountDeletionOptions {
 // AccountDeletionStore describes DB access for account deletion.
 type AccountDeletionStore interface {
 	AccountSuspensionStore
+	conversations.ConversationStore
 	HasAccountDeletionRequest(ctx context.Context, accountID int64) (bool, error)
+	ClaimAccountDeletion(ctx context.Context, id int64) (int64, error)
 	GetUserByAccountID(ctx context.Context, accountID int64) (db.User, error)
 	DisableAccountDeletionUser(ctx context.Context, accountID int64) error
 	ListRemoteInboxes(ctx context.Context, arg db.ListRemoteInboxesParams) ([]string, error)
@@ -82,23 +84,21 @@ type AccountDeletionStore interface {
 	DeleteUserByAccountID(ctx context.Context, accountID int64) error
 	DeleteAccount(ctx context.Context, id int64) error
 	DeleteAccountDeletionRequest(ctx context.Context, accountID int64) error
-}
-
-// AccountDeletionBatchStore is what deleting one batch of statuses uses,
-// inside its transaction.
-type AccountDeletionBatchStore interface {
 	GetMentionsByStatusIDs(ctx context.Context, statusIds []int64) ([]db.Mention, error)
-	GetAccountsByIDs(ctx context.Context, ids []int64) ([]db.Account, error)
 	DecrementRepliesOfDeletedStatuses(ctx context.Context, arg db.DecrementRepliesOfDeletedStatusesParams) error
 	DeleteAccountStatusesByIDs(ctx context.Context, arg db.DeleteAccountStatusesByIDsParams) (int64, error)
-	conversations.ConversationStore
 }
 
 // AccountDeletionTransactor runs fn in one database transaction, which it
 // commits when fn returns nil and rolls back otherwise.
 type AccountDeletionTransactor interface {
-	InTx(ctx context.Context, fn func(AccountDeletionBatchStore) error) error
+	InTx(ctx context.Context, fn func(AccountDeletionStore) error) error
 }
+
+// errDeletionWithdrawn is what a step returns when the deletion is no
+// longer asked for: the account was unsuspended, or its deletion request
+// removed, after the deletion began.
+var errDeletionWithdrawn = errors.New("account deletion withdrawn")
 
 // TxBeginner begins database transactions. *pgxpool.Pool and *pgx.Conn
 // satisfy it.
@@ -113,7 +113,7 @@ type DBTransactor struct {
 }
 
 // InTx runs fn in a transaction on the database.
-func (t DBTransactor) InTx(ctx context.Context, fn func(AccountDeletionBatchStore) error) error {
+func (t DBTransactor) InTx(ctx context.Context, fn func(AccountDeletionStore) error) error {
 	if t.DB == nil || t.Queries == nil {
 		return ErrAccountDeletionMissingDeps
 	}
@@ -211,14 +211,20 @@ func NewAccountDeletionService(store AccountDeletionStore, tx AccountDeletionTra
 //     keeps the username and answers 410 Gone, the moderation history about
 //     it, and the reported statuses (fulfill_deletion_request!).
 //
-// Each delete is a short statement, and each batch of statuses a
-// transaction, so nothing holds locks for long; a step that fails leaves
-// earlier batches done and the rest untouched. Delete stops at the first
-// failure and returns it, keeping the deletion request, so the deletion can
-// be run again and goes on where it stopped: every step reads what is left
-// and repeats nothing that is done, but for the actor Delete, which it
-// sends again with the same ID. A follow is deleted only after its
-// activity is queued, so no Reject or Undo is lost.
+// Each step that changes anything, down to each batch of a batched delete,
+// is a short transaction that first claims the deletion: it checks that
+// the account is still suspended with its deletion request, and locks both
+// until it ends. An unsuspension changes both, so it waits for the step
+// that runs, and the next step finds the deletion withdrawn and stops
+// there: once an unsuspension has succeeded, the deletion deletes and
+// sends nothing more. What it did before stays done.
+//
+// A step that fails leaves earlier steps done and its own changes undone.
+// Delete stops at the first failure and returns it, keeping the deletion
+// request, so the deletion can be run again and goes on where it stopped:
+// every step reads what is left and repeats nothing that is done, but for
+// the actor Delete, which it sends again with the same ID. A follow is
+// deleted only after its activity is queued, so no Reject or Undo is lost.
 func (s *AccountDeletionService) Delete(ctx context.Context, accountID int64, opts AccountDeletionOptions) error {
 	if s == nil || s.store == nil || s.tx == nil || s.outgoing == nil || s.storage == nil {
 		return ErrAccountDeletionMissingDeps
@@ -258,40 +264,73 @@ func (s *AccountDeletionService) Delete(ctx context.Context, accountID int64, op
 		}
 	}
 
+	err = s.run(ctx, account, local, hasUser, opts)
+	if errors.Is(err, errDeletionWithdrawn) {
+		s.logger.Info("Account deletion withdrawn; stopped", "account_id", account.ID)
+		return nil
+	}
+	return err
+}
+
+// run carries out the steps of Delete.
+func (s *AccountDeletionService) run(ctx context.Context, account db.Account, local, hasUser bool, opts AccountDeletionOptions) error {
+	id := account.ID
 	if hasUser {
-		if err := s.store.DisableAccountDeletionUser(ctx, account.ID); err != nil {
-			return fmt.Errorf("disabling user of account %d: %w", account.ID, err)
+		if err := s.step(ctx, id, func(store AccountDeletionStore) error {
+			return store.DisableAccountDeletionUser(ctx, id)
+		}); err != nil {
+			return fmt.Errorf("disabling user of account %d: %w", id, err)
 		}
 	}
 	if !opts.SkipActivityPub {
 		if err := s.distributeActivities(ctx, account, local); err != nil {
-			return fmt.Errorf("federating deletion of account %d: %w", account.ID, err)
+			return fmt.Errorf("federating deletion of account %d: %w", id, err)
 		}
 	}
 	if opts.ReserveUsername {
-		if err := s.purgeProfile(ctx, account); err != nil {
-			return fmt.Errorf("purging profile of account %d: %w", account.ID, err)
+		if err := s.step(ctx, id, func(store AccountDeletionStore) error {
+			return s.purgeProfile(ctx, store, account)
+		}); err != nil {
+			return fmt.Errorf("purging profile of account %d: %w", id, err)
 		}
 	}
 	if err := s.purgeContent(ctx, account, opts.ReserveUsername); err != nil {
-		return fmt.Errorf("purging content of account %d: %w", account.ID, err)
+		return fmt.Errorf("purging content of account %d: %w", id, err)
 	}
 
-	if !opts.ReserveUsername {
-		if err := s.store.DeleteAccount(ctx, account.ID); err != nil {
-			return fmt.Errorf("deleting account %d: %w", account.ID, err)
+	if err := s.step(ctx, id, func(store AccountDeletionStore) error {
+		if !opts.ReserveUsername {
+			return store.DeleteAccount(ctx, id)
 		}
-		return nil
-	}
-	if hasUser && !opts.ReserveEmail {
-		if err := s.store.DeleteUserByAccountID(ctx, account.ID); err != nil {
-			return fmt.Errorf("deleting user of account %d: %w", account.ID, err)
+		if hasUser && !opts.ReserveEmail {
+			if err := store.DeleteUserByAccountID(ctx, id); err != nil {
+				return fmt.Errorf("deleting user: %w", err)
+			}
 		}
-	}
-	if err := s.store.DeleteAccountDeletionRequest(ctx, account.ID); err != nil {
-		return fmt.Errorf("fulfilling deletion request of account %d: %w", account.ID, err)
+		return store.DeleteAccountDeletionRequest(ctx, id)
+	}); err != nil {
+		return fmt.Errorf("finishing deletion of account %d: %w", id, err)
 	}
 	return nil
+}
+
+// step runs fn in a transaction that first claims the deletion of the
+// account accountID (ClaimAccountDeletion), locking the account and its
+// deletion request until the transaction ends. Without them it returns
+// errDeletionWithdrawn and runs nothing.
+func (s *AccountDeletionService) step(ctx context.Context, accountID int64, fn func(store AccountDeletionStore) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.tx.InTx(ctx, func(store AccountDeletionStore) error {
+		if _, err := store.ClaimAccountDeletion(ctx, accountID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return errDeletionWithdrawn
+			}
+			return fmt.Errorf("claiming deletion: %w", err)
+		}
+		return fn(store)
+	})
 }
 
 // distributeActivities federates the deletion of account
@@ -302,14 +341,26 @@ func (s *AccountDeletionService) distributeActivities(ctx context.Context, accou
 		if err != nil {
 			return fmt.Errorf("listing inboxes: %w", err)
 		}
-		return s.outgoing.DeliverAccountDeletion(ctx, account, inboxes)
+		return s.step(ctx, account.ID, func(AccountDeletionStore) error {
+			return s.outgoing.DeliverAccountDeletion(ctx, account, inboxes)
+		})
 	}
 
-	suspension := &AccountSuspensionService{store: s.store, outgoing: s.outgoing, batchSize: s.rowBatchSize}
-	return errors.Join(
-		suspension.rejectRemoteFollows(ctx, account),
-		s.undoLocalFollows(ctx, account),
-	)
+	// The follows whose activities are queued are deleted in this step,
+	// which commits them even when other follows fail, so that a retry
+	// doesn't send those activities again.
+	var failed error
+	if err := s.step(ctx, account.ID, func(store AccountDeletionStore) error {
+		suspension := &AccountSuspensionService{store: store, outgoing: s.outgoing, batchSize: s.rowLimit()}
+		failed = errors.Join(
+			suspension.rejectRemoteFollows(ctx, account),
+			s.undoLocalFollows(ctx, store, account),
+		)
+		return nil
+	}); err != nil {
+		return err
+	}
+	return failed
 }
 
 // remoteInboxes lists every inbox of a remote account that isn't
@@ -336,12 +387,12 @@ func (s *AccountDeletionService) remoteInboxes(ctx context.Context) ([]string, e
 // it can't deliver the Undo for, because the account has no inbox, it
 // deletes all the same. A failure of one follow doesn't stop the others; it
 // returns all failures joined.
-func (s *AccountDeletionService) undoLocalFollows(ctx context.Context, account db.Account) error {
+func (s *AccountDeletionService) undoLocalFollows(ctx context.Context, store AccountDeletionStore, account db.Account) error {
 	limit := s.rowLimit()
 	var errs []error
 	afterID := int64(0)
 	for {
-		follows, err := s.store.ListLocalFollowsOfAccount(ctx, db.ListLocalFollowsOfAccountParams{
+		follows, err := store.ListLocalFollowsOfAccount(ctx, db.ListLocalFollowsOfAccountParams{
 			AccountID: account.ID,
 			AfterID:   afterID,
 			Limit:     limit,
@@ -358,7 +409,7 @@ func (s *AccountDeletionService) undoLocalFollows(ctx context.Context, account d
 		for _, follow := range follows {
 			ids = append(ids, follow.AccountID)
 		}
-		followers, err := s.store.GetAccountsByIDs(ctx, ids)
+		followers, err := store.GetAccountsByIDs(ctx, ids)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("loading local followers of account %d: %w", account.ID, err))
 			break
@@ -384,7 +435,7 @@ func (s *AccountDeletionService) undoLocalFollows(ctx context.Context, account d
 				errs = append(errs, fmt.Errorf("undoing follow %d: %w", follow.ID, err))
 				continue
 			}
-			if err := s.store.DeleteFollow(ctx, db.DeleteFollowParams{AccountID: follow.AccountID, TargetAccountID: account.ID}); err != nil {
+			if err := store.DeleteFollow(ctx, db.DeleteFollowParams{AccountID: follow.AccountID, TargetAccountID: account.ID}); err != nil {
 				errs = append(errs, fmt.Errorf("deleting follow %d: %w", follow.ID, err))
 			}
 		}
@@ -398,7 +449,7 @@ func (s *AccountDeletionService) undoLocalFollows(ctx context.Context, account d
 
 // purgeProfile deletes the account's avatar and header files and empties
 // its profile (purge_profile!).
-func (s *AccountDeletionService) purgeProfile(ctx context.Context, account db.Account) error {
+func (s *AccountDeletionService) purgeProfile(ctx context.Context, store AccountDeletionStore, account db.Account) error {
 	for _, image := range []string{account.AvatarFileName.String, account.HeaderFileName.String} {
 		path := strings.TrimSpace(image)
 		if path == "" {
@@ -408,7 +459,7 @@ func (s *AccountDeletionService) purgeProfile(ctx context.Context, account db.Ac
 			return fmt.Errorf("deleting profile image: %w", err)
 		}
 	}
-	return s.store.PurgeAccountProfile(ctx, account.ID)
+	return store.PurgeAccountProfile(ctx, account.ID)
 }
 
 // purgeContent deletes what the account owns (purge_content!). With
@@ -433,63 +484,67 @@ func (s *AccountDeletionService) purgeContent(ctx context.Context, account db.Ac
 	id := account.ID
 	batches := []struct {
 		what   string
-		delete func(limit int32) (int64, error)
+		delete func(store AccountDeletionStore, limit int32) (int64, error)
 	}{
-		{"mentions", func(limit int32) (int64, error) {
-			return s.store.DeleteAccountMentionsBatch(ctx, db.DeleteAccountMentionsBatchParams{AccountID: id, KeepStatusIds: keep, Limit: limit})
+		{"mentions", func(store AccountDeletionStore, limit int32) (int64, error) {
+			return store.DeleteAccountMentionsBatch(ctx, db.DeleteAccountMentionsBatchParams{AccountID: id, KeepStatusIds: keep, Limit: limit})
 		}},
-		{"polls", func(limit int32) (int64, error) {
-			return s.store.DeleteAccountPollsBatch(ctx, db.DeleteAccountPollsBatchParams{AccountID: id, KeepStatusIds: keep, Limit: limit})
+		{"polls", func(store AccountDeletionStore, limit int32) (int64, error) {
+			return store.DeleteAccountPollsBatch(ctx, db.DeleteAccountPollsBatchParams{AccountID: id, KeepStatusIds: keep, Limit: limit})
 		}},
-		{"notifications", func(limit int32) (int64, error) {
-			return s.store.DeleteAccountNotificationsBatch(ctx, db.DeleteAccountNotificationsBatchParams{AccountID: id, Limit: limit})
+		{"notifications", func(store AccountDeletionStore, limit int32) (int64, error) {
+			return store.DeleteAccountNotificationsBatch(ctx, db.DeleteAccountNotificationsBatchParams{AccountID: id, Limit: limit})
 		}},
-		{"notification requests", func(limit int32) (int64, error) {
-			return s.store.DeleteAccountNotificationRequestsBatch(ctx, db.DeleteAccountNotificationRequestsBatchParams{AccountID: id, Limit: limit})
+		{"notification requests", func(store AccountDeletionStore, limit int32) (int64, error) {
+			return store.DeleteAccountNotificationRequestsBatch(ctx, db.DeleteAccountNotificationRequestsBatchParams{AccountID: id, Limit: limit})
 		}},
-		{"favourites", func(limit int32) (int64, error) {
-			return s.store.DeleteAccountFavouritesBatch(ctx, db.DeleteAccountFavouritesBatchParams{AccountID: id, Limit: limit})
+		{"favourites", func(store AccountDeletionStore, limit int32) (int64, error) {
+			return store.DeleteAccountFavouritesBatch(ctx, db.DeleteAccountFavouritesBatchParams{AccountID: id, Limit: limit})
 		}},
-		{"bookmarks", func(limit int32) (int64, error) {
-			return s.store.DeleteAccountBookmarksBatch(ctx, db.DeleteAccountBookmarksBatchParams{AccountID: id, Limit: limit})
+		{"bookmarks", func(store AccountDeletionStore, limit int32) (int64, error) {
+			return store.DeleteAccountBookmarksBatch(ctx, db.DeleteAccountBookmarksBatchParams{AccountID: id, Limit: limit})
 		}},
-		{"follows", func(limit int32) (int64, error) {
-			return s.store.DeleteAccountFollowsBatch(ctx, db.DeleteAccountFollowsBatchParams{AccountID: id, Limit: limit})
+		{"follows", func(store AccountDeletionStore, limit int32) (int64, error) {
+			return store.DeleteAccountFollowsBatch(ctx, db.DeleteAccountFollowsBatchParams{AccountID: id, Limit: limit})
 		}},
-		{"follow requests", func(limit int32) (int64, error) {
-			return s.store.DeleteAccountFollowRequestsBatch(ctx, db.DeleteAccountFollowRequestsBatchParams{AccountID: id, Limit: limit})
+		{"follow requests", func(store AccountDeletionStore, limit int32) (int64, error) {
+			return store.DeleteAccountFollowRequestsBatch(ctx, db.DeleteAccountFollowRequestsBatchParams{AccountID: id, Limit: limit})
 		}},
-		{"blocks", func(limit int32) (int64, error) {
-			return s.store.DeleteAccountBlocksBatch(ctx, db.DeleteAccountBlocksBatchParams{AccountID: id, Limit: limit})
+		{"blocks", func(store AccountDeletionStore, limit int32) (int64, error) {
+			return store.DeleteAccountBlocksBatch(ctx, db.DeleteAccountBlocksBatchParams{AccountID: id, Limit: limit})
 		}},
-		{"mutes", func(limit int32) (int64, error) {
-			return s.store.DeleteAccountMutesBatch(ctx, db.DeleteAccountMutesBatchParams{AccountID: id, Limit: limit})
+		{"mutes", func(store AccountDeletionStore, limit int32) (int64, error) {
+			return store.DeleteAccountMutesBatch(ctx, db.DeleteAccountMutesBatchParams{AccountID: id, Limit: limit})
 		}},
-		{"conversations", func(limit int32) (int64, error) {
-			return s.store.DeleteAccountConversationsBatch(ctx, db.DeleteAccountConversationsBatchParams{AccountID: id, Limit: limit})
+		{"conversations", func(store AccountDeletionStore, limit int32) (int64, error) {
+			return store.DeleteAccountConversationsBatch(ctx, db.DeleteAccountConversationsBatchParams{AccountID: id, Limit: limit})
 		}},
 	}
 	for _, batch := range batches {
-		if err := s.deleteInBatches(ctx, batch.delete); err != nil {
+		if err := s.deleteInBatches(ctx, id, batch.delete); err != nil {
 			return fmt.Errorf("deleting %s: %w", batch.what, err)
 		}
 	}
 
-	if err := s.store.PurgeAccountAssociations(ctx, id); err != nil {
+	if err := s.step(ctx, id, func(store AccountDeletionStore) error {
+		return store.PurgeAccountAssociations(ctx, id)
+	}); err != nil {
 		return fmt.Errorf("deleting other associations: %w", err)
 	}
 	return nil
 }
 
-// deleteInBatches calls del with the batch size until it deletes fewer rows.
-func (s *AccountDeletionService) deleteInBatches(ctx context.Context, del func(limit int32) (int64, error)) error {
+// deleteInBatches calls del with the batch size, a step each, until it
+// deletes fewer rows.
+func (s *AccountDeletionService) deleteInBatches(ctx context.Context, accountID int64, del func(store AccountDeletionStore, limit int32) (int64, error)) error {
 	limit := s.rowLimit()
 	for {
-		if err := ctx.Err(); err != nil {
+		var deleted int64
+		if err := s.step(ctx, accountID, func(store AccountDeletionStore) error {
+			var err error
+			deleted, err = del(store, limit)
 			return err
-		}
-		deleted, err := del(limit)
-		if err != nil {
+		}); err != nil {
 			return err
 		}
 		if deleted < int64(limit) {
@@ -522,7 +577,7 @@ func (s *AccountDeletionService) purgeStatuses(ctx context.Context, account db.A
 		if len(statuses) == 0 {
 			return nil
 		}
-		if err := s.tx.InTx(ctx, func(store AccountDeletionBatchStore) error {
+		if err := s.step(ctx, account.ID, func(store AccountDeletionStore) error {
 			return deleteStatusBatch(ctx, store, account, statuses)
 		}); err != nil {
 			return err
@@ -540,7 +595,7 @@ func (s *AccountDeletionService) purgeStatuses(ctx context.Context, account db.A
 // it unlinks the direct ones from the conversations of their local
 // recipients (unlink_from_conversations!), takes the live replies out of
 // the reply counts of other accounts' statuses, and deletes them.
-func deleteStatusBatch(ctx context.Context, store AccountDeletionBatchStore, account db.Account, statuses []db.Status) error {
+func deleteStatusBatch(ctx context.Context, store AccountDeletionStore, account db.Account, statuses []db.Status) error {
 	ids := make([]int64, 0, len(statuses))
 	var direct []db.Status
 	for _, status := range statuses {
@@ -627,8 +682,8 @@ func (s *AccountDeletionService) publishDeletes(ctx context.Context, account db.
 }
 
 // purgeMediaAttachments deletes the account's media attachments but those
-// of keep, files first, so a retry finds any attachment whose files it
-// couldn't delete (purge_media_attachments!).
+// of keep, a page per step, files first, so a retry finds any attachment
+// whose files it couldn't delete (purge_media_attachments!).
 func (s *AccountDeletionService) purgeMediaAttachments(ctx context.Context, account db.Account, keep []int64) error {
 	limit := s.rowLimit()
 	afterID := int64(0)
@@ -645,12 +700,19 @@ func (s *AccountDeletionService) purgeMediaAttachments(ctx context.Context, acco
 		if err != nil {
 			return err
 		}
-		for _, attachment := range attachments {
-			if err := deleteMediaAttachmentFiles(ctx, s.storage, attachment); err != nil {
-				return fmt.Errorf("deleting files of media attachment %d: %w", attachment.ID, err)
-			}
-			if err := s.store.DeleteMediaAttachmentByID(ctx, attachment.ID); err != nil {
-				return fmt.Errorf("deleting media attachment %d: %w", attachment.ID, err)
+		if len(attachments) > 0 {
+			if err := s.step(ctx, account.ID, func(store AccountDeletionStore) error {
+				for _, attachment := range attachments {
+					if err := deleteMediaAttachmentFiles(ctx, s.storage, attachment); err != nil {
+						return fmt.Errorf("deleting files of media attachment %d: %w", attachment.ID, err)
+					}
+					if err := store.DeleteMediaAttachmentByID(ctx, attachment.ID); err != nil {
+						return fmt.Errorf("deleting media attachment %d: %w", attachment.ID, err)
+					}
+				}
+				return nil
+			}); err != nil {
+				return err
 			}
 		}
 		if len(attachments) < int(limit) {

@@ -67,13 +67,32 @@ The service deletes a local account whose user never confirmed its e-mail
 address, or was never approved, in full. It sends no activities and keeps
 nothing. Deleting the record removes the rest through foreign keys.
 
+## Unsuspending during a deletion
+
+Every step that changes data or sends activities runs in its own short
+transaction, down to each batch of a batched delete. Each transaction starts
+by claiming the deletion: it checks that the account is still suspended and
+still has its deletion request, and locks both rows until it commits.
+
+Unsuspending the account updates and deletes those same rows, so:
+
+- An unsuspension waits for the step that is running, at most one batch.
+- The next step finds the deletion withdrawn and stops. The run ends without
+  an error.
+- Once an unsuspension has returned, the deletion deletes nothing more and
+  sends nothing more.
+
+What the deletion did before the unsuspension stays done. For example, a
+local account's actor `Delete` may already have gone out, and some of its
+statuses may already be gone.
+
 ## Failures and retries
 
 The service stops at the first failure and returns it. It keeps the deletion
 request, so a later run picks up where this one stopped:
 
 - Every step reads what is left, so work that finished is not done again.
-- A status batch that fails rolls back completely.
+- A step that fails rolls back completely, a status batch included.
 - A media file is deleted before its row. A run that can't delete the file
   leaves the row for the retry.
 - A follow is deleted only after its `Reject` or `Undo` is queued, so a retry

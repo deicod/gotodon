@@ -156,6 +156,16 @@ type Querier interface {
 	AttachPreviewCardToStatus(ctx context.Context, arg AttachPreviewCardToStatusParams) error
 	BulkAcceptNotificationRequests(ctx context.Context, arg BulkAcceptNotificationRequestsParams) error
 	BulkDismissNotificationRequests(ctx context.Context, arg BulkDismissNotificationRequestsParams) error
+	// Queries of the account deletion service (Mastodon's DeleteAccountService).
+	// Each delete takes at most sqlc.arg('limit') rows, so a large account is
+	// purged in short statements, and each can be run again: a run that stops
+	// part way leaves only rows that a later run deletes.
+	// The account, if its deletion is still asked for: it is suspended and has
+	// its deletion request. Each step of a deletion runs it first, in its
+	// transaction. It locks the account and the request until the transaction
+	// ends, so an unsuspension, which updates the account and deletes the
+	// request, waits for the step, and the next step finds no row.
+	ClaimAccountDeletion(ctx context.Context, id int64) (int64, error)
 	ClearAccountAvatar(ctx context.Context, id int64) (Account, error)
 	ClearAccountHeader(ctx context.Context, id int64) (Account, error)
 	ClearNotifications(ctx context.Context, accountID int64) error
@@ -645,10 +655,6 @@ type Querier interface {
 	ListTrendingStatuses(ctx context.Context, arg ListTrendingStatusesParams) ([]Status, error)
 	ListTrendingTags(ctx context.Context, arg ListTrendingTagsParams) ([]ListTrendingTagsRow, error)
 	ListUnattachedMedia(ctx context.Context, arg ListUnattachedMediaParams) ([]MediaAttachment, error)
-	// Queries of the account deletion service (Mastodon's DeleteAccountService).
-	// Each delete takes at most sqlc.arg('limit') rows, so a large account is
-	// purged in short statements, and each can be run again: a run that stops
-	// part way leaves only rows that a later run deletes.
 	// The statuses that unresolved reports about an account name
 	// (DeleteAccountService#reported_status_ids). Deletion keeps them, with
 	// their mentions, media and polls, for the moderators handling the reports.

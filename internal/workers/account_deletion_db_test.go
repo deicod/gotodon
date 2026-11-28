@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -20,43 +21,50 @@ import (
 
 var errInjected = errors.New("injected failure")
 
-// failingDeletionStore is the database with DeleteAccountBlocksBatch
-// failing while failBlocks is set.
-type failingDeletionStore struct {
-	*db.Queries
-	failBlocks bool
+// hooks are what a test does inside the deletion's transactions.
+type hooks struct {
+	// failStatus fails the delete of a batch of statuses, after the
+	// batch's other changes; failBlocks fails a batch of blocks.
+	failStatus, failBlocks bool
+	// afterStatuses, when set, runs inside the transaction of a batch of
+	// statuses, once its statuses are deleted.
+	afterStatuses func()
 }
 
-func (s *failingDeletionStore) DeleteAccountBlocksBatch(ctx context.Context, arg db.DeleteAccountBlocksBatchParams) (int64, error) {
-	if s.failBlocks {
-		return 0, errInjected
-	}
-	return s.Queries.DeleteAccountBlocksBatch(ctx, arg)
-}
-
-// failingTransactor runs status batches in real transactions, failing
-// their final delete while *fail is set, after the batch's other changes.
-type failingTransactor struct {
+// hookTransactor runs a deletion's steps in real transactions on a store
+// that obeys hooks.
+type hookTransactor struct {
 	inner services.DBTransactor
-	fail  *bool
+	hooks *hooks
 }
 
-func (t failingTransactor) InTx(ctx context.Context, fn func(services.AccountDeletionBatchStore) error) error {
-	return t.inner.InTx(ctx, func(store services.AccountDeletionBatchStore) error {
-		return fn(failingBatchStore{AccountDeletionBatchStore: store, fail: t.fail})
+func (t hookTransactor) InTx(ctx context.Context, fn func(services.AccountDeletionStore) error) error {
+	return t.inner.InTx(ctx, func(store services.AccountDeletionStore) error {
+		return fn(hookStore{AccountDeletionStore: store, hooks: t.hooks})
 	})
 }
 
-type failingBatchStore struct {
-	services.AccountDeletionBatchStore
-	fail *bool
+type hookStore struct {
+	services.AccountDeletionStore
+	hooks *hooks
 }
 
-func (s failingBatchStore) DeleteAccountStatusesByIDs(ctx context.Context, arg db.DeleteAccountStatusesByIDsParams) (int64, error) {
-	if *s.fail {
+func (s hookStore) DeleteAccountStatusesByIDs(ctx context.Context, arg db.DeleteAccountStatusesByIDsParams) (int64, error) {
+	if s.hooks.failStatus {
 		return 0, errInjected
 	}
-	return s.AccountDeletionBatchStore.DeleteAccountStatusesByIDs(ctx, arg)
+	n, err := s.AccountDeletionStore.DeleteAccountStatusesByIDs(ctx, arg)
+	if err == nil && s.hooks.afterStatuses != nil {
+		s.hooks.afterStatuses()
+	}
+	return n, err
+}
+
+func (s hookStore) DeleteAccountBlocksBatch(ctx context.Context, arg db.DeleteAccountBlocksBatchParams) (int64, error) {
+	if s.hooks.failBlocks {
+		return 0, errInjected
+	}
+	return s.AccountDeletionStore.DeleteAccountBlocksBatch(ctx, arg)
 }
 
 // deletionWorld is a database with alice, a local account to delete, and
@@ -219,8 +227,7 @@ func placeholders(from, n int) string {
 // delivery it queues through DeliveryHandler against the database.
 type deletionRun struct {
 	w          *deletionWorld
-	store      *failingDeletionStore
-	failStatus bool
+	hooks      hooks
 	handler    *AccountDeletionHandler
 	enqueuer   *taskEnqueuer
 	deliveries []delivered
@@ -228,10 +235,10 @@ type deletionRun struct {
 }
 
 func newDeletionRun(w *deletionWorld) *deletionRun {
-	r := &deletionRun{w: w, store: &failingDeletionStore{Queries: w.queries}, enqueuer: &taskEnqueuer{}}
+	r := &deletionRun{w: w, enqueuer: &taskEnqueuer{}}
 	outgoing := federation.NewOutgoingService(w.queries, "local.test", r.enqueuer)
-	tx := failingTransactor{inner: services.DBTransactor{DB: w.conn, Queries: w.queries}, fail: &r.failStatus}
-	service := services.NewAccountDeletionService(r.store, tx, outgoing, w.storage, nil, nil)
+	tx := hookTransactor{inner: services.DBTransactor{DB: w.conn, Queries: w.queries}, hooks: &r.hooks}
+	service := services.NewAccountDeletionService(w.queries, tx, outgoing, w.storage, nil, nil)
 	r.handler = &AccountDeletionHandler{deleter: service}
 	r.delivery = &DeliveryHandler{
 		store: w.queries,
@@ -307,7 +314,7 @@ func TestAccountDeletionResumesAfterFailure(t *testing.T) {
 	w := newDeletionWorld(t)
 	r := newDeletionRun(w)
 
-	r.failStatus = true
+	r.hooks.failStatus = true
 	if err, _ := r.run(w.alice); !errors.Is(err, errInjected) {
 		t.Fatalf("first run: err = %v, want the injected failure", err)
 	}
@@ -328,8 +335,8 @@ func TestAccountDeletionResumesAfterFailure(t *testing.T) {
 	}
 	w.assertPending(true)
 
-	r.failStatus = false
-	r.store.failBlocks = true
+	r.hooks.failStatus = false
+	r.hooks.failBlocks = true
 	if err, _ := r.run(w.alice); !errors.Is(err, errInjected) {
 		t.Fatalf("second run: err = %v, want the injected failure", err)
 	}
@@ -341,7 +348,7 @@ func TestAccountDeletionResumesAfterFailure(t *testing.T) {
 	}
 	w.assertPending(true)
 
-	r.store.failBlocks = false
+	r.hooks.failBlocks = false
 	err, got := r.run(w.alice)
 	if err != nil {
 		t.Fatalf("third run: %v", err)
@@ -350,6 +357,107 @@ func TestAccountDeletionResumesAfterFailure(t *testing.T) {
 		t.Fatalf("third run delivered %v, want the actor Delete to both inboxes again", got)
 	}
 	w.assertAliceDeleted()
+}
+
+// TestAccountDeletionStopsWhenUnsuspended unsuspends alice, on another
+// connection, while a batch of her statuses is being deleted: the
+// unsuspension waits for that batch to commit, and the deletion stops at
+// its next step, so nothing is deleted after the unsuspension has
+// succeeded. What was deleted before stays deleted.
+func TestAccountDeletionStopsWhenUnsuspended(t *testing.T) {
+	w := newDeletionWorld(t)
+	r := newDeletionRun(w)
+	connect := func() *pgx.Conn {
+		t.Helper()
+		conn, err := pgx.ConnectConfig(w.ctx, w.conn.Config().Copy())
+		if err != nil {
+			t.Fatalf("connect: %v", err)
+		}
+		t.Cleanup(func() { _ = conn.Close(context.Background()) })
+		return conn
+	}
+	moderator, observer := connect(), connect()
+
+	// unsuspended is closed when the unsuspension returns, with its error
+	// in unsuspendErr.
+	unsuspended := make(chan struct{})
+	var unsuspendErr error
+	r.hooks.afterStatuses = func() {
+		r.hooks.afterStatuses = nil
+		go func() {
+			defer close(unsuspended)
+			unsuspendErr = db.New(moderator).AdminUnsuspendAccount(w.ctx, w.alice)
+		}()
+		// The unsuspension waits for the batch's lock on alice.
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			var waiting int64
+			if err := observer.QueryRow(w.ctx, `SELECT count(*) FROM pg_stat_activity WHERE pid = $1 AND wait_event_type = 'Lock'`, moderator.PgConn().PID()).Scan(&waiting); err != nil {
+				t.Errorf("pg_stat_activity: %v", err)
+				return
+			}
+			if waiting == 1 {
+				break
+			}
+			select {
+			case <-unsuspended:
+				t.Errorf("unsuspension finished (err %v) while a batch of the deletion was running", unsuspendErr)
+				return
+			default:
+			}
+			if time.Now().After(deadline) {
+				t.Error("the unsuspension never waited for the running batch")
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	err, got := r.run(w.alice)
+	if err != nil {
+		t.Fatalf("deletion: %v, want a withdrawn deletion to end quietly", err)
+	}
+	<-unsuspended
+	if unsuspendErr != nil {
+		t.Fatalf("unsuspension: %v", unsuspendErr)
+	}
+	if len(got) != 2 {
+		t.Fatalf("deliveries %v, want the actor Delete sent before the unsuspension", got)
+	}
+
+	if n := w.count(`SELECT count(*) FROM accounts WHERE id = $1 AND suspended_at IS NULL`, w.alice); n != 1 {
+		t.Fatal("alice is still suspended")
+	}
+	w.assertPending(false)
+	// The batch that ran is done...
+	if n := w.count(`SELECT count(*) FROM statuses WHERE account_id = $1`, w.alice); n != 1 {
+		t.Fatalf("alice has %d statuses, want the reported one: the running batch committed", n)
+	}
+	// ...and nothing after it ran.
+	if n := w.count(`SELECT count(*) FROM media_attachments WHERE account_id = $1`, w.alice); n != 2 || !w.exists(w.publicMedia) {
+		t.Fatalf("alice has %d attachments, want both, with their files", n)
+	}
+	for table, sql := range map[string]string{
+		"favourites":    `SELECT count(*) FROM favourites WHERE account_id = $1`,
+		"bookmarks":     `SELECT count(*) FROM bookmarks WHERE account_id = $1`,
+		"notifications": `SELECT count(*) FROM notifications WHERE from_account_id = $1`,
+		"follows":       `SELECT count(*) FROM follows WHERE account_id = $1`,
+		"blocks":        `SELECT count(*) FROM blocks WHERE account_id = $1`,
+		"notes":         `SELECT count(*) FROM account_notes WHERE account_id = $1`,
+	} {
+		if n := w.count(sql, w.alice); n == 0 {
+			t.Fatalf("alice's %s were deleted after the unsuspension", table)
+		}
+	}
+
+	// Running the deletion again does nothing: it is no longer asked for.
+	err, got = r.run(w.alice)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("second run: err %v, deliveries %v; want nothing", err, got)
+	}
+	if n := w.count(`SELECT count(*) FROM favourites WHERE account_id = $1`, w.alice); n != 1 {
+		t.Fatal("the second run deleted alice's favourites")
+	}
 }
 
 // TestAccountDeletionDeletesRemoteAccount deletes dave, a remote account:

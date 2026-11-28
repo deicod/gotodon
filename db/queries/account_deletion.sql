@@ -3,6 +3,18 @@
 -- purged in short statements, and each can be run again: a run that stops
 -- part way leaves only rows that a later run deletes.
 
+-- name: ClaimAccountDeletion :one
+-- The account, if its deletion is still asked for: it is suspended and has
+-- its deletion request. Each step of a deletion runs it first, in its
+-- transaction. It locks the account and the request until the transaction
+-- ends, so an unsuspension, which updates the account and deletes the
+-- request, waits for the step, and the next step finds no row.
+SELECT a.id FROM accounts a
+JOIN account_deletion_requests d ON d.account_id = a.id
+WHERE a.id = $1 AND a.suspended_at IS NOT NULL
+LIMIT 1
+FOR SHARE OF a, d;
+
 -- name: ListUnresolvedReportedStatusIDs :many
 -- The statuses that unresolved reports about an account name
 -- (DeleteAccountService#reported_status_ids). Deletion keeps them, with
