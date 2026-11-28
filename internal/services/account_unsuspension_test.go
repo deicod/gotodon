@@ -17,6 +17,12 @@ var (
 	_ UnsuspensionDeliverer    = (*federation.OutgoingService)(nil)
 )
 
+// GetAccountByIDForShare reads the account as GetAccountByIDAllowSuspended
+// does: the stub has no concurrent transactions to wait for.
+func (s *suspensionStore) GetAccountByIDForShare(ctx context.Context, id int64) (db.Account, error) {
+	return s.GetAccountByIDAllowSuspended(ctx, id)
+}
+
 // recordingUnsuspensionDeliverer records the accounts whose unsuspension it
 // is asked to deliver, and fails each with err.
 type recordingUnsuspensionDeliverer struct {

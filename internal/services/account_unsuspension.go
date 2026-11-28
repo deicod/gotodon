@@ -14,7 +14,7 @@ var ErrAccountUnsuspensionMissingDeps = errors.New("account unsuspension missing
 
 // AccountUnsuspensionStore describes DB access for account unsuspension.
 type AccountUnsuspensionStore interface {
-	GetAccountByIDAllowSuspended(ctx context.Context, id int64) (db.Account, error)
+	GetAccountByIDForShare(ctx context.Context, id int64) (db.Account, error)
 }
 
 // UnsuspensionDeliverer federates an unsuspension.
@@ -55,12 +55,16 @@ func NewAccountUnsuspensionService(store AccountUnsuspensionStore, outgoing Unsu
 // It does nothing for an account that doesn't exist or is suspended (again),
 // as UnsuspendAccountService returns for one. It can be repeated: a retry
 // sends the same activity, with the same ID, again.
+//
+// The account is read once the transaction that changes it has ended, so
+// an unsuspension can queue this before it commits: Unsuspend then acts on
+// what it committed, and does nothing if it rolled back.
 func (s *AccountUnsuspensionService) Unsuspend(ctx context.Context, accountID int64) error {
 	if s == nil || s.store == nil || s.outgoing == nil {
 		return ErrAccountUnsuspensionMissingDeps
 	}
 
-	account, err := s.store.GetAccountByIDAllowSuspended(ctx, accountID)
+	account, err := s.store.GetAccountByIDForShare(ctx, accountID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}

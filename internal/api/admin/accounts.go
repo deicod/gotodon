@@ -493,11 +493,14 @@ func (h *AccountsHandler) Unsilence(w http.ResponseWriter, r *http.Request) {
 // request runs wins too: the unsuspension then changes nothing and answers
 // 403.
 //
-// Once the suspension is lifted and logged, it starts the unsuspension's
-// side effects in the background (services.AccountUnsuspensionService), as
+// Lifting the suspension and queueing its side effects in the background
+// (services.AccountUnsuspensionService), as
 // Api::V1::Admin::AccountsController#unsuspend queues
-// Admin::UnsuspensionWorker. If they can't be started, it answers 500: the
-// suspension stays lifted, but its federation hasn't been queued.
+// Admin::UnsuspensionWorker, happen in one transaction: the side effects
+// are queued before it commits. If they can't be queued, the suspension
+// isn't lifted either and the request answers 500, so it can be sent again.
+// The side effects wait for the transaction to end and do nothing if it
+// rolled back. The action is logged once it has committed.
 func (h *AccountsHandler) Unsuspend(w http.ResponseWriter, r *http.Request) {
 	target, ok := h.actionTarget(w, r)
 	if !ok {
@@ -507,28 +510,44 @@ func (h *AccountsHandler) Unsuspend(w http.ResponseWriter, r *http.Request) {
 		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
 		return
 	}
-	if h.unsuspensions == nil {
+	if h.unsuspensions == nil || h.actions == nil {
+		slog.ErrorContext(r.Context(), "Account unsuspension without a scheduler or transactions",
+			"account_id", target.ID, "scheduler", h.unsuspensions != nil, "transactions", h.actions != nil)
 		web.JSONError(w, http.StatusInternalServerError, "Account unsuspension unavailable")
 		return
 	}
 
-	unsuspended, err := h.store.AdminUnsuspendAccount(r.Context(), target.ID)
+	lifted := false
+	var scheduleErr error
+	err := h.actions.InTx(r.Context(), func(store accountActionStore) error {
+		unsuspended, err := store.AdminUnsuspendAccount(r.Context(), target.ID)
+		if err != nil || unsuspended == 0 {
+			return err
+		}
+		if err := h.unsuspensions.ScheduleAccountUnsuspension(r.Context(), target.ID); err != nil {
+			scheduleErr = err
+			return err
+		}
+		lifted = true
+		return nil
+	})
+	if scheduleErr != nil {
+		slog.ErrorContext(r.Context(), "Scheduling account unsuspension failed; the account stays suspended", "account_id", target.ID, "error", scheduleErr)
+		web.JSONError(w, http.StatusInternalServerError, "Failed to schedule account unsuspension")
+		return
+	}
 	if err != nil {
+		slog.ErrorContext(r.Context(), "Account unsuspension failed", "account_id", target.ID, "error", err)
 		web.JSONError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	if unsuspended == 0 {
+	if !lifted {
 		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
 		return
 	}
 
 	if adminID, ok := middleware.GetAccountID(r.Context()); ok {
 		h.logAccountAction(r.Context(), adminID, target.ID, "unsuspend")
-	}
-	if err := h.unsuspensions.ScheduleAccountUnsuspension(r.Context(), target.ID); err != nil {
-		slog.ErrorContext(r.Context(), "Scheduling account unsuspension failed", "account_id", target.ID, "error", err)
-		web.JSONError(w, http.StatusInternalServerError, "Failed to schedule account unsuspension")
-		return
 	}
 
 	h.Get(w, r)

@@ -884,12 +884,32 @@ func TestAccountsStateConditions(t *testing.T) {
 }
 
 // TestUnsuspendSchedulesSideEffects checks that a lifted suspension, and
-// only one, has its side effects scheduled after it is logged, and that a
-// failure to schedule them answers 500 rather than success.
+// only one, has its side effects scheduled in the transaction that lifts
+// it, and that the action is logged once it has committed. A failure to
+// schedule them, or to commit, rolls the suspension back and answers 500,
+// so the request can be sent again.
 func TestUnsuspendSchedulesSideEffects(t *testing.T) {
 	path := "/api/v1/admin/accounts/" + idOf(targetSuspended) + "/unsuspend"
 	lifted := []string{fmt.Sprintf("AdminUnsuspendAccount(%d)", targetSuspended)}
 	logged := []string{fmt.Sprintf("unsuspend:Account:%d", targetSuspended)}
+
+	// assertRolledBack checks a 500 with message after which the
+	// suspension stands and nothing is logged.
+	assertRolledBack := func(t *testing.T, f *accountsFixture, rec *httptest.ResponseRecorder, message string) {
+		t.Helper()
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d (%s), want %d", rec.Code, strings.TrimSpace(rec.Body.String()), http.StatusInternalServerError)
+		}
+		if got := errorMessage(t, rec); got != message {
+			t.Fatalf("error = %q, want %q", got, message)
+		}
+		if len(f.store.changes) != 0 || len(f.store.loggedActions()) != 0 {
+			t.Fatalf("changes = %v, logged = %v; want the unsuspension rolled back, unlogged", f.store.changes, f.store.loggedActions())
+		}
+		if f.tx.commits != 0 || f.tx.rollbacks != 1 {
+			t.Fatalf("commits = %d, rollbacks = %d; want one rollback", f.tx.commits, f.tx.rollbacks)
+		}
+	}
 
 	t.Run("scheduled", func(t *testing.T) {
 		f := newAccountsFixture(moderatorActor)
@@ -898,37 +918,54 @@ func TestUnsuspendSchedulesSideEffects(t *testing.T) {
 		if !slices.Equal(f.unsuspensions.scheduled, []int64{targetSuspended}) {
 			t.Fatalf("scheduled %v, want the unsuspension of %d", f.unsuspensions.scheduled, targetSuspended)
 		}
+		if f.tx.commits != 1 {
+			t.Fatalf("commits = %d, want 1", f.tx.commits)
+		}
 	})
 
 	t.Run("scheduling fails", func(t *testing.T) {
 		f := newAccountsFixture(moderatorActor)
 		f.unsuspensions.err = errors.New("redis down")
 		rec := f.serve(http.MethodPost, path, "")
-		if rec.Code != http.StatusInternalServerError {
-			t.Fatalf("status = %d (%s), want %d", rec.Code, strings.TrimSpace(rec.Body.String()), http.StatusInternalServerError)
-		}
-		if got := errorMessage(t, rec); got != "Failed to schedule account unsuspension" {
-			t.Fatalf("error = %q", got)
-		}
-		// The suspension is lifted, and logged, all the same.
-		if !slices.Equal(f.store.changes, lifted) || !slices.Equal(f.store.loggedActions(), logged) {
-			t.Fatalf("changes = %v, logged = %v; want %v and %v", f.store.changes, f.store.loggedActions(), lifted, logged)
+		assertRolledBack(t, f, rec, "Failed to schedule account unsuspension")
+
+		// The suspension still stands, so the request can be sent again.
+		f.unsuspensions.err = nil
+		rec = f.serve(http.MethodPost, path, "")
+		assertAllowed(t, f, rec, lifted, logged)
+		if !slices.Equal(f.unsuspensions.scheduled, []int64{targetSuspended, targetSuspended}) {
+			t.Fatalf("scheduled %v, want the failed attempt and the retry", f.unsuspensions.scheduled)
 		}
 	})
 
-	t.Run("no scheduler", func(t *testing.T) {
+	// The side effects were queued, but find the account still suspended
+	// once the transaction has rolled back, and do nothing.
+	t.Run("commit fails", func(t *testing.T) {
 		f := newAccountsFixture(moderatorActor)
-		h := NewAccountsHandler(nil, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: localDomain}})
-		h.store = f.store
-		h.roles = &stubRoles{
-			usersByAccount: map[int64]db.User{actingAccount: {ID: 20, AccountID: actingAccount}},
-			roles:          map[int64]db.UserRole{20: {ID: 3, Name: moderatorActor.name, Permissions: moderatorActor.permissions, Position: moderatorActor.position}},
-		}
-		f.mux = http.NewServeMux()
-		h.RegisterRoutes(f.mux)
+		f.tx.commitErr = errDatabase
 		rec := f.serve(http.MethodPost, path, "")
-		assertRefused(t, f, rec, http.StatusInternalServerError, "Account unsuspension unavailable")
+		assertRolledBack(t, f, rec, "Database error")
 	})
+
+	for name, configure := range map[string]func(h *AccountsHandler, f *accountsFixture){
+		"no scheduler":    func(h *AccountsHandler, f *accountsFixture) { h.actions = f.tx },
+		"no transactions": func(h *AccountsHandler, f *accountsFixture) { h.SetAccountUnsuspensionScheduler(f.unsuspensions) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newAccountsFixture(moderatorActor)
+			h := NewAccountsHandler(nil, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: localDomain}})
+			h.store = f.store
+			h.roles = &stubRoles{
+				usersByAccount: map[int64]db.User{actingAccount: {ID: 20, AccountID: actingAccount}},
+				roles:          map[int64]db.UserRole{20: {ID: 3, Name: moderatorActor.name, Permissions: moderatorActor.permissions, Position: moderatorActor.position}},
+			}
+			configure(h, f)
+			f.mux = http.NewServeMux()
+			h.RegisterRoutes(f.mux)
+			rec := f.serve(http.MethodPost, path, "")
+			assertRefused(t, f, rec, http.StatusInternalServerError, "Account unsuspension unavailable")
+		})
+	}
 }
 
 // TestUnsuspendRefusesWhatTheQueryLeaves checks that an unsuspension that

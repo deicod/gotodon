@@ -34,6 +34,9 @@ type accountActionStore interface {
 	AdminSensitizeAccount(ctx context.Context, id int64) error
 	AdminSilenceAccount(ctx context.Context, id int64) error
 	AdminSuspendAccount(ctx context.Context, id int64) error
+	// AdminUnsuspendAccount is the unsuspend route's change, which runs in
+	// a transaction with the queueing of its side effects.
+	AdminUnsuspendAccount(ctx context.Context, id int64) (int64, error)
 	CreateAccountWarning(ctx context.Context, arg db.CreateAccountWarningParams) (db.AccountWarning, error)
 	AdminResolveReport(ctx context.Context, arg db.AdminResolveReportParams) error
 	CreateAdminActionLog(ctx context.Context, arg db.CreateAdminActionLogParams) error

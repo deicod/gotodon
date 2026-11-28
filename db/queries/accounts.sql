@@ -4,6 +4,14 @@ SELECT * FROM accounts WHERE id = $1 AND suspended_at IS NULL;
 -- name: GetAccountByIDAllowSuspended :one
 SELECT * FROM accounts WHERE id = $1;
 
+-- name: GetAccountByIDForShare :one
+-- The account, suspended or not, as last committed. FOR SHARE waits for a
+-- transaction that is changing it, such as an unsuspension that queues its
+-- side effects before it commits, and then reads what that transaction
+-- left: the account unsuspended if it committed, still suspended if it
+-- rolled back.
+SELECT * FROM accounts WHERE id = $1 FOR SHARE;
+
 -- name: GetAccountByUsername :one
 SELECT * FROM accounts 
 WHERE lower(username) = lower(@username) AND domain IS NULL AND suspended_at IS NULL;
