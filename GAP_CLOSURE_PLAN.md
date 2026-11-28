@@ -121,8 +121,10 @@ more, and self-service deletion doesn't exist.
 - [x] G3.3 Unsuspension service restoring visibility and re-delivering profile `Update`.
       `AccountUnsuspensionService` delivers a local account's actor `Update`, profile
       included, to the remote followers that got the suspended actor; a remote account
-      has nothing to federate. Timelines, search, the directory and the actor come back
-      on their own, as they are filtered where read. Unsuspension lifts only a local
+      has nothing to federate. `POST /api/v1/admin/accounts/:id/unsuspend` queues it as
+      the `account:unsuspend` worker task (in process without workers) and answers 500
+      if it can't. Timelines, search, the directory and the actor come back on their
+      own, as they are filtered where read. Unsuspension lifts only a local
       suspension whose deletion hasn't finished, so a deleted account stays deleted,
       even when its deletion finishes during the request, and a remote actor's
       `Delete` received while suspended here is kept. Actor `Update` IDs carry

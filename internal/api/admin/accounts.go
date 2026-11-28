@@ -73,6 +73,10 @@ type AccountsHandler struct {
 	// deletions runs account deletions in the background. It is nil until
 	// set, and then deleting an account answers 500.
 	deletions AccountDeletionScheduler
+	// unsuspensions carries out the side effects of unsuspensions in the
+	// background. It is nil until set, and then unsuspending an account
+	// answers 500.
+	unsuspensions AccountUnsuspensionScheduler
 }
 
 // AccountDeletionScheduler starts the deletion of an account's data in the
@@ -80,6 +84,13 @@ type AccountsHandler struct {
 // *services.InProcessAccountDeletion satisfy it.
 type AccountDeletionScheduler interface {
 	ScheduleAccountDeletion(ctx context.Context, accountID int64, opts services.AccountDeletionOptions) error
+}
+
+// AccountUnsuspensionScheduler starts the side effects of an account's
+// unsuspension in the background. *workers.AccountUnsuspensionEnqueuer and
+// *services.InProcessAccountUnsuspension satisfy it.
+type AccountUnsuspensionScheduler interface {
+	ScheduleAccountUnsuspension(ctx context.Context, accountID int64) error
 }
 
 // v1AccountsLinkParams are the query parameters that the v1 list's Link
@@ -121,6 +132,11 @@ func (h *AccountsHandler) SetMailDeliverer(deliverer mailer.Deliverer) {
 // SetAccountDeletionScheduler sets what runs account deletions.
 func (h *AccountsHandler) SetAccountDeletionScheduler(scheduler AccountDeletionScheduler) {
 	h.deletions = scheduler
+}
+
+// SetAccountUnsuspensionScheduler sets what carries out unsuspensions.
+func (h *AccountsHandler) SetAccountUnsuspensionScheduler(scheduler AccountUnsuspensionScheduler) {
+	h.unsuspensions = scheduler
 }
 
 // SetNotificationPublishers enables streaming and Web Push for the
@@ -476,6 +492,12 @@ func (h *AccountsHandler) Unsilence(w http.ResponseWriter, r *http.Request) {
 // keeps a deleted account deleted. A deletion that finishes while the
 // request runs wins too: the unsuspension then changes nothing and answers
 // 403.
+//
+// Once the suspension is lifted and logged, it starts the unsuspension's
+// side effects in the background (services.AccountUnsuspensionService), as
+// Api::V1::Admin::AccountsController#unsuspend queues
+// Admin::UnsuspensionWorker. If they can't be started, it answers 500: the
+// suspension stays lifted, but its federation hasn't been queued.
 func (h *AccountsHandler) Unsuspend(w http.ResponseWriter, r *http.Request) {
 	target, ok := h.actionTarget(w, r)
 	if !ok {
@@ -483,6 +505,10 @@ func (h *AccountsHandler) Unsuspend(w http.ResponseWriter, r *http.Request) {
 	}
 	if !suspendedLocally(target) || !target.DeletionRequested {
 		web.JSONError(w, http.StatusForbidden, "This action is not allowed")
+		return
+	}
+	if h.unsuspensions == nil {
+		web.JSONError(w, http.StatusInternalServerError, "Account unsuspension unavailable")
 		return
 	}
 
@@ -498,6 +524,11 @@ func (h *AccountsHandler) Unsuspend(w http.ResponseWriter, r *http.Request) {
 
 	if adminID, ok := middleware.GetAccountID(r.Context()); ok {
 		h.logAccountAction(r.Context(), adminID, target.ID, "unsuspend")
+	}
+	if err := h.unsuspensions.ScheduleAccountUnsuspension(r.Context(), target.ID); err != nil {
+		slog.ErrorContext(r.Context(), "Scheduling account unsuspension failed", "account_id", target.ID, "error", err)
+		web.JSONError(w, http.StatusInternalServerError, "Failed to schedule account unsuspension")
+		return
 	}
 
 	h.Get(w, r)

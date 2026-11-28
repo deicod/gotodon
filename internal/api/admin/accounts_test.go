@@ -186,6 +186,18 @@ func (d *stubDeletionScheduler) ScheduleAccountDeletion(_ context.Context, accou
 	return d.store.change("ScheduleAccountDeletion", accountID)
 }
 
+// stubUnsuspensionScheduler records the unsuspensions it is asked to carry
+// out, and fails each with err.
+type stubUnsuspensionScheduler struct {
+	scheduled []int64
+	err       error
+}
+
+func (u *stubUnsuspensionScheduler) ScheduleAccountUnsuspension(_ context.Context, accountID int64) error {
+	u.scheduled = append(u.scheduled, accountID)
+	return u.err
+}
+
 func (s *stubAccountsStore) AdminDisableAccount(_ context.Context, id int64) error {
 	return s.change("AdminDisableAccount", id)
 }
@@ -412,9 +424,11 @@ type accountsFixture struct {
 	mux       *http.ServeMux
 	tx        *stubTransactor
 	deletions *stubDeletionScheduler
-	mail      *stubMail
-	streamer  *stubStreamer
-	pusher    *stubPusher
+	// unsuspensions records the unsuspensions that were scheduled.
+	unsuspensions *stubUnsuspensionScheduler
+	mail          *stubMail
+	streamer      *stubStreamer
+	pusher        *stubPusher
 }
 
 func newAccountsFixture(a actor) *accountsFixture {
@@ -431,16 +445,18 @@ func newAccountsFixtureFor(a actor, domain string) *accountsFixture {
 		roles:          map[int64]db.UserRole{20: {ID: 3, Name: a.name, Permissions: a.permissions, Position: a.position}},
 	}
 	f := &accountsFixture{
-		store:     store,
-		mux:       http.NewServeMux(),
-		tx:        &stubTransactor{store: store},
-		deletions: &stubDeletionScheduler{store: store},
-		mail:      &stubMail{},
-		streamer:  &stubStreamer{},
-		pusher:    &stubPusher{},
+		store:         store,
+		mux:           http.NewServeMux(),
+		tx:            &stubTransactor{store: store},
+		deletions:     &stubDeletionScheduler{store: store},
+		unsuspensions: &stubUnsuspensionScheduler{},
+		mail:          &stubMail{},
+		streamer:      &stubStreamer{},
+		pusher:        &stubPusher{},
 	}
 	h.actions = f.tx
 	h.SetAccountDeletionScheduler(f.deletions)
+	h.SetAccountUnsuspensionScheduler(f.unsuspensions)
 	h.SetMailDeliverer(f.mail)
 	h.SetNotificationPublishers(f.streamer, f.pusher)
 	h.RegisterRoutes(f.mux)
@@ -516,6 +532,9 @@ func assertNothingDone(t *testing.T, f *accountsFixture) {
 	}
 	if len(f.store.strikes) != 0 || len(f.store.resolutions) != 0 {
 		t.Fatalf("refused request created strikes %v and resolved reports %v", f.store.strikes, f.store.resolutions)
+	}
+	if f.unsuspensions != nil && len(f.unsuspensions.scheduled) != 0 {
+		t.Fatalf("refused request scheduled the unsuspension of %v", f.unsuspensions.scheduled)
 	}
 	if len(f.store.notifications) != 0 {
 		t.Fatalf("refused request notified %v", f.store.notifications)
@@ -864,6 +883,54 @@ func TestAccountsStateConditions(t *testing.T) {
 	}
 }
 
+// TestUnsuspendSchedulesSideEffects checks that a lifted suspension, and
+// only one, has its side effects scheduled after it is logged, and that a
+// failure to schedule them answers 500 rather than success.
+func TestUnsuspendSchedulesSideEffects(t *testing.T) {
+	path := "/api/v1/admin/accounts/" + idOf(targetSuspended) + "/unsuspend"
+	lifted := []string{fmt.Sprintf("AdminUnsuspendAccount(%d)", targetSuspended)}
+	logged := []string{fmt.Sprintf("unsuspend:Account:%d", targetSuspended)}
+
+	t.Run("scheduled", func(t *testing.T) {
+		f := newAccountsFixture(moderatorActor)
+		rec := f.serve(http.MethodPost, path, "")
+		assertAllowed(t, f, rec, lifted, logged)
+		if !slices.Equal(f.unsuspensions.scheduled, []int64{targetSuspended}) {
+			t.Fatalf("scheduled %v, want the unsuspension of %d", f.unsuspensions.scheduled, targetSuspended)
+		}
+	})
+
+	t.Run("scheduling fails", func(t *testing.T) {
+		f := newAccountsFixture(moderatorActor)
+		f.unsuspensions.err = errors.New("redis down")
+		rec := f.serve(http.MethodPost, path, "")
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d (%s), want %d", rec.Code, strings.TrimSpace(rec.Body.String()), http.StatusInternalServerError)
+		}
+		if got := errorMessage(t, rec); got != "Failed to schedule account unsuspension" {
+			t.Fatalf("error = %q", got)
+		}
+		// The suspension is lifted, and logged, all the same.
+		if !slices.Equal(f.store.changes, lifted) || !slices.Equal(f.store.loggedActions(), logged) {
+			t.Fatalf("changes = %v, logged = %v; want %v and %v", f.store.changes, f.store.loggedActions(), lifted, logged)
+		}
+	})
+
+	t.Run("no scheduler", func(t *testing.T) {
+		f := newAccountsFixture(moderatorActor)
+		h := NewAccountsHandler(nil, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: localDomain}})
+		h.store = f.store
+		h.roles = &stubRoles{
+			usersByAccount: map[int64]db.User{actingAccount: {ID: 20, AccountID: actingAccount}},
+			roles:          map[int64]db.UserRole{20: {ID: 3, Name: moderatorActor.name, Permissions: moderatorActor.permissions, Position: moderatorActor.position}},
+		}
+		f.mux = http.NewServeMux()
+		h.RegisterRoutes(f.mux)
+		rec := f.serve(http.MethodPost, path, "")
+		assertRefused(t, f, rec, http.StatusInternalServerError, "Account unsuspension unavailable")
+	})
+}
+
 // TestUnsuspendRefusesWhatTheQueryLeaves checks that an unsuspension that
 // the query refuses, because the account's deletion finished after the
 // lookup, answers 403 and logs nothing, and that a failed query answers 500.
@@ -889,6 +956,9 @@ func TestUnsuspendRefusesWhatTheQueryLeaves(t *testing.T) {
 		}
 		if got := f.store.loggedActions(); len(got) != 0 {
 			t.Fatalf("logged %v for a failed unsuspension", got)
+		}
+		if len(f.unsuspensions.scheduled) != 0 {
+			t.Fatalf("scheduled %v for a failed unsuspension", f.unsuspensions.scheduled)
 		}
 	})
 }
