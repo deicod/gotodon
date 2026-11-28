@@ -20,7 +20,7 @@ var ErrAccountSuspensionMissingDeps = errors.New("account suspension missing dep
 
 // AccountSuspensionStore describes DB access for account suspension.
 type AccountSuspensionStore interface {
-	GetAccountByIDAllowSuspended(ctx context.Context, id int64) (db.Account, error)
+	GetAccountByIDForShare(ctx context.Context, id int64) (db.Account, error)
 	GetAccountsByIDs(ctx context.Context, ids []int64) ([]db.Account, error)
 	ListFollowsByAccountToLocal(ctx context.Context, arg db.ListFollowsByAccountToLocalParams) ([]db.Follow, error)
 	ListFollowRequestsByAccountToLocal(ctx context.Context, arg db.ListFollowRequestsByAccountToLocalParams) ([]db.FollowRequest, error)
@@ -82,12 +82,16 @@ func NewAccountSuspensionService(store AccountSuspensionStore, outgoing Suspensi
 // follow is deleted only after its Reject is enqueued, and a retry sends the
 // same activities, with the same IDs, again. A failure of one follow doesn't
 // stop the others; Suspend returns all failures joined.
+//
+// The account is read once the transaction that changes it has ended, so a
+// suspension can queue this before it commits: Suspend then acts on what it
+// committed, and does nothing if it rolled back.
 func (s *AccountSuspensionService) Suspend(ctx context.Context, accountID int64) error {
 	if s == nil || s.store == nil || s.outgoing == nil {
 		return ErrAccountSuspensionMissingDeps
 	}
 
-	account, err := s.store.GetAccountByIDAllowSuspended(ctx, accountID)
+	account, err := s.store.GetAccountByIDForShare(ctx, accountID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}

@@ -6,9 +6,9 @@ SELECT * FROM accounts WHERE id = $1;
 
 -- name: GetAccountByIDForShare :one
 -- The account, suspended or not, as last committed. FOR SHARE waits for a
--- transaction that is changing it, such as an unsuspension that queues its
--- side effects before it commits, and then reads what that transaction
--- left: the account unsuspended if it committed, still suspended if it
+-- transaction that is changing it, such as a suspension or an unsuspension
+-- that queues its side effects before it commits, and then reads what that
+-- transaction left: the account changed if it committed, as it was if it
 -- rolled back.
 SELECT * FROM accounts WHERE id = $1 FOR SHARE;
 

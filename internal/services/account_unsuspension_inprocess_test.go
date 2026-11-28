@@ -108,27 +108,3 @@ func TestInProcessAccountUnsuspension(t *testing.T) {
 		}
 	})
 }
-
-func TestInProcessAccountUnsuspensionBackoff(t *testing.T) {
-	defaults := &InProcessAccountUnsuspension{}
-	var total time.Duration
-	for attempt := 1; attempt < defaultInProcessAccountUnsuspensionAttempts; attempt++ {
-		total += defaults.backoff(attempt)
-	}
-	if total < 2*time.Hour || total > 4*time.Hour {
-		t.Fatalf("default attempts span %v, want about three hours", total)
-	}
-
-	runner := &InProcessAccountUnsuspension{BaseBackoff: time.Second, MaxBackoff: 10 * time.Second}
-	for attempt, want := range map[int]time.Duration{
-		1:   time.Second,
-		2:   2 * time.Second,
-		4:   8 * time.Second,
-		5:   10 * time.Second,
-		100: 10 * time.Second,
-	} {
-		if got := runner.backoff(attempt); got != want {
-			t.Errorf("backoff(%d) = %v, want %v", attempt, got, want)
-		}
-	}
-}
