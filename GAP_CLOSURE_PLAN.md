@@ -118,7 +118,15 @@ more, and self-service deletion doesn't exist.
       request and the retry goes on where it stopped (`docs/account-deletion.md`).
       The service takes self-service options (`ReserveEmail` off); Mastodon's
       password-confirmed settings page that calls it doesn't exist here yet.
-- [ ] G3.3 Unsuspension service restoring visibility and re-delivering profile `Update`.
+- [x] G3.3 Unsuspension service restoring visibility and re-delivering profile `Update`.
+      `AccountUnsuspensionService` delivers a local account's actor `Update`, profile
+      included, to the remote followers that got the suspended actor; a remote account
+      has nothing to federate. Timelines, search, the directory and the actor come back
+      on their own, as they are filtered where read. Unsuspension lifts only a local
+      suspension whose deletion hasn't finished, so a deleted account stays deleted,
+      even when its deletion finishes during the request, and a remote actor's
+      `Delete` received while suspended here is kept. Actor `Update` IDs carry
+      microseconds, so a suspension and its lifting within a second differ.
 - [ ] G3.4 Wire into existing admin account action endpoint (`action=suspend`) and add
       side-effects behind the worker queue (long-running).
 - [ ] G3.5 Tests for each service incl. federation deliveries enqueued.

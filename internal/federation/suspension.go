@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	apihandler "github.com/deicod/gotodon/internal/api/activitypub"
 	"github.com/deicod/gotodon/internal/db"
 	"github.com/deicod/gotodon/pkg/activitypub"
 )
@@ -17,6 +19,10 @@ var ErrInboxMissing = errors.New("federation: inbox missing")
 // errAccountNotSuspended is returned when a suspension is delivered for an
 // account that isn't suspended.
 var errAccountNotSuspended = errors.New("federation: account is not suspended")
+
+// errAccountSuspended is returned when an unsuspension is delivered for an
+// account that is suspended.
+var errAccountSuspended = errors.New("federation: account is suspended")
 
 // FollowRejection names a follow, or a pending follow request, that a remote
 // account has of a local account and that the local account rejects.
@@ -39,9 +45,9 @@ type FollowRejection struct {
 // SuspendAccountService#distribute_update_actor! does. The actor carries
 // what ActivityPub::ActorSerializer keeps of a suspended account: its URIs
 // and key, its username as its name, and nothing of its profile. The
-// activity ID is the actor's URI and its updated_at, as
-// ActivityPub::UpdateSerializer builds it, so a retry sends the same
-// activity. A remote account gets nothing: its own server federates it.
+// activity ID is the actor's URI and its updated_at (see
+// deliverActorUpdate), so a retry sends the same activity. A remote account
+// gets nothing: its own server federates it.
 func (s *OutgoingService) DeliverAccountSuspension(ctx context.Context, account db.Account) error {
 	if !accountIsLocal(account, s.localDomain) {
 		return nil
@@ -58,17 +64,54 @@ func (s *OutgoingService) DeliverAccountSuspension(ctx context.Context, account 
 	if !updatedAt.Valid {
 		updatedAt = account.SuspendedAt
 	}
+	return s.deliverActorUpdate(ctx, localActor, actor, updatedAt.Time, s.suspendedActor(account, actor))
+}
+
+// DeliverAccountUnsuspension sends the remote followers of account, a local
+// account whose suspension was lifted, an Update of its actor as GET
+// /users/:username serves it again, profile included, signed by the
+// account, as Mastodon's UnsuspendAccountService#distribute_update_actor!
+// does. It reaches the inboxes that DeliverAccountSuspension sent the
+// suspended actor to. The activity ID is the actor's URI and its
+// updated_at, which lifting the suspension set, so it differs from the
+// suspension's Update and a retry sends the same activity. A remote account
+// gets nothing: its own server federates it.
+func (s *OutgoingService) DeliverAccountUnsuspension(ctx context.Context, account db.Account) error {
+	if !accountIsLocal(account, s.localDomain) {
+		return nil
+	}
+	if account.SuspendedAt.Valid {
+		return errAccountSuspended
+	}
+	localActor, actor, err := ensureLocalActor(s.localDomain, account)
+	if err != nil {
+		return err
+	}
+	if !account.UpdatedAt.Valid {
+		return errors.New("federation: account updated_at missing")
+	}
+	return s.deliverActorUpdate(ctx, localActor, actor, account.UpdatedAt.Time, apihandler.LocalActor(s.localDomain, account))
+}
+
+// deliverActorUpdate sends the remote followers of localActor, a local
+// account whose actor URI is actor, an Update of object, its actor document,
+// signed by the account. The activity ID is the actor's URI and updatedAt,
+// as ActivityPub::UpdateSerializer builds it, but to the microsecond rather
+// than the second: a suspension and its lifting within one second get
+// different IDs, so a server that drops an activity it has seen by its ID
+// doesn't drop the second.
+func (s *OutgoingService) deliverActorUpdate(ctx context.Context, localActor db.Account, actor string, updatedAt time.Time, object activitypub.Actor) error {
 	activity := &activitypub.Activity{
 		Context:        activitypub.MastodonContextFull(),
 		Type:           activitypub.TypeUpdate,
-		ID:             fmt.Sprintf("%s#updates/%d", actor, updatedAt.Time.Unix()),
+		ID:             fmt.Sprintf("%s#updates/%d", actor, updatedAt.UnixMicro()),
 		Actor:          actor,
-		Published:      formatTimestamp(updatedAt.Time),
+		Published:      formatTimestamp(updatedAt),
 		To:             []string{activitypub.PublicAudience},
-		ActivityObject: s.suspendedActor(account, actor),
+		ActivityObject: object,
 	}
 
-	followers, err := s.resolver.ResolveFollowerInboxes(ctx, account.ID)
+	followers, err := s.resolver.ResolveFollowerInboxes(ctx, localActor.ID)
 	if err != nil {
 		return err
 	}

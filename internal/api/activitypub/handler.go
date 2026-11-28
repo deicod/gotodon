@@ -131,19 +131,28 @@ func (h *FederationHandler) GetActor(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *FederationHandler) renderActor(w http.ResponseWriter, account db.Account) {
-	actorURI := fmt.Sprintf("https://%s/users/%s", h.domain, account.Username)
+	actor := LocalActor(h.domain, account)
+	actor.Context = activitypub.MastodonContextFull()
+	writeActivityJSON(w, actor)
+}
+
+// LocalActor is the actor document of account, a local account that isn't
+// suspended, on the server whose local domain is domain, as GET
+// /users/:username serves it, without its @context. An actor Update carries
+// it as its object.
+func LocalActor(domain string, account db.Account) activitypub.Actor {
+	actorURI := fmt.Sprintf("https://%s/users/%s", domain, account.Username)
 	discoverable := account.Discoverable.Valid && account.Discoverable.Bool
 	indexable := account.Indexable
 
 	actor := activitypub.Actor{
 		Object: activitypub.Object{
-			Context: activitypub.MastodonContextFull(),
 			ID:      actorURI,
 			Type:    activitypub.TypePerson,
 			Name:    account.DisplayName,
 			Content: account.Note,
 			Summary: account.Note,
-			URL:     fmt.Sprintf("https://%s/@%s", h.domain, account.Username),
+			URL:     fmt.Sprintf("https://%s/@%s", domain, account.Username),
 		},
 		PreferredUsername:         account.Username,
 		Inbox:                     fmt.Sprintf("%s/inbox", actorURI),
@@ -156,7 +165,7 @@ func (h *FederationHandler) renderActor(w http.ResponseWriter, account db.Accoun
 		Discoverable:              &discoverable,
 		Indexable:                 &indexable,
 		Endpoints: &activitypub.Endpoints{
-			SharedInbox: fmt.Sprintf("https://%s/inbox", h.domain),
+			SharedInbox: fmt.Sprintf("https://%s/inbox", domain),
 		},
 	}
 
@@ -171,8 +180,7 @@ func (h *FederationHandler) renderActor(w http.ResponseWriter, account db.Accoun
 	if account.CreatedAt.Valid {
 		actor.Published = account.CreatedAt.Time.Format("2006-01-02T15:04:05Z")
 	}
-
-	writeActivityJSON(w, actor)
+	return actor
 }
 
 // GetOutbox handles GET /users/:username/outbox
