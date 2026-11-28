@@ -34,3 +34,15 @@ RETURNING *;
 
 -- name: AdminDeleteDomainBlock :exec
 DELETE FROM domain_blocks WHERE id = $1;
+
+-- name: DomainRejectsReports :one
+-- DomainRejectsReports reports whether the most specific domain block among
+-- domains, a domain followed by its parent domains, rejects reports, as
+-- Mastodon's DomainBlock.reject_reports? decides. It is false when no block
+-- covers the domain.
+SELECT COALESCE((
+    SELECT b.reject_reports FROM domain_blocks b
+    WHERE lower(b.domain) = ANY(@domains::text[])
+    ORDER BY length(b.domain) DESC
+    LIMIT 1
+), false)::boolean AS rejects_reports;

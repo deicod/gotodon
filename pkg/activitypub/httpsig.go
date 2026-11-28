@@ -553,7 +553,7 @@ func VerifyKeyOwner(actor *Actor, actorURI, keyID string) error {
 	if owner := actor.PublicKey.Owner; owner != "" && owner != actorURI {
 		return fmt.Errorf("key owner %q does not match actor %q", owner, actorURI)
 	}
-	if !sameHost(keyID, actorURI) {
+	if !SameHost(keyID, actorURI) {
 		return fmt.Errorf("keyId %q is not hosted with actor %q", keyID, actorURI)
 	}
 
@@ -569,7 +569,9 @@ func VerifyKeyOwner(actor *Actor, actorURI, keyID string) error {
 	return nil
 }
 
-func sameHost(a, b string) bool {
+// SameHost reports whether the URLs a and b both parse and name the same
+// host and port, ignoring case. Either one without a host matches nothing.
+func SameHost(a, b string) bool {
 	ua, err := url.Parse(a)
 	if err != nil || ua.Host == "" {
 		return false

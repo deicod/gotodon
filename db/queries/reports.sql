@@ -46,3 +46,45 @@ SET category = COALESCE(sqlc.narg('category'), category),
     updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: CreateRemoteReport :one
+-- CreateRemoteReport files the report of a remote account that an inbound
+-- Flag activity, whose id is uri, makes, as Mastodon's ReportService does for
+-- a remote reporter: category other, not forwarded. It returns no row when
+-- the account's report of the target under uri exists already, so a Flag
+-- delivered twice files its report once.
+INSERT INTO reports (
+    account_id, target_account_id, status_ids, comment, category, forwarded, uri, created_at, updated_at
+) VALUES (
+    @account_id, @target_account_id, @status_ids, @comment, 0, false, @uri::varchar, now(), now()
+)
+ON CONFLICT (account_id, target_account_id, uri) WHERE uri IS NOT NULL DO NOTHING
+RETURNING *;
+
+-- name: ListReportableStatusIDs :many
+-- ListReportableStatusIDs returns, in id order, the statuses among status_ids
+-- that account_id wrote, that are not deleted, and that the server at domain
+-- could have received: public and unlisted ones, private ones when an account
+-- of domain follows the author, and any that mention an account of domain.
+-- Mastodon's ReportService#reported_status_ids attaches only these to the
+-- report of a remote reporter, whose server cannot know of others.
+SELECT s.id FROM statuses s
+WHERE s.account_id = @account_id
+  AND s.id = ANY(@status_ids::bigint[])
+  AND s.deleted_at IS NULL
+  AND (
+    s.visibility IN (0, 1)
+    OR (s.visibility = 2 AND EXISTS (
+        SELECT 1 FROM follows f
+        JOIN accounts fa ON fa.id = f.account_id
+        WHERE f.target_account_id = s.account_id
+          AND lower(fa.domain) = lower(@domain::text)
+    ))
+    OR EXISTS (
+        SELECT 1 FROM mentions m
+        JOIN accounts ma ON ma.id = m.account_id
+        WHERE m.status_id = s.id
+          AND lower(ma.domain) = lower(@domain::text)
+    )
+  )
+ORDER BY s.id;

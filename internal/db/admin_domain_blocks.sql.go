@@ -179,6 +179,26 @@ func (q *Queries) AdminUpdateDomainBlock(ctx context.Context, arg AdminUpdateDom
 	return i, err
 }
 
+const domainRejectsReports = `-- name: DomainRejectsReports :one
+SELECT COALESCE((
+    SELECT b.reject_reports FROM domain_blocks b
+    WHERE lower(b.domain) = ANY($1::text[])
+    ORDER BY length(b.domain) DESC
+    LIMIT 1
+), false)::boolean AS rejects_reports
+`
+
+// DomainRejectsReports reports whether the most specific domain block among
+// domains, a domain followed by its parent domains, rejects reports, as
+// Mastodon's DomainBlock.reject_reports? decides. It is false when no block
+// covers the domain.
+func (q *Queries) DomainRejectsReports(ctx context.Context, domains []string) (bool, error) {
+	row := q.db.QueryRow(ctx, domainRejectsReports, domains)
+	var rejects_reports bool
+	err := row.Scan(&rejects_reports)
+	return rejects_reports, err
+}
+
 const listPublicDomainBlocks = `-- name: ListPublicDomainBlocks :many
 SELECT id, domain, created_at, updated_at, severity, reject_media, reject_reports, private_comment, public_comment, obfuscate FROM domain_blocks
 WHERE severity IN (0, 1)
