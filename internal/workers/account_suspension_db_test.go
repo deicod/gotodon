@@ -2,6 +2,7 @@ package workers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -200,7 +201,7 @@ func TestAccountSuspensionDeliveredByWorker(t *testing.T) {
 	}
 
 	t.Run("remote account", func(t *testing.T) {
-		if err := queries.AdminSuspendAccount(ctx, bob); err != nil {
+		if _, err := queries.AdminSuspendAccount(ctx, bob); err != nil {
 			t.Fatalf("suspend bob: %v", err)
 		}
 		for run := 1; run <= 2; run++ {
@@ -239,7 +240,7 @@ func TestAccountSuspensionDeliveredByWorker(t *testing.T) {
 	})
 
 	t.Run("local account", func(t *testing.T) {
-		if err := queries.AdminSuspendAccount(ctx, alice); err != nil {
+		if _, err := queries.AdminSuspendAccount(ctx, alice); err != nil {
 			t.Fatalf("suspend alice: %v", err)
 		}
 		var firstIDs []string
@@ -279,4 +280,110 @@ func TestAccountSuspensionDeliveredByWorker(t *testing.T) {
 			t.Fatalf("carol's trending statuses = %d, want 1", n)
 		}
 	})
+}
+
+// TestAccountSuspensionWaitsForItsTransaction runs the suspension's side
+// effects, as a worker that picks up the task at once does, while the
+// transaction that suspended the account and queued them is still open:
+// they wait for it to end, deliver nothing when it rolls back, and deliver
+// the suspended actor once it commits.
+func TestAccountSuspensionWaitsForItsTransaction(t *testing.T) {
+	conn := openMigratedTestDB(t)
+	queries := db.New(conn)
+	ctx := context.Background()
+	connect := func() *pgx.Conn {
+		t.Helper()
+		c, err := pgx.ConnectConfig(ctx, conn.Config().Copy())
+		if err != nil {
+			t.Fatalf("connect: %v", err)
+		}
+		t.Cleanup(func() { _ = c.Close(context.Background()) })
+		return c
+	}
+	workerConn, observer := connect(), connect()
+
+	var alice, bob int64
+	if err := conn.QueryRow(ctx, `INSERT INTO accounts (username, uri, private_key, public_key)
+		VALUES ('alice', 'https://local.test/users/alice', 'private-key', 'public-key') RETURNING id`).Scan(&alice); err != nil {
+		t.Fatalf("insert alice: %v", err)
+	}
+	if err := conn.QueryRow(ctx, `INSERT INTO accounts (username, domain, uri, inbox_url)
+		VALUES ('bob', 'remote.example', 'https://remote.example/users/bob', 'https://remote.example/users/bob/inbox') RETURNING id`).Scan(&bob); err != nil {
+		t.Fatalf("insert bob: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO follows (account_id, target_account_id) VALUES ($1, $2)`, bob, alice); err != nil {
+		t.Fatalf("bob follows alice: %v", err)
+	}
+
+	enqueuer := &taskEnqueuer{}
+	suspension := services.NewAccountSuspensionService(db.New(workerConn), federation.NewOutgoingService(db.New(workerConn), "local.test", enqueuer))
+
+	// suspendIn suspends alice in a transaction, runs the side effects
+	// meanwhile, ends the transaction with end, and returns the tasks the
+	// side effects queued.
+	suspendIn := func(t *testing.T, end func(pgx.Tx) error) []*asynq.Task {
+		t.Helper()
+		enqueuer.tasks = nil
+		tx, err := conn.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		defer func() { _ = tx.Rollback(context.Background()) }()
+		if n, err := queries.WithTx(tx).AdminSuspendAccount(ctx, alice); err != nil || n != 1 {
+			t.Fatalf("AdminSuspendAccount: %d, %v; want 1 account", n, err)
+		}
+
+		done := make(chan error, 1)
+		go func() { done <- suspension.Suspend(ctx, alice) }()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			var waiting int64
+			if err := observer.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE pid = $1 AND wait_event_type = 'Lock'`, workerConn.PgConn().PID()).Scan(&waiting); err != nil {
+				t.Fatalf("pg_stat_activity: %v", err)
+			}
+			if waiting == 1 {
+				break
+			}
+			select {
+			case err := <-done:
+				t.Fatalf("side effects ended (%v) while the suspension's transaction was open", err)
+			default:
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("the side effects never waited for the suspension's transaction")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+
+		if err := end(tx); err != nil {
+			t.Fatalf("end the transaction: %v", err)
+		}
+		if err := <-done; err != nil {
+			t.Fatalf("Suspend: %v", err)
+		}
+		return enqueuer.tasks
+	}
+
+	if tasks := suspendIn(t, func(tx pgx.Tx) error { return tx.Rollback(ctx) }); len(tasks) != 0 {
+		t.Fatalf("rolled-back suspension queued %d deliveries, want none", len(tasks))
+	}
+	tasks := suspendIn(t, func(tx pgx.Tx) error { return tx.Commit(ctx) })
+	if len(tasks) != 1 {
+		t.Fatalf("committed suspension queued %d deliveries, want the suspended actor to bob", len(tasks))
+	}
+	var payload DeliverActivityPayload
+	if err := json.Unmarshal(tasks[0].Payload(), &payload); err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	var activity struct {
+		Type   string         `json:"type"`
+		Object map[string]any `json:"object"`
+	}
+	if err := json.Unmarshal(payload.Activity, &activity); err != nil {
+		t.Fatalf("activity: %v", err)
+	}
+	if payload.LocalAccountID != alice || payload.Inbox != "https://remote.example/users/bob/inbox" ||
+		activity.Type != activitypub.TypeUpdate || activity.Object["suspended"] != true {
+		t.Fatalf("delivery = %s of %v by %d to %s, want alice's suspended actor to bob's inbox", activity.Type, activity.Object, payload.LocalAccountID, payload.Inbox)
+	}
 }

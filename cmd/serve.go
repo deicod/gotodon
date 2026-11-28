@@ -167,6 +167,9 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		statusCleanupEnqueuer   *workers.StatusCleanupEnqueuer
 		mediaCleanupEnqueuer    *workers.MediaCleanupEnqueuer
 		accountDeletionEnqueuer *workers.AccountDeletionEnqueuer
+		// accountSuspensionEnqueuer queues the side effects of
+		// suspensions.
+		accountSuspensionEnqueuer *workers.AccountSuspensionEnqueuer
 		// accountUnsuspensionEnqueuer queues the side effects of
 		// unsuspensions.
 		accountUnsuspensionEnqueuer *workers.AccountUnsuspensionEnqueuer
@@ -185,6 +188,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		statusCleanupEnqueuer = workers.NewStatusCleanupEnqueuer(workerManager.Client())
 		mediaCleanupEnqueuer = workers.NewMediaCleanupEnqueuer(workerManager.Client())
 		accountDeletionEnqueuer = workers.NewAccountDeletionEnqueuer(workerManager.Client())
+		accountSuspensionEnqueuer = workers.NewAccountSuspensionEnqueuer(workerManager.Client())
 		accountUnsuspensionEnqueuer = workers.NewAccountUnsuspensionEnqueuer(workerManager.Client())
 	} else {
 		if !cfg.Workers.Enabled {
@@ -352,6 +356,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		deletionPublisher = streamingHub
 	}
 	accountDeletion := services.NewAccountDeletionService(queries, services.DBTransactor{DB: pool, Queries: queries}, outgoingService, mediaStorage, deletionPublisher, logger)
+	accountSuspension := services.NewAccountSuspensionService(queries, outgoingService)
 	accountUnsuspension := services.NewAccountUnsuspensionService(queries, outgoingService)
 	if linkCrawlerEnqueuer != nil {
 		statusesHandler.SetLinkCrawler(linkCrawlerEnqueuer)
@@ -587,6 +592,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 			&workers.StatusCleanupRegistrar{Runner: statusCleanup},
 			&workers.MediaCleanupRegistrar{Runner: mediaCleanup},
 			&workers.AccountDeletionRegistrar{Deleter: accountDeletion},
+			&workers.AccountSuspensionRegistrar{Suspender: accountSuspension},
 			&workers.AccountUnsuspensionRegistrar{Unsuspender: accountUnsuspension},
 		}
 		if mailService != nil {
@@ -644,6 +650,11 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		adminAccountsHandler.SetAccountDeletionScheduler(accountDeletionEnqueuer)
 	} else {
 		adminAccountsHandler.SetAccountDeletionScheduler(&services.InProcessAccountDeletion{Deleter: accountDeletion, Logger: logger})
+	}
+	if accountSuspensionEnqueuer != nil {
+		adminAccountsHandler.SetAccountSuspensionScheduler(accountSuspensionEnqueuer)
+	} else {
+		adminAccountsHandler.SetAccountSuspensionScheduler(&services.InProcessAccountSuspension{Suspender: accountSuspension, Logger: logger})
 	}
 	if accountUnsuspensionEnqueuer != nil {
 		adminAccountsHandler.SetAccountUnsuspensionScheduler(accountUnsuspensionEnqueuer)

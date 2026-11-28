@@ -190,19 +190,32 @@ UPDATE accounts SET silenced_at = now(), updated_at = now() WHERE id = $1;
 -- name: AdminUnsilenceAccount :exec
 UPDATE accounts SET silenced_at = NULL, updated_at = now() WHERE id = $1;
 
--- name: AdminSuspendAccount :exec
-WITH suspended AS (
-    UPDATE accounts
-    SET suspended_at = now(), suspension_origin = 0, updated_at = now()
-    WHERE accounts.id = $1
-    RETURNING accounts.id AS account_id
+-- name: AdminSuspendAccount :execrows
+-- Suspends an account that isn't suspended (Account#suspend!): it sets a
+-- suspension made on this server and creates the deletion request that lets
+-- the suspension be lifted or the account deleted, and reports 1. It
+-- changes no row, and reports 0, for an account that is suspended already,
+-- here or by its own server, including one whose deletion has finished: its
+-- suspension stays as it was, so its updated_at, and with it the ID of the
+-- actor Update that federates the suspension, stays the same, and a deleted
+-- account gets no deletion request that would let it be unsuspended.
+-- Locking the account first makes a concurrent suspension of it wait, and
+-- then find it suspended.
+WITH target AS (
+    SELECT accounts.id FROM accounts
+    WHERE accounts.id = $1 AND accounts.suspended_at IS NULL
+    FOR UPDATE
+), requested AS (
+    INSERT INTO account_deletion_requests (account_id, created_at, updated_at)
+    SELECT target.id, now(), now()
+    FROM target
+    WHERE NOT EXISTS (
+        SELECT 1 FROM account_deletion_requests WHERE account_id = target.id
+    )
 )
-INSERT INTO account_deletion_requests (account_id, created_at, updated_at)
-SELECT suspended.account_id, now(), now()
-FROM suspended
-WHERE NOT EXISTS (
-    SELECT 1 FROM account_deletion_requests WHERE account_id = suspended.account_id
-);
+UPDATE accounts
+SET suspended_at = now(), suspension_origin = 0, updated_at = now()
+WHERE accounts.id IN (SELECT target.id FROM target);
 
 -- name: AdminUnsuspendAccount :execrows
 -- Lifts a suspension that this server made of an account whose deletion

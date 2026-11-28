@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -629,6 +630,164 @@ func TestAccountsTakeActionRollsBack(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAccountsTakeActionSuspendSchedulesSideEffects checks that a
+// suspension the action makes has its side effects scheduled once, as the
+// last step of its transaction, and that a suspension that is there already
+// gets none, so a repeated request federates nothing more.
+func TestAccountsTakeActionSuspendSchedulesSideEffects(t *testing.T) {
+	tests := []struct {
+		name   string
+		target int64
+		// wantScheduled is whether the suspension's side effects are
+		// scheduled.
+		wantScheduled bool
+	}{
+		{name: "local account", target: targetNoRole, wantScheduled: true},
+		{name: "remote account", target: targetRemote, wantScheduled: true},
+		{name: "local account without a user", target: targetLocalNoUser, wantScheduled: true},
+		{name: "account with a deletion request that isn't suspended", target: targetDeletionRequested, wantScheduled: true},
+		{name: "account suspended temporarily", target: targetSuspended},
+		{name: "account whose deletion has finished", target: targetSuspendedNoRequest},
+		{name: "remote account suspended by its own server", target: targetSuspendedRemotely},
+		{name: "remote account suspended here", target: targetRemoteSuspendedLocally},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newAccountsFixture(ownerActor)
+			rec := f.act(tt.target, `{"type":"suspend"}`)
+			assertAllowed(t, f, rec,
+				[]string{fmt.Sprintf("AdminSuspendAccount(%d)", tt.target)},
+				[]string{fmt.Sprintf("suspend:Account:%d", tt.target)})
+			var want []int64
+			if tt.wantScheduled {
+				want = []int64{tt.target}
+			}
+			if !slices.Equal(f.suspensions.scheduled, want) {
+				t.Fatalf("scheduled %v, want %v", f.suspensions.scheduled, want)
+			}
+			// The strike is made either way, as Mastodon's is.
+			if len(f.store.strikes) != 1 || f.store.strikes[0].Action != 4000 {
+				t.Fatalf("strikes = %+v, want one suspension strike", f.store.strikes)
+			}
+			if f.tx.commits != 1 || f.tx.rollbacks != 0 {
+				t.Fatalf("commits = %d, rollbacks = %d; want one commit", f.tx.commits, f.tx.rollbacks)
+			}
+		})
+	}
+
+	t.Run("other types", func(t *testing.T) {
+		for _, actionType := range []string{"none", "disable", "sensitive", "silence"} {
+			f := newAccountsFixture(ownerActor)
+			assertOK(t, f.takeAction(idOf(targetNoRole), actionType))
+			if len(f.suspensions.scheduled) != 0 {
+				t.Fatalf("%s scheduled the suspension of %v", actionType, f.suspensions.scheduled)
+			}
+		}
+	})
+
+	// The side effects are queued after the reports are resolved, so a
+	// failure before that queues nothing.
+	t.Run("queued last", func(t *testing.T) {
+		f := newAccountsFixture(ownerActor).withReports()
+		f.store.failOn = map[string]error{"AdminResolveReport": errDatabase}
+		assertRefused(t, f, f.act(targetNoRole, `{"type":"suspend"}`), http.StatusInternalServerError, "Database error")
+	})
+}
+
+// TestAccountsTakeActionSuspendSchedulingFails checks that a suspension
+// whose side effects can't be queued doesn't claim success: the transaction
+// rolls back, so the account stays unsuspended, nothing is logged, struck
+// or resolved, nobody is warned, and the request can be sent again.
+func TestAccountsTakeActionSuspendSchedulingFails(t *testing.T) {
+	f := newAccountsFixture(ownerActor).withReports()
+	f.suspensions.err = errors.New("redis down")
+	body := `{"type":"suspend","report_id":"301","text":"Spam."}`
+
+	rec := f.act(targetNoRole, body)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d (%s), want %d", rec.Code, strings.TrimSpace(rec.Body.String()), http.StatusInternalServerError)
+	}
+	if got := errorMessage(t, rec); got != "Failed to schedule account suspension" {
+		t.Fatalf("error = %q, want %q", got, "Failed to schedule account suspension")
+	}
+	if len(f.store.changes) != 0 || len(f.store.logs) != 0 || len(f.store.strikes) != 0 || len(f.store.resolutions) != 0 {
+		t.Fatalf("changes = %v, logged = %v, strikes = %v, resolutions = %v; want everything rolled back",
+			f.store.changes, f.store.loggedActions(), f.store.strikes, f.store.resolutions)
+	}
+	if len(f.mail.mails) != 0 || len(f.store.notifications) != 0 {
+		t.Fatalf("mails = %v, notifications = %v; want nobody warned", f.mail.mails, f.store.notifications)
+	}
+	if f.tx.commits != 0 || f.tx.rollbacks != 1 {
+		t.Fatalf("commits = %d, rollbacks = %d; want one rollback", f.tx.commits, f.tx.rollbacks)
+	}
+
+	// The account is still unsuspended, so sending the request again
+	// suspends it.
+	f.suspensions.err = nil
+	assertOK(t, f.act(targetNoRole, body))
+	if !slices.Equal(f.suspensions.scheduled, []int64{targetNoRole, targetNoRole}) {
+		t.Fatalf("scheduled %v, want the failed attempt and the retry", f.suspensions.scheduled)
+	}
+	if got := f.store.loggedActions(); len(got) != 3 || got[0] != fmt.Sprintf("suspend:Account:%d", targetNoRole) {
+		t.Fatalf("logged %v, want the suspension and two resolved reports", got)
+	}
+	if len(f.mail.mails) != 1 {
+		t.Fatalf("mails = %v, want the warning once", f.mail.mails)
+	}
+}
+
+// TestAccountsTakeActionSuspendCommitFails checks that a commit that fails
+// after the side effects were queued answers 500: the queued side effects
+// find the account unsuspended, and do nothing.
+func TestAccountsTakeActionSuspendCommitFails(t *testing.T) {
+	f := newAccountsFixture(ownerActor)
+	f.tx.commitErr = errDatabase
+	rec := f.act(targetNoRole, `{"type":"suspend"}`)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d (%s), want %d", rec.Code, strings.TrimSpace(rec.Body.String()), http.StatusInternalServerError)
+	}
+	if got := errorMessage(t, rec); got != "Database error" {
+		t.Fatalf("error = %q, want %q", got, "Database error")
+	}
+	if len(f.store.changes) != 0 || len(f.store.logs) != 0 || len(f.mail.mails) != 0 {
+		t.Fatalf("changes = %v, logged = %v, mails = %v; want the action rolled back", f.store.changes, f.store.loggedActions(), f.mail.mails)
+	}
+	if !slices.Equal(f.suspensions.scheduled, []int64{targetNoRole}) {
+		t.Fatalf("scheduled %v, want the suspension queued before the commit", f.suspensions.scheduled)
+	}
+}
+
+// TestAccountsTakeActionSuspendWithoutScheduler checks that without a
+// suspension scheduler a suspension answers 500 before changing anything,
+// after the policy checks, and that the other types don't need one.
+func TestAccountsTakeActionSuspendWithoutScheduler(t *testing.T) {
+	newFixture := func(a actor) *accountsFixture {
+		f := newAccountsFixture(a)
+		h := NewAccountsHandler(nil, nil, &config.Config{Instance: config.InstanceConfig{LocalDomain: localDomain}})
+		h.store = f.store
+		h.roles = &stubRoles{
+			usersByAccount: map[int64]db.User{actingAccount: {ID: 20, AccountID: actingAccount}},
+			roles:          map[int64]db.UserRole{20: {ID: 3, Name: a.name, Permissions: a.permissions, Position: a.position}},
+		}
+		h.actions = f.tx
+		f.mux = http.NewServeMux()
+		h.RegisterRoutes(f.mux)
+		return f
+	}
+
+	f := newFixture(ownerActor)
+	assertRefused(t, f, f.takeAction(idOf(targetNoRole), "suspend"), http.StatusInternalServerError, "Account suspension unavailable")
+	if f.tx.commits != 0 || f.tx.rollbacks != 0 {
+		t.Fatalf("commits = %d, rollbacks = %d; want no transaction", f.tx.commits, f.tx.rollbacks)
+	}
+
+	f = newFixture(moderatorActor)
+	assertRefused(t, f, f.takeAction(idOf(targetOwner), "suspend"), http.StatusForbidden, "This action is not allowed")
+
+	f = newFixture(ownerActor)
+	assertOK(t, f.takeAction(idOf(targetNoRole), "silence"))
 }
 
 // TestAccountsTakeActionRefusalRollsBack checks that a refusal found inside

@@ -208,7 +208,7 @@ func newDeletionWorld(t *testing.T) *deletionWorld {
 		w.id(`INSERT INTO account_statuses_cleanup_policies (account_id, enabled, min_status_age, keep_pinned, keep_self_fav, keep_self_bookmark) VALUES ($1, true, 86400, false, false, false) RETURNING id`, account)
 	}
 
-	if err := w.queries.AdminSuspendAccount(w.ctx, w.alice); err != nil {
+	if _, err := w.queries.AdminSuspendAccount(w.ctx, w.alice); err != nil {
 		t.Fatalf("suspend alice: %v", err)
 	}
 	return w
@@ -473,7 +473,7 @@ func TestAccountDeletionDeletesRemoteAccount(t *testing.T) {
 	w.id(`INSERT INTO follows (account_id, target_account_id, uri) VALUES ($1, $2, 'https://remote.example/follows/9') RETURNING id`, w.dave, w.carol)
 	undone := w.id(`INSERT INTO follows (account_id, target_account_id) VALUES ($1, $2) RETURNING id`, w.carol, w.dave)
 	daveStatus := w.id(`INSERT INTO statuses (account_id, text, uri) VALUES ($1, 'remote', 'https://remote.example/statuses/1') RETURNING id`, w.dave)
-	if err := w.queries.AdminSuspendAccount(w.ctx, w.dave); err != nil {
+	if _, err := w.queries.AdminSuspendAccount(w.ctx, w.dave); err != nil {
 		t.Fatalf("suspend dave: %v", err)
 	}
 

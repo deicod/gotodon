@@ -90,7 +90,7 @@ func TestAccountUnsuspensionDeliveredByWorker(t *testing.T) {
 	}
 	suspend := func(t *testing.T, accountID int64) []delivered {
 		t.Helper()
-		if err := queries.AdminSuspendAccount(ctx, accountID); err != nil {
+		if _, err := queries.AdminSuspendAccount(ctx, accountID); err != nil {
 			t.Fatalf("AdminSuspendAccount: %v", err)
 		}
 		return run(t, func() error { return suspension.Suspend(ctx, accountID) })
@@ -204,7 +204,7 @@ func TestAccountUnsuspensionWaitsForItsTransaction(t *testing.T) {
 	if _, err := conn.Exec(ctx, `INSERT INTO follows (account_id, target_account_id) VALUES ($1, $2)`, bob, alice); err != nil {
 		t.Fatalf("bob follows alice: %v", err)
 	}
-	if err := queries.AdminSuspendAccount(ctx, alice); err != nil {
+	if _, err := queries.AdminSuspendAccount(ctx, alice); err != nil {
 		t.Fatalf("suspend alice: %v", err)
 	}
 

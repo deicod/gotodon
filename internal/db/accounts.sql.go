@@ -394,9 +394,9 @@ SELECT id, username, domain, private_key, public_key, created_at, updated_at, no
 `
 
 // The account, suspended or not, as last committed. FOR SHARE waits for a
-// transaction that is changing it, such as an unsuspension that queues its
-// side effects before it commits, and then reads what that transaction
-// left: the account unsuspended if it committed, still suspended if it
+// transaction that is changing it, such as a suspension or an unsuspension
+// that queues its side effects before it commits, and then reads what that
+// transaction left: the account changed if it committed, as it was if it
 // rolled back.
 func (q *Queries) GetAccountByIDForShare(ctx context.Context, id int64) (Account, error) {
 	row := q.db.QueryRow(ctx, getAccountByIDForShare, id)

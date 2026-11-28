@@ -33,7 +33,7 @@ func TestAdminUnsuspendAccountLiftsTemporarySuspensions(t *testing.T) {
 	}
 	suspend := func(id int64) {
 		t.Helper()
-		if err := q.AdminSuspendAccount(ctx, id); err != nil {
+		if _, err := q.AdminSuspendAccount(ctx, id); err != nil {
 			t.Fatalf("AdminSuspendAccount(%d): %v", id, err)
 		}
 	}
@@ -124,7 +124,7 @@ func TestAdminUnsuspendAccountLosesToAFinishingDeletion(t *testing.T) {
 	if err := conn.QueryRow(ctx, `INSERT INTO accounts (username, uri) VALUES ('alice', 'https://local.test/users/alice') RETURNING id`).Scan(&alice); err != nil {
 		t.Fatalf("insert alice: %v", err)
 	}
-	if err := q.AdminSuspendAccount(ctx, alice); err != nil {
+	if _, err := q.AdminSuspendAccount(ctx, alice); err != nil {
 		t.Fatalf("suspend alice: %v", err)
 	}
 
@@ -253,7 +253,7 @@ func TestUnsuspensionRestoresDirectoryAndLookups(t *testing.T) {
 
 	check("before suspension", map[int64][]string{alice: everywhere, dora: everywhere})
 	for _, id := range []int64{alice, dora} {
-		if err := q.AdminSuspendAccount(ctx, id); err != nil {
+		if _, err := q.AdminSuspendAccount(ctx, id); err != nil {
 			t.Fatalf("AdminSuspendAccount(%d): %v", id, err)
 		}
 	}

@@ -120,10 +120,10 @@ func TestTimelinesLeaveOutSuspendedAccounts(t *testing.T) {
 		"hashtag": all, "link": all, "link min_id": all, "trending": all,
 	})
 
-	if err := q.AdminSuspendAccount(ctx, f.sam); err != nil {
+	if _, err := q.AdminSuspendAccount(ctx, f.sam); err != nil {
 		t.Fatalf("suspend sam: %v", err)
 	}
-	if err := q.AdminSuspendAccount(ctx, f.rob); err != nil {
+	if _, err := q.AdminSuspendAccount(ctx, f.rob); err != nil {
 		t.Fatalf("suspend rob: %v", err)
 	}
 	only := []int64{alice}

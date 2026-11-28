@@ -79,7 +79,7 @@ func TestAdminGetAccountActionTarget(t *testing.T) {
 
 	suspended := insertAccount("erin", nil, "https://example.com/users/erin")
 	suspendedUser := insertUser(suspended, "erin@example.com", true, "Admin")
-	if err := q.AdminSuspendAccount(ctx, suspended); err != nil {
+	if _, err := q.AdminSuspendAccount(ctx, suspended); err != nil {
 		t.Fatalf("suspend erin: %v", err)
 	}
 
@@ -94,7 +94,7 @@ func TestAdminGetAccountActionTarget(t *testing.T) {
 	// Mastodon's terms (suspended_permanently?).
 	permanent := insertAccount("gina", nil, "https://example.com/users/gina")
 	insertUser(permanent, "gina@example.com", true, "")
-	if err := q.AdminSuspendAccount(ctx, permanent); err != nil {
+	if _, err := q.AdminSuspendAccount(ctx, permanent); err != nil {
 		t.Fatalf("suspend gina: %v", err)
 	}
 	if _, err := conn.Exec(ctx, `DELETE FROM account_deletion_requests WHERE account_id = $1`, permanent); err != nil {

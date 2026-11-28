@@ -58,6 +58,7 @@ func AdminAccountDeletionOptions() AccountDeletionOptions {
 type AccountDeletionStore interface {
 	AccountSuspensionStore
 	conversations.ConversationStore
+	GetAccountByIDAllowSuspended(ctx context.Context, id int64) (db.Account, error)
 	HasAccountDeletionRequest(ctx context.Context, accountID int64) (bool, error)
 	ClaimAccountDeletion(ctx context.Context, id int64) (int64, error)
 	GetUserByAccountID(ctx context.Context, accountID int64) (db.User, error)
